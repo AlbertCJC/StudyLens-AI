@@ -19,6 +19,27 @@ const PDFDocument = cjsRequire("pdfkit");
 const app = express();
 const PORT = 3000;
 
+// Auto-load local .env file if process.env.GEMINI_API_KEY is not set directly
+const envPath = path.join(process.cwd(), ".env");
+if (fs.existsSync(envPath)) {
+  try {
+    const envContent = fs.readFileSync(envPath, "utf-8");
+    for (const line of envContent.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("#") && trimmed.includes("=")) {
+        const [key, ...values] = trimmed.split("=");
+        const val = values.join("=").trim().replace(/^["']|["']$/g, "");
+        const k = key.trim();
+        if (k && (!process.env[k] || process.env[k] === "")) {
+          process.env[k] = val;
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error reading .env file:", err);
+  }
+}
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
@@ -544,8 +565,10 @@ let activityLogs = [
 // Helper AI Call function
 async function callGeminiAI(prompt: string): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is missing.");
+  if (!apiKey || apiKey.trim() === "" || apiKey === "your_gemini_api_key_here") {
+    throw new Error(
+      "GEMINI_API_KEY environment variable is missing. Please create a .env file in your root folder with GEMINI_API_KEY=your_actual_key or set process.env.GEMINI_API_KEY."
+    );
   }
   const ai = new GoogleGenAI({
     apiKey,
@@ -1622,7 +1645,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`StudyLens AI Server running on http://0.0.0.0:${PORT}`);
+    console.log(`StudyLens AI Server running at http://localhost:${PORT} (bound to 0.0.0.0:${PORT})`);
   });
 }
 

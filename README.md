@@ -77,7 +77,9 @@ Start the Express backend with embedded Vite dev server and hot reloading:
 ```bash
 npm run dev
 ```
-Navigate to **`http://localhost:3000`** in your browser.
+Open **`http://localhost:3000`** or **`http://127.0.0.1:3000`** in your browser.
+
+> **Note for Windows/Edge Users**: The server logs `bound to 0.0.0.0:3000` (which tells Node to accept connections on all network interfaces). Desktop browsers like Microsoft Edge and Chrome will show `ERR_ADDRESS_INVALID` if you type `0.0.0.0` directly into the address bar. Always use **`http://localhost:3000`** in your browser.
 
 ### 3. Production Build
 To build the production static assets and bundle the server script:
