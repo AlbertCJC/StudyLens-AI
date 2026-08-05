@@ -123,6 +123,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
     }
   };
 
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch("/api/users");
+      if (res.ok) {
+        const data = await res.json();
+        setUsers(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch users:", err);
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
     const loadAllData = async () => {
@@ -149,11 +161,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
     };
   }, []);
 
-  // Live Log Monitoring Interval
+  // Live Log & Users Monitoring Interval
   useEffect(() => {
     if (!isLiveMonitoring) return;
     const interval = setInterval(() => {
       fetchLogs();
+      fetchUsers();
     }, 3000);
     return () => clearInterval(interval);
   }, [isLiveMonitoring]);
@@ -758,8 +771,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {logs.slice(0, 5).map((log) => (
-                    <tr key={log.id} onClick={() => setSelectedLogModal(log)} className="hover:bg-muted/20 cursor-pointer">
+                  {logs.slice(0, 5).map((log, index) => (
+                    <tr key={`${log.id}-${index}`} onClick={() => setSelectedLogModal(log)} className="hover:bg-muted/20 cursor-pointer">
                       <td className="p-3">
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/10 text-rose-600 dark:text-rose-400 font-mono">
                           {log.action}
@@ -982,9 +995,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
                     </td>
                   </tr>
                 ) : (
-                  filteredLogs.map((log) => (
+                  filteredLogs.map((log, index) => (
                     <tr
-                      key={log.id}
+                      key={`${log.id}-${index}`}
                       onClick={() => setSelectedLogModal(log)}
                       className="hover:bg-muted/30 transition-colors cursor-pointer group"
                     >
@@ -1096,8 +1109,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-card">
-                {filteredUsers.map((u) => (
-                  <tr key={u.id} className="hover:bg-muted/20">
+                {filteredUsers.map((u, index) => (
+                  <tr key={`${u.id}-${index}`} className="hover:bg-muted/20">
                     <td className="p-3">
                       <p className="font-bold text-foreground">{u.name}</p>
                       <p className="text-[11px] text-muted-foreground font-mono">{u.email}</p>
@@ -1636,7 +1649,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
               </div>
 
               <div>
-                <label className="block font-bold mb-1">Associated Course Subject (Optional)</label>
+                <label className="block font-bold mb-1">Associated Course Subject</label>
                 <select
                   value={annSubjectId}
                   onChange={(e) => setAnnSubjectId(e.target.value)}

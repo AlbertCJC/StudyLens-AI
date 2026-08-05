@@ -8,6 +8,8 @@ import { motion } from "motion/react";
 import { Button } from "./ui/button";
 import { DarkModeToggle } from "./DarkModeToggle";
 import { useAnnouncements } from "../context/AnnouncementsContext";
+import { useAuth } from "../context/AuthContext";
+import { UserProfileModal } from "./UserProfileModal";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,8 +47,19 @@ export function DashboardLayout({
 }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const { currentUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
+  React.useEffect(() => {
+    (window as any).__openProfileModal = () => setShowProfileModal(true);
+    return () => {
+      try {
+        delete (window as any).__openProfileModal;
+      } catch {}
+    };
+  }, []);
 
   const { announcements, unreadCount, markAsRead, markAllAsRead } = useAnnouncements();
 
@@ -167,12 +180,16 @@ export function DashboardLayout({
           </div>
 
           <div className="pt-4 border-t border-border space-y-3">
-            <div className="flex items-center gap-3 px-2">
-              <div className="h-9 w-9 rounded-full bg-[#5b51d8] text-white flex items-center justify-center font-bold text-xs ring-2 ring-[#5b51d8]/20 shrink-0">
+            <div
+              onClick={() => setShowProfileModal(true)}
+              className="flex items-center gap-3 px-2 cursor-pointer hover:bg-muted/50 p-1.5 rounded-xl transition-colors group"
+              title="Click to view full user profile"
+            >
+              <div className="h-9 w-9 rounded-full bg-[#5b51d8] text-white flex items-center justify-center font-bold text-xs ring-2 ring-[#5b51d8]/20 shrink-0 group-hover:scale-105 transition-transform">
                 {userName ? userName.charAt(0).toUpperCase() : "J"}
               </div>
               <div className="flex-1 truncate">
-                <p className="text-xs font-bold truncate text-foreground">{userName}</p>
+                <p className="text-xs font-bold truncate text-foreground group-hover:text-[#5b51d8] transition-colors">{userName}</p>
                 <p className="text-[11px] text-muted-foreground truncate">{userRole}</p>
               </div>
             </div>
@@ -353,7 +370,7 @@ export function DashboardLayout({
             {/* User Profile Menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform">
+                <button className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform cursor-pointer">
                   {userName ? userName.slice(0, 2).toUpperCase() : "SL"}
                 </button>
               </DropdownMenuTrigger>
@@ -361,8 +378,8 @@ export function DashboardLayout({
                 <DropdownMenuLabel className="font-bold text-xs">{userName}</DropdownMenuLabel>
                 <p className="text-[11px] text-muted-foreground px-2 pb-1">{userRole} Account</p>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate("/analytics")} className="gap-2 cursor-pointer text-xs">
-                  <User className="h-4 w-4" /> My Profile & Analytics
+                <DropdownMenuItem onClick={() => setShowProfileModal(true)} className="gap-2 cursor-pointer text-xs">
+                  <User className="h-4 w-4" /> View My Profile
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleLogoutClick} className="gap-2 cursor-pointer text-xs text-destructive">
                   <LogOut className="h-4 w-4" /> Log Out
@@ -383,6 +400,13 @@ export function DashboardLayout({
           </motion.div>
         </main>
       </div>
+
+      {/* Profile Dialog */}
+      <UserProfileModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        user={currentUser}
+      />
     </div>
   );
 }

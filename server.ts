@@ -639,25 +639,54 @@ app.post("/api/auth/login", (req, res) => {
     if (!role && email.role) role = email.role;
   }
 
-  let user = users.find((u) => u.email.toLowerCase() === emailStr.toLowerCase());
-  
+  // 1. Search by exact email match first
+  let user = emailStr
+    ? users.find((u) => u.email.toLowerCase() === emailStr.toLowerCase())
+    : null;
+
+  // 2. If user not found by email, but custom user object with name/role is supplied
+  if (!user && customUser && customUser.name && customUser.role) {
+    let targetId = customUser.id;
+    if (!targetId || users.some((u) => u.id === targetId)) {
+      targetId = `usr-${customUser.role}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    }
+    user = {
+      id: targetId,
+      name: customUser.name,
+      email: emailStr || customUser.email || `user${Date.now()}@studylens.edu`,
+      role: customUser.role,
+      department: customUser.department || (customUser.role === "student" ? "Computer Science" : customUser.role === "teacher" ? "Computer Science & IT" : "Academic Affairs"),
+      studentId: customUser.role === "student" ? `2024-STU-${Math.floor(1000 + Math.random() * 9000)}` : undefined,
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+    users.unshift(user);
+  }
+
+  // 3. If email provided but not in users list, auto-create account for this email
+  if (!user && emailStr && emailStr.includes("@")) {
+    const userRole = role || "student";
+    const nameFromEmail = emailStr.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    user = {
+      id: `usr-${userRole}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      name: nameFromEmail || "Registered User",
+      email: emailStr,
+      role: userRole,
+      department: userRole === "student" ? "Computer Science" : userRole === "teacher" ? "Computer Science & IT" : "Academic Affairs",
+      studentId: userRole === "student" ? `2024-STU-${Math.floor(1000 + Math.random() * 9000)}` : undefined,
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+    users.unshift(user);
+  }
+
+  // 4. Fallback only if no email or custom info was provided at all (demo portal switch)
   if (!user && role) {
     user = users.find((u) => u.role === role);
   }
-  
+
   if (!user) {
-    if (customUser && customUser.name && customUser.role) {
-      user = {
-        id: customUser.id || `usr-${Date.now()}`,
-        name: customUser.name,
-        email: emailStr || customUser.email || "user@studylens.edu",
-        role: customUser.role,
-        department: customUser.department || "General",
-        createdAt: new Date().toISOString(),
-      };
-    } else {
-      user = users[0]; // fallback default
-    }
+    user = users[0];
   }
 
   activityLogs.unshift({
@@ -666,7 +695,7 @@ app.post("/api/auth/login", (req, res) => {
     userName: user.name,
     userRole: user.role as "student" | "teacher" | "admin",
     action: "USER_LOGIN",
-    details: `User logged in as ${user.role}`,
+    details: `User ${user.name} (${user.email}) logged in as ${user.role}`,
     ipAddress: req.ip || "127.0.0.1",
     timestamp: new Date().toISOString(),
   });
@@ -679,37 +708,67 @@ app.post("/api/auth/login", (req, res) => {
 
 app.post("/api/auth/register", (req, res) => {
   const { name, email, role = "student", department, studentId } = req.body;
+  
+  // Check if user already exists
+  let existing = users.find((u) => u.email.toLowerCase() === (email || "").toLowerCase());
+  if (existing) {
+    activityLogs.unshift({
+      id: `log-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      userId: existing.id,
+      userName: existing.name,
+      userRole: existing.role as "student" | "teacher" | "admin",
+      action: "USER_LOGIN",
+      details: `Existing user ${existing.name} logged in`,
+      ipAddress: req.ip || "127.0.0.1",
+      timestamp: new Date().toISOString(),
+    });
+    return res.json({ token: `jwt-token-${existing.id}`, user: existing });
+  }
+
   const newUser = {
-    id: `usr-${Date.now()}`,
-    name: name || "New User",
+    id: `usr-${role}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    name: name || "Registered User",
     email: email || `user${Date.now()}@studylens.edu`,
     role,
-    department: department || "General Studies",
-    studentId: studentId || `2024-${Math.floor(1000 + Math.random() * 9000)}`,
+    department: department || (role === "student" ? "Computer Science" : role === "teacher" ? "Computer Science & IT" : "Academic Affairs"),
+    studentId: studentId || (role === "student" ? `2024-STU-${Math.floor(1000 + Math.random() * 9000)}` : undefined),
+    status: "active" as const,
     createdAt: new Date().toISOString(),
   };
-  users.push(newUser);
+  users.unshift(newUser);
 
   activityLogs.unshift({
-    id: `log-${Date.now()}`,
+    id: `log-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
     userId: newUser.id,
     userName: newUser.name,
     userRole: newUser.role as "student" | "teacher" | "admin",
     action: "USER_REGISTER",
-    details: `Registered new ${newUser.role} account`,
+    details: `Registered new ${newUser.role} account: ${newUser.name} (${newUser.email})`,
+    ipAddress: req.ip || "127.0.0.1",
     timestamp: new Date().toISOString(),
   });
 
   return res.json({ token: `jwt-token-${newUser.id}`, user: newUser });
 });
 
+// Helper to deduplicate array by ID
+function deduplicateUsers(userList: typeof users) {
+  const seen = new Set<string>();
+  return userList.filter((u) => {
+    if (seen.has(u.id)) return false;
+    seen.add(u.id);
+    return true;
+  });
+}
+
 // 2. USERS MANAGEMENT
 app.get("/api/users", (req, res) => {
   const { role } = req.query;
+  const uniqueUsers = deduplicateUsers(users);
   if (role) {
-    return res.json(users.filter((u) => u.role === role));
+    return res.json(uniqueUsers.filter((u) => u.role === role));
   }
-  return res.json(users);
+  return res.json(uniqueUsers);
 });
 
 app.post("/api/users", (req, res) => {

@@ -120,12 +120,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       </nav>
 
       {/* User Profile Card Footer */}
-      <div className="p-4 border-t border-slate-800 bg-slate-950/50 flex items-center space-x-3">
-        <div className="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center font-bold text-white text-sm shadow">
-          {currentUser?.name.charAt(0)}
+      <div
+        onClick={() => {
+          if (typeof (window as any).__openProfileModal === "function") {
+            (window as any).__openProfileModal();
+          }
+        }}
+        className="p-4 border-t border-slate-800 bg-slate-950/50 flex items-center space-x-3 cursor-pointer hover:bg-slate-900/80 transition-colors group"
+        title="Click to view full profile"
+      >
+        <div className="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center font-bold text-white text-sm shadow group-hover:scale-105 transition-transform">
+          {currentUser?.name ? currentUser.name.charAt(0) : "S"}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-slate-200 truncate">{currentUser?.name}</p>
+          <p className="text-xs font-semibold text-slate-200 truncate group-hover:text-white transition-colors">{currentUser?.name}</p>
           <p className="text-[11px] text-slate-400 truncate">{currentUser?.email}</p>
         </div>
       </div>

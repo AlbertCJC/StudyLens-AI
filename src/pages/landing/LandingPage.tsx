@@ -8,7 +8,7 @@ import { useAuth } from "../../context/AuthContext";
 import type { UserRole } from "../../types";
 
 export const LandingPage: React.FC = () => {
-  const { login } = useAuth();
+  const { login, register } = useAuth();
   const [activeTab, setActiveTab] = useState<"home" | "features" | "about" | "contact">("home");
   const [authModal, setAuthModal] = useState<"login" | "register" | null>(null);
   
@@ -44,15 +44,38 @@ export const LandingPage: React.FC = () => {
   const [role, setRole] = useState<UserRole>("student");
   const [rememberMe, setRememberMe] = useState(false);
 
-  const handleAuthSubmit = (e: React.FormEvent) => {
+  const [authError, setAuthError] = useState("");
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    login({
-      id: `usr-${role}-${Date.now()}`,
-      name: fullName || (role === "student" ? "Alex Johnson" : role === "teacher" ? "Dr. Sarah Smith" : "System Administrator"),
-      email: email || `${role}@studylens.edu`,
-      role,
-      department: role === "student" ? "Computer Science" : role === "teacher" ? "Computer Science & IT" : "Academic Affairs",
-    });
+    setAuthError("");
+
+    if (authModal === "register") {
+      if (!fullName.trim()) {
+        setAuthError("Please enter your full name.");
+        return;
+      }
+      if (!email.trim()) {
+        setAuthError("Please enter a valid email address.");
+        return;
+      }
+      if (password && confirmPassword && password !== confirmPassword) {
+        setAuthError("Passwords do not match.");
+        return;
+      }
+
+      const dept = role === "student" ? "Computer Science" : role === "teacher" ? "Computer Science & IT" : "Academic Affairs";
+      await register(fullName.trim(), email.trim(), role, dept);
+    } else {
+      if (!email.trim()) {
+        setAuthError("Please enter your email address.");
+        return;
+      }
+      await login({
+        email: email.trim(),
+        role: role,
+      });
+    }
   };
 
   const handleQuickLogin = (demoRole: UserRole) => {
@@ -130,6 +153,11 @@ export const LandingPage: React.FC = () => {
 
             {/* Auth Form */}
             <form onSubmit={handleAuthSubmit} className="space-y-4 text-xs sm:text-sm">
+              {authError && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-semibold">
+                  {authError}
+                </div>
+              )}
               {authModal === "register" && (
                 <div className="space-y-1.5">
                   <label className="block font-semibold text-slate-800 dark:text-slate-200">

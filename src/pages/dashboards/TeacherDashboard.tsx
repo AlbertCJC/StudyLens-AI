@@ -27,7 +27,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
   const [annTitle, setAnnTitle] = useState("");
   const [annContent, setAnnContent] = useState("");
   const [annSubjectId, setAnnSubjectId] = useState("");
-  const [annAudience, setAnnAudience] = useState<"all" | "students" | "teachers">("all");
+  const [annAudience, setAnnAudience] = useState<"all" | "students" | "teachers">("students");
   const [annPriority, setAnnPriority] = useState<"high" | "medium" | "low">("medium");
 
   const [gradingQueue, setGradingQueue] = useState([
@@ -47,7 +47,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
       title: annTitle.trim(),
       content: annContent.trim(),
       authorName: currentUser?.name || "Faculty Instructor",
-      targetAudience: annAudience,
+      targetAudience: "students",
       priority: annPriority,
       subjectId: selectedSub ? selectedSub.id : undefined,
       subjectName: subName,
@@ -479,15 +479,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold mb-1">Target Audience</label>
+                  <label className="block font-bold mb-1">Associated Course Subject</label>
                   <select
-                    value={annAudience}
-                    onChange={(e) => setAnnAudience(e.target.value as "all" | "students" | "teachers")}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-semibold"
+                    value={annSubjectId}
+                    onChange={(e) => setAnnSubjectId(e.target.value)}
+                    className="w-full p-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white font-semibold"
                   >
-                    <option value="all">Everyone (All Roles)</option>
-                    <option value="students">Students Only</option>
-                    <option value="teachers">Faculty / Staff Only</option>
+                    <option value="" className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">-- Select Enrolled Subject --</option>
+                    {subjects.map((s) => (
+                      <option key={s.id} value={s.id} className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">
+                        {s.code} - {s.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -496,29 +499,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
                   <select
                     value={annPriority}
                     onChange={(e) => setAnnPriority(e.target.value as "high" | "medium" | "low")}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-semibold"
+                    className="w-full p-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white font-semibold"
                   >
-                    <option value="high">High (Urgent Red)</option>
-                    <option value="medium">Medium (Standard Amber)</option>
-                    <option value="low">Low (General Blue)</option>
+                    <option value="high" className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">High (Urgent Red)</option>
+                    <option value="medium" className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">Medium (Standard Amber)</option>
+                    <option value="low" className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">Low (General Blue)</option>
                   </select>
                 </div>
-              </div>
-
-              <div>
-                <label className="block font-bold mb-1">Associated Course Subject (Optional)</label>
-                <select
-                  value={annSubjectId}
-                  onChange={(e) => setAnnSubjectId(e.target.value)}
-                  className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-semibold"
-                >
-                  <option value="">-- General Institutional Bulletin --</option>
-                  {subjects.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.code} - {s.name}
-                    </option>
-                  ))}
-                </select>
               </div>
 
               <div>

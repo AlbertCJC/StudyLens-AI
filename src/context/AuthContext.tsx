@@ -13,8 +13,29 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    try {
+      const saved = localStorage.getItem("studylens_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [token, setToken] = useState<string | null>(() => {
+    return localStorage.getItem("studylens_token") || null;
+  });
+
+  const saveUserSession = (user: User, userToken?: string) => {
+    setCurrentUser(user);
+    const tok = userToken || `jwt-token-${user.id}-${Date.now()}`;
+    setToken(tok);
+    try {
+      localStorage.setItem("studylens_user", JSON.stringify(user));
+      localStorage.setItem("studylens_token", tok);
+    } catch (e) {
+      console.error("Failed to save session to localStorage", e);
+    }
+  };
 
   const login = async (emailOrUser: string | Partial<User>, role?: UserRole) => {
     try {
@@ -38,29 +59,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (res.ok) {
         const data = await res.json();
-        setCurrentUser(data.user);
-        setToken(data.token);
+        saveUserSession(data.user, data.token);
       } else if (customUser && customUser.name && customUser.role) {
-        setCurrentUser({
+        const fallbackUser: User = {
           id: customUser.id || `usr-${Date.now()}`,
           name: customUser.name,
           email: customUser.email || "user@studylens.edu",
           role: customUser.role,
           department: customUser.department || "General",
-        } as User);
-        setToken("mock-jwt-token");
+          createdAt: new Date().toISOString(),
+        };
+        saveUserSession(fallbackUser);
       }
     } catch (err) {
       console.error("Login failed:", err);
       if (typeof emailOrUser === "object" && emailOrUser !== null) {
-        setCurrentUser({
+        const fallbackUser: User = {
           id: emailOrUser.id || `usr-${Date.now()}`,
           name: emailOrUser.name || "User",
           email: emailOrUser.email || "user@studylens.edu",
           role: emailOrUser.role || "student",
           department: emailOrUser.department || "General",
-        } as User);
-        setToken("mock-jwt-token");
+          createdAt: new Date().toISOString(),
+        };
+        saveUserSession(fallbackUser);
       }
     }
   };
@@ -74,8 +96,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       if (res.ok) {
         const data = await res.json();
-        setCurrentUser(data.user);
-        setToken(data.token);
+        saveUserSession(data.user, data.token);
       }
     } catch (err) {
       console.error("Registration failed:", err);
@@ -113,7 +134,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createdAt: "2023-08-01T08:00:00.000Z",
       };
     }
-    setCurrentUser(targetUser);
+    saveUserSession(targetUser);
     fetch("/api/logs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -130,6 +151,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     setCurrentUser(null);
     setToken(null);
+    try {
+      localStorage.removeItem("studylens_user");
+      localStorage.removeItem("studylens_token");
+    } catch (e) {
+      console.error("Failed to clear localStorage session", e);
+    }
   };
 
   return (
