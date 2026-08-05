@@ -7,9 +7,14 @@ import mammoth from "mammoth";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 
-const require = createRequire(import.meta.url);
-const pdfParseModule = require("pdf-parse");
-const PDFDocument = require("pdfkit");
+// Safe module loading for CommonJS dependencies in both ESM (dev) and CJS (prod build)
+const cjsRequire =
+  typeof require !== "undefined"
+    ? require
+    : createRequire(import.meta.url);
+
+const pdfParseModule = cjsRequire("pdf-parse");
+const PDFDocument = cjsRequire("pdfkit");
 
 const app = express();
 const PORT = 3000;
