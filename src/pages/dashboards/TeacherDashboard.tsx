@@ -27,7 +27,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
   const [annTitle, setAnnTitle] = useState("");
   const [annContent, setAnnContent] = useState("");
   const [annSubjectId, setAnnSubjectId] = useState("");
-  const [annAudience, setAnnAudience] = useState<"all" | "students" | "teachers">("students");
   const [annPriority, setAnnPriority] = useState<"high" | "medium" | "low">("medium");
 
   const [gradingQueue, setGradingQueue] = useState([

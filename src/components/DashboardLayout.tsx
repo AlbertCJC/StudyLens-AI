@@ -36,6 +36,12 @@ export interface DashboardLayoutProps {
   onLogout?: () => void;
 }
 
+declare global {
+  interface Window {
+    __openProfileModal?: () => void;
+  }
+}
+
 export function DashboardLayout({
   children,
   menuItems,
@@ -48,16 +54,14 @@ export function DashboardLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const { currentUser } = useAuth();
+  const { currentUser, updateUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   React.useEffect(() => {
-    (window as any).__openProfileModal = () => setShowProfileModal(true);
+    window.__openProfileModal = () => setShowProfileModal(true);
     return () => {
-      try {
-        delete (window as any).__openProfileModal;
-      } catch {}
+      delete window.__openProfileModal;
     };
   }, []);
 
@@ -406,6 +410,7 @@ export function DashboardLayout({
         isOpen={showProfileModal}
         onClose={() => setShowProfileModal(false)}
         user={currentUser}
+        onUpdateUser={updateUser}
       />
     </div>
   );

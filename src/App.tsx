@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -34,6 +34,7 @@ import { AssessmentPage } from "./pages/learning/AssessmentPage";
 import { FlashcardsPage } from "./pages/learning/FlashcardsPage";
 import { ProgressAnalyticsPage } from "./pages/analytics/ProgressAnalyticsPage";
 import { SubjectsPage } from "./pages/learning/SubjectsPage";
+import { ProfilePage } from "./pages/ProfilePage";
 import { LandingPage } from "./pages/landing/LandingPage";
 import type { LearningMaterial, Subject } from "./types";
 
@@ -528,11 +529,49 @@ const ActivityLogsView: React.FC = () => {
   return <AdminDashboard defaultTab="logs" hideTabs={true} />;
 };
 
+interface RoleGuardProps {
+  allowedRoles: ("student" | "teacher" | "admin")[];
+  userRole: "student" | "teacher" | "admin";
+  children: React.ReactNode;
+}
+
+const RoleGuard: React.FC<RoleGuardProps> = ({ allowedRoles, userRole, children }) => {
+  if (!allowedRoles.includes(userRole)) {
+    const defaultPath =
+      userRole === "admin"
+        ? "/admin/dashboard"
+        : userRole === "teacher"
+        ? "/teacher/dashboard"
+        : "/student/dashboard";
+    return <Navigate to={defaultPath} replace />;
+  }
+  return <>{children}</>;
+};
+
 const MainAppContent: React.FC = () => {
   const { currentUser, switchRole, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [selectedMaterial, setSelectedMaterial] = useState<LearningMaterial | null>(null);
+  const prevUserIdRef = useRef<string | null>(null);
+
+  const getRoleDefaultPath = (r: "student" | "teacher" | "admin") => {
+    if (r === "admin") return "/admin/dashboard";
+    if (r === "teacher") return "/teacher/dashboard";
+    return "/student/dashboard";
+  };
+
+  useEffect(() => {
+    if (currentUser?.id) {
+      if (prevUserIdRef.current !== currentUser.id) {
+        prevUserIdRef.current = currentUser.id;
+        const role = currentUser.role || "student";
+        navigate(getRoleDefaultPath(role), { replace: true });
+      }
+    } else {
+      prevUserIdRef.current = null;
+    }
+  }, [currentUser?.id, currentUser?.role, navigate]);
 
   if (!currentUser) {
     return <LandingPage />;
@@ -584,30 +623,25 @@ const MainAppContent: React.FC = () => {
 
   const handleTabNavigate = (tab: string) => {
     const tabToPathMap: Record<string, string> = {
-      dashboard: role === "admin" ? "/admin/dashboard" : role === "teacher" ? "/teacher/dashboard" : "/student/dashboard",
+      dashboard: getRoleDefaultPath(role),
       materials: "/materials",
       "ai-assistant": "/ai-assistant",
       assessments: "/assessments",
       flashcards: "/flashcards",
       analytics: "/analytics",
+      profile: "/profile",
       subjects: "/subjects",
       announcements: "/announcements",
-      users: "/users",
-      "activity-logs": "/activity-logs",
+      users: role === "admin" ? "/users" : getRoleDefaultPath(role),
+      "activity-logs": role === "admin" ? "/activity-logs" : getRoleDefaultPath(role),
     };
-    const targetPath = tabToPathMap[tab] || "/student/dashboard";
+    const targetPath = tabToPathMap[tab] || getRoleDefaultPath(role);
     navigate(targetPath);
   };
 
   const handleGenerateFromMaterial = (material: LearningMaterial) => {
     setSelectedMaterial(material);
     navigate("/ai-assistant");
-  };
-
-  const getRoleDefaultPath = (r: "student" | "teacher" | "admin") => {
-    if (r === "admin") return "/admin/dashboard";
-    if (r === "teacher") return "/teacher/dashboard";
-    return "/student/dashboard";
   };
 
   return (
@@ -622,22 +656,76 @@ const MainAppContent: React.FC = () => {
       }}
       onLogout={() => {
         logout();
+        navigate("/", { replace: true });
       }}
     >
       <Routes>
         <Route path="/" element={<Navigate to={getRoleDefaultPath(role)} replace />} />
-        <Route path="/student/dashboard" element={<StudentDashboard onNavigate={handleTabNavigate} />} />
-        <Route path="/teacher/dashboard" element={<TeacherDashboard onNavigate={handleTabNavigate} />} />
-        <Route path="/admin/dashboard" element={<AdminDashboard defaultTab="overview" />} />
+
+        {/* Dashboards */}
+        <Route
+          path="/student/dashboard"
+          element={
+            <RoleGuard allowedRoles={["student"]} userRole={role}>
+              <StudentDashboard onNavigate={handleTabNavigate} />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="/teacher/dashboard"
+          element={
+            <RoleGuard allowedRoles={["teacher"]} userRole={role}>
+              <TeacherDashboard onNavigate={handleTabNavigate} />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="/admin/dashboard"
+          element={
+            <RoleGuard allowedRoles={["admin"]} userRole={role}>
+              <AdminDashboard defaultTab="overview" />
+            </RoleGuard>
+          }
+        />
+
+        {/* Admin-only Management Views */}
+        <Route
+          path="/users"
+          element={
+            <RoleGuard allowedRoles={["admin"]} userRole={role}>
+              <UserManagementView />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="/activity-logs"
+          element={
+            <RoleGuard allowedRoles={["admin"]} userRole={role}>
+              <ActivityLogsView />
+            </RoleGuard>
+          }
+        />
+
+        {/* Teacher & Admin Views */}
+        <Route
+          path="/subjects"
+          element={
+            <RoleGuard allowedRoles={["teacher", "admin"]} userRole={role}>
+              <SubjectsPage />
+            </RoleGuard>
+          }
+        />
+
+        {/* General Authorized Routes */}
         <Route path="/materials" element={<LearningMaterialsPage onGenerateResource={handleGenerateFromMaterial} onNavigate={handleTabNavigate} />} />
         <Route path="/ai-assistant" element={<AIStudyAssistantPage initialMaterial={selectedMaterial} />} />
         <Route path="/assessments" element={<AssessmentPage onNavigate={handleTabNavigate} />} />
         <Route path="/flashcards" element={<FlashcardsPage />} />
         <Route path="/analytics" element={<ProgressAnalyticsPage />} />
-        <Route path="/subjects" element={<SubjectsPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
         <Route path="/announcements" element={<AnnouncementsView />} />
-        <Route path="/users" element={<UserManagementView />} />
-        <Route path="/activity-logs" element={<ActivityLogsView />} />
+
+        {/* Catch-all redirect */}
         <Route path="*" element={<Navigate to={getRoleDefaultPath(role)} replace />} />
       </Routes>
     </DashboardLayout>

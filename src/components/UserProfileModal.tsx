@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
-  X, User, Mail, Shield, Building2, Calendar, Award, CheckCircle2,
-  Lock, Edit3, Save, Sparkles, BookOpen, CheckSquare, Layers, ShieldCheck
+  X, Mail, Shield, Building2, Calendar, Award, CheckCircle2,
+  Lock, Edit3, Save, Sparkles, BookOpen, ShieldCheck
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import type { User as UserType } from "../types";
@@ -19,11 +19,10 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   user,
   onUpdateUser,
 }) => {
-  if (!isOpen || !user) return null;
-
+  const [prevUserId, setPrevUserId] = useState(user?.id);
   const [isEditing, setIsEditing] = useState(false);
-  const [name, setName] = useState(user.name);
-  const [department, setDepartment] = useState(user.department || "General");
+  const [name, setName] = useState(user?.name || "");
+  const [department, setDepartment] = useState(user?.department || "General");
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Password reset state
@@ -31,6 +30,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordMsg, setPasswordMsg] = useState("");
+
+  if (user && user.id !== prevUserId) {
+    setPrevUserId(user.id);
+    setName(user.name);
+    setDepartment(user.department || "General");
+  }
+
+  if (!isOpen || !user) return null;
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();

@@ -6,6 +6,7 @@ interface AuthContextType {
   token: string | null;
   login: (emailOrUser: string | Partial<User>, role?: UserRole) => Promise<void>;
   register: (name: string, email: string, role: UserRole, department?: string) => Promise<void>;
+  updateUser: (updated: User) => Promise<void>;
   switchRole: (role: UserRole) => void;
   logout: () => void;
 }
@@ -60,30 +61,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok) {
         const data = await res.json();
         saveUserSession(data.user, data.token);
-      } else if (customUser && customUser.name && customUser.role) {
-        const fallbackUser: User = {
-          id: customUser.id || `usr-${Date.now()}`,
-          name: customUser.name,
-          email: customUser.email || "user@studylens.edu",
-          role: customUser.role,
-          department: customUser.department || "General",
-          createdAt: new Date().toISOString(),
-        };
-        saveUserSession(fallbackUser);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Login failed. Please check your credentials.");
       }
     } catch (err) {
-      console.error("Login failed:", err);
-      if (typeof emailOrUser === "object" && emailOrUser !== null) {
-        const fallbackUser: User = {
-          id: emailOrUser.id || `usr-${Date.now()}`,
-          name: emailOrUser.name || "User",
-          email: emailOrUser.email || "user@studylens.edu",
-          role: emailOrUser.role || "student",
-          department: emailOrUser.department || "General",
-          createdAt: new Date().toISOString(),
-        };
-        saveUserSession(fallbackUser);
-      }
+      console.warn("Login notice:", err);
+      throw err;
     }
   };
 
@@ -97,9 +81,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok) {
         const data = await res.json();
         saveUserSession(data.user, data.token);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Registration failed.");
       }
     } catch (err) {
-      console.error("Registration failed:", err);
+      console.warn("Registration notice:", err);
+      throw err;
     }
   };
 
@@ -148,6 +136,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }).catch(() => {});
   };
 
+  const updateUser = async (updated: User) => {
+    saveUserSession(updated, token || undefined);
+    try {
+      await fetch(`/api/users/${updated.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updated),
+      });
+    } catch (err) {
+      console.error("Failed to sync updated user with backend:", err);
+    }
+  };
+
   const logout = () => {
     setCurrentUser(null);
     setToken(null);
@@ -160,7 +161,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, token, login, register, switchRole, logout }}>
+    <AuthContext.Provider value={{ currentUser, token, login, register, updateUser, switchRole, logout }}>
       {children}
     </AuthContext.Provider>
   );

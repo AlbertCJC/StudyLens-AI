@@ -48,8 +48,10 @@ const upload = multer({
   limits: { fileSize: 30 * 1024 * 1024 },
 });
 
-// Seed Data & Memory State
-let users = [
+// Central User Directory & Disk Persistence State
+const USERS_FILE_PATH = path.resolve(process.cwd(), "users.json");
+
+const SEED_USERS = [
   {
     id: "usr-student-1",
     name: "Alex Rivera",
@@ -85,6 +87,31 @@ let users = [
     createdAt: "2024-02-10T08:00:00.000Z",
   },
 ];
+
+function loadUsersFromDisk() {
+  try {
+    if (fs.existsSync(USERS_FILE_PATH)) {
+      const data = fs.readFileSync(USERS_FILE_PATH, "utf-8");
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error("Failed to load users.json from disk:", err);
+  }
+  return [...SEED_USERS];
+}
+
+let users = loadUsersFromDisk();
+
+function saveUsersToDisk() {
+  try {
+    fs.writeFileSync(USERS_FILE_PATH, JSON.stringify(users, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Failed to save users.json to disk:", err);
+  }
+}
 
 let subjects = [
   {
@@ -633,18 +660,22 @@ app.post("/api/auth/login", (req, res) => {
 
   let emailStr = "";
   if (typeof email === "string") {
-    emailStr = email;
+    emailStr = email.trim();
   } else if (email && typeof email === "object" && typeof email.email === "string") {
-    emailStr = email.email;
+    emailStr = email.email.trim();
     if (!role && email.role) role = email.role;
   }
 
-  // 1. Search by exact email match first
+  // 1. Authenticate against central user directory by email match
   let user = emailStr
     ? users.find((u) => u.email.toLowerCase() === emailStr.toLowerCase())
     : null;
 
-  // 2. If user not found by email, but custom user object with name/role is supplied
+  // 2. If quick demo login specified user ID or custom user object, search or register
+  if (!user && customUser && customUser.id) {
+    user = users.find((u) => u.id === customUser.id) || null;
+  }
+
   if (!user && customUser && customUser.name && customUser.role) {
     let targetId = customUser.id;
     if (!targetId || users.some((u) => u.id === targetId)) {
@@ -661,32 +692,23 @@ app.post("/api/auth/login", (req, res) => {
       createdAt: new Date().toISOString(),
     };
     users.unshift(user);
+    saveUsersToDisk();
   }
 
-  // 3. If email provided but not in users list, auto-create account for this email
-  if (!user && emailStr && emailStr.includes("@")) {
-    const userRole = role || "student";
-    const nameFromEmail = emailStr.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-    user = {
-      id: `usr-${userRole}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-      name: nameFromEmail || "Registered User",
-      email: emailStr,
-      role: userRole,
-      department: userRole === "student" ? "Computer Science" : userRole === "teacher" ? "Computer Science & IT" : "Academic Affairs",
-      studentId: userRole === "student" ? `2024-STU-${Math.floor(1000 + Math.random() * 9000)}` : undefined,
-      status: "active",
-      createdAt: new Date().toISOString(),
-    };
-    users.unshift(user);
+  // 3. If email provided but account not found in user directory, return 401
+  if (!user && emailStr) {
+    return res.status(401).json({
+      error: "No account found with this email. Please register an account first."
+    });
   }
 
-  // 4. Fallback only if no email or custom info was provided at all (demo portal switch)
-  if (!user && role) {
+  // 4. Quick portal role switch fallback (only if no email or custom info provided at all)
+  if (!user && role && !emailStr && !customUser) {
     user = users.find((u) => u.role === role);
   }
 
   if (!user) {
-    user = users[0];
+    return res.status(401).json({ error: "Authentication failed. User not found in user directory." });
   }
 
   activityLogs.unshift({
@@ -709,8 +731,16 @@ app.post("/api/auth/login", (req, res) => {
 app.post("/api/auth/register", (req, res) => {
   const { name, email, role = "student", department, studentId } = req.body;
   
-  // Check if user already exists
-  let existing = users.find((u) => u.email.toLowerCase() === (email || "").toLowerCase());
+  if (!email || typeof email !== "string" || !email.includes("@")) {
+    return res.status(400).json({ error: "A valid email address is required for registration." });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  // Admin accounts cannot be created via public registration
+  const sanitizedRole = role === "teacher" ? "teacher" : "student";
+
+  // Check if user already exists in central directory
+  const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
   if (existing) {
     activityLogs.unshift({
       id: `log-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
@@ -718,24 +748,29 @@ app.post("/api/auth/register", (req, res) => {
       userName: existing.name,
       userRole: existing.role as "student" | "teacher" | "admin",
       action: "USER_LOGIN",
-      details: `Existing user ${existing.name} logged in`,
+      details: `Attempted registration with existing email ${cleanEmail}`,
       ipAddress: req.ip || "127.0.0.1",
       timestamp: new Date().toISOString(),
     });
-    return res.json({ token: `jwt-token-${existing.id}`, user: existing });
+    return res.status(409).json({
+      error: `This account (${cleanEmail}) is already registered. Would you like to log in instead?`,
+      code: "USER_EXISTS"
+    });
   }
 
   const newUser = {
-    id: `usr-${role}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-    name: name || "Registered User",
-    email: email || `user${Date.now()}@studylens.edu`,
-    role,
-    department: department || (role === "student" ? "Computer Science" : role === "teacher" ? "Computer Science & IT" : "Academic Affairs"),
-    studentId: studentId || (role === "student" ? `2024-STU-${Math.floor(1000 + Math.random() * 9000)}` : undefined),
+    id: `usr-${sanitizedRole}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    name: name?.trim() || "Registered User",
+    email: cleanEmail,
+    role: sanitizedRole,
+    department: department?.trim() || (sanitizedRole === "student" ? "Computer Science" : "Computer Science & IT"),
+    studentId: studentId?.trim() || (sanitizedRole === "student" ? `2024-STU-${Math.floor(1000 + Math.random() * 9000)}` : undefined),
     status: "active" as const,
     createdAt: new Date().toISOString(),
   };
+
   users.unshift(newUser);
+  saveUsersToDisk();
 
   activityLogs.unshift({
     id: `log-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
@@ -743,7 +778,7 @@ app.post("/api/auth/register", (req, res) => {
     userName: newUser.name,
     userRole: newUser.role as "student" | "teacher" | "admin",
     action: "USER_REGISTER",
-    details: `Registered new ${newUser.role} account: ${newUser.name} (${newUser.email})`,
+    details: `Registered new ${newUser.role} account in central directory: ${newUser.name} (${newUser.email})`,
     ipAddress: req.ip || "127.0.0.1",
     timestamp: new Date().toISOString(),
   });
@@ -783,6 +818,7 @@ app.post("/api/users", (req, res) => {
     createdAt: new Date().toISOString(),
   };
   users.push(newUser);
+  saveUsersToDisk();
 
   activityLogs.unshift({
     id: `log-${Date.now()}`,
@@ -804,6 +840,7 @@ app.put("/api/users/:id", (req, res) => {
   
   const oldUser = { ...users[idx] };
   users[idx] = { ...users[idx], ...req.body };
+  saveUsersToDisk();
 
   const changes: string[] = [];
   if (req.body.role && req.body.role !== oldUser.role) changes.push(`Role changed from ${oldUser.role} to ${req.body.role}`);
@@ -827,6 +864,7 @@ app.put("/api/users/:id", (req, res) => {
 app.delete("/api/users/:id", (req, res) => {
   const deletedUser = users.find((u) => u.id === req.params.id);
   users = users.filter((u) => u.id !== req.params.id);
+  saveUsersToDisk();
 
   if (deletedUser) {
     activityLogs.unshift({

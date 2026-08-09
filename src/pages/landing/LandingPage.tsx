@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import {
   BookOpen, Sparkles, CheckCircle2, ArrowRight,
   Moon, Sun, User, Mail, Lock, Eye, EyeOff,
-  Star, Users, PieChart, ArrowLeft, Brain
+  Star, Users, PieChart, ArrowLeft, Brain,
+  X, AlertCircle
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import type { UserRole } from "../../types";
@@ -35,7 +36,9 @@ export const LandingPage: React.FC = () => {
   }, [darkMode]);
 
   // Auth Form State
-  const [fullName, setFullName] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [middleInitial, setMiddleInitial] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -44,37 +47,92 @@ export const LandingPage: React.FC = () => {
   const [role, setRole] = useState<UserRole>("student");
   const [rememberMe, setRememberMe] = useState(false);
 
-  const [authError, setAuthError] = useState("");
+  interface ToastNotice {
+    id: string;
+    type: "warning" | "error" | "info";
+    title: string;
+    message: string;
+    action?: {
+      label: string;
+      onClick: () => void;
+    };
+  }
+
+  const [toast, setToast] = useState<ToastNotice | null>(null);
+
+  const openRegisterModal = () => {
+    setAuthModal("register");
+    if (role === "admin") setRole("student");
+    setToast(null);
+  };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setAuthError("");
+    setToast(null);
 
-    if (authModal === "register") {
-      if (!fullName.trim()) {
-        setAuthError("Please enter your full name.");
-        return;
-      }
-      if (!email.trim()) {
-        setAuthError("Please enter a valid email address.");
-        return;
-      }
-      if (password && confirmPassword && password !== confirmPassword) {
-        setAuthError("Passwords do not match.");
-        return;
-      }
+    try {
+      if (authModal === "register") {
+        if (!firstName.trim()) {
+          setToast({ id: Date.now().toString(), type: "error", title: "Registration Notice", message: "Please enter your first name." });
+          return;
+        }
+        if (!lastName.trim()) {
+          setToast({ id: Date.now().toString(), type: "error", title: "Registration Notice", message: "Please enter your last name." });
+          return;
+        }
+        if (!email.trim()) {
+          setToast({ id: Date.now().toString(), type: "error", title: "Registration Notice", message: "Please enter a valid email address." });
+          return;
+        }
+        if (password && confirmPassword && password !== confirmPassword) {
+          setToast({ id: Date.now().toString(), type: "error", title: "Registration Notice", message: "Passwords do not match." });
+          return;
+        }
 
-      const dept = role === "student" ? "Computer Science" : role === "teacher" ? "Computer Science & IT" : "Academic Affairs";
-      await register(fullName.trim(), email.trim(), role, dept);
-    } else {
-      if (!email.trim()) {
-        setAuthError("Please enter your email address.");
-        return;
+        const cleanMI = middleInitial.trim().toUpperCase().replace(/\.$/, "");
+        const formattedMI = cleanMI ? `${cleanMI}. ` : "";
+        const computedFullName = `${firstName.trim()} ${formattedMI}${lastName.trim()}`.replace(/\s+/g, " ");
+
+        const dept = role === "student" ? "Computer Science" : role === "teacher" ? "Computer Science & IT" : "Academic Affairs";
+        await register(computedFullName, email.trim(), role, dept);
+      } else {
+        if (!email.trim()) {
+          setToast({ id: Date.now().toString(), type: "error", title: "Login Notice", message: "Please enter your email address." });
+          return;
+        }
+        await login({
+          email: email.trim(),
+          role: role,
+        });
       }
-      await login({
-        email: email.trim(),
-        role: role,
-      });
+    } catch (err) {
+      const errMsg = (err as Error).message || "Authentication failed. Please check your credentials.";
+      if (
+        errMsg.toLowerCase().includes("already registered") ||
+        errMsg.toLowerCase().includes("already exists")
+      ) {
+        setToast({
+          id: Date.now().toString(),
+          type: "warning",
+          title: "Account Already Registered",
+          message: `This email (${email.trim()}) is already registered in our system. Would you like to log in instead?`,
+          action: {
+            label: `Log in with ${email.trim()} instead`,
+            onClick: () => {
+              setAuthModal("login");
+              setPassword("");
+              setConfirmPassword("");
+            },
+          },
+        });
+      } else {
+        setToast({
+          id: Date.now().toString(),
+          type: "error",
+          title: "Authentication Error",
+          message: errMsg,
+        });
+      }
     }
   };
 
@@ -120,6 +178,41 @@ export const LandingPage: React.FC = () => {
       <div className={`min-h-screen font-sans flex flex-col items-center justify-center p-4 sm:p-6 ${
         darkMode ? "dark bg-[#0b132b] text-slate-100" : "bg-[#f5f6fc] text-slate-900"
       }`}>
+        {/* Floating Toast Notification */}
+        {toast && (
+          <div className="fixed top-6 right-6 z-[120] max-w-sm sm:max-w-md w-full animate-in slide-in-from-top-4 fade-in duration-300">
+            <div className="bg-slate-900/95 dark:bg-slate-800/95 text-white p-4 rounded-2xl shadow-2xl border border-slate-700/80 backdrop-blur-md flex items-start space-x-3.5">
+              <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${toast.type === "warning" ? "bg-amber-500/20 text-amber-400" : "bg-rose-500/20 text-rose-400"}`}>
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div className="flex-1 space-y-2 text-xs sm:text-sm">
+                <h4 className="font-bold text-slate-100">{toast.title}</h4>
+                <p className="text-slate-300 text-xs leading-relaxed">{toast.message}</p>
+                {toast.action && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toast.action?.onClick();
+                      setToast(null);
+                    }}
+                    className="w-full py-2 px-3 bg-[#5b51d8] hover:bg-[#4c42c9] text-white font-bold rounded-xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                  >
+                    <span>{toast.action.label}</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setToast(null)}
+                className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-slate-800/80 cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Top Dark/Light Switch Floating Right */}
         <div className="absolute top-4 right-6">
           <button
@@ -153,26 +246,59 @@ export const LandingPage: React.FC = () => {
 
             {/* Auth Form */}
             <form onSubmit={handleAuthSubmit} className="space-y-4 text-xs sm:text-sm">
-              {authError && (
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-semibold">
-                  {authError}
-                </div>
-              )}
               {authModal === "register" && (
-                <div className="space-y-1.5">
-                  <label className="block font-semibold text-slate-800 dark:text-slate-200">
-                    Full Name
-                  </label>
-                  <div className="relative">
-                    <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                    <input
-                      type="text"
-                      required
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      placeholder="Enter your full name"
-                      className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
-                    />
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="space-y-1.5">
+                      <label className="block font-semibold text-slate-800 dark:text-slate-200">
+                        First Name <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <User className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                        <input
+                          type="text"
+                          required
+                          value={firstName}
+                          onChange={(e) => setFirstName(e.target.value)}
+                          placeholder="First name"
+                          className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block font-semibold text-slate-800 dark:text-slate-200">
+                        Last Name <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <User className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                        <input
+                          type="text"
+                          required
+                          value={lastName}
+                          onChange={(e) => setLastName(e.target.value)}
+                          placeholder="Last name"
+                          className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block font-semibold text-slate-800 dark:text-slate-200">
+                      Middle Initial <span className="text-slate-400 font-normal text-[11px]">(Optional)</span>
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                      <input
+                        type="text"
+                        maxLength={5}
+                        value={middleInitial}
+                        onChange={(e) => setMiddleInitial(e.target.value)}
+                        placeholder="e.g. M."
+                        className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -271,7 +397,7 @@ export const LandingPage: React.FC = () => {
 
               {/* Role Option Selector (Register Only) */}
               {authModal === "register" && (
-                <div className="space-y-2 pt-1">
+                <div className="space-y-3 pt-1">
                   <label className="block font-semibold text-slate-800 dark:text-slate-200">
                     I am a
                   </label>
@@ -301,6 +427,31 @@ export const LandingPage: React.FC = () => {
                       <span className={`w-2.5 h-2.5 rounded-full ${role === "teacher" ? "bg-[#5b51d8]" : "border border-slate-300 dark:border-slate-600"}`} />
                       <span>Teacher</span>
                     </button>
+                  </div>
+
+                  <div className="p-3 bg-slate-100 dark:bg-slate-800/60 rounded-xl text-slate-600 dark:text-slate-300 text-xs flex items-start space-x-2 border border-slate-200 dark:border-slate-700/60">
+                    <div className="p-1 rounded-md bg-[#5b51d8]/10 text-[#5b51d8] dark:text-indigo-400 mt-0.5 shrink-0">
+                      <User className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="font-semibold text-slate-800 dark:text-slate-200">Looking for Admin access?</p>
+                      <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                        Admin role cannot be self-registered. Use the pre-registered Administrator account <strong className="text-slate-700 dark:text-slate-200 font-bold">admin@studylens.edu</strong>.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthModal("login");
+                          setEmail("admin@studylens.edu");
+                          setRole("admin");
+                          setToast(null);
+                        }}
+                        className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline text-[11px] cursor-pointer inline-flex items-center space-x-1 pt-0.5"
+                      >
+                        <span>Sign in with Admin account</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -350,7 +501,10 @@ export const LandingPage: React.FC = () => {
                     Don't have an account?{" "}
                     <button
                       type="button"
-                      onClick={() => setAuthModal("register")}
+                      onClick={() => {
+                        setAuthModal("register");
+                        if (role === "admin") setRole("student");
+                      }}
                       className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline cursor-pointer"
                     >
                       Register here
@@ -463,7 +617,7 @@ export const LandingPage: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setAuthModal("register")}
+            onClick={openRegisterModal}
             className="bg-[#5b51d8] hover:bg-[#4c42c9] text-white text-sm font-semibold px-4 py-2 rounded-lg transition-all shadow-xs cursor-pointer"
           >
             Register
@@ -492,7 +646,7 @@ export const LandingPage: React.FC = () => {
 
             <div className="flex flex-wrap items-center gap-4 pt-2">
               <button
-                onClick={() => setAuthModal("register")}
+                onClick={openRegisterModal}
                 className="bg-[#5b51d8] hover:bg-[#4c42c9] text-white font-bold text-sm px-6 py-3 rounded-xl shadow-md transition-all flex items-center space-x-2 cursor-pointer"
               >
                 <span>Get Started</span>

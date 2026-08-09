@@ -122,8 +122,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       {/* User Profile Card Footer */}
       <div
         onClick={() => {
-          if (typeof (window as any).__openProfileModal === "function") {
-            (window as any).__openProfileModal();
+          if (typeof window.__openProfileModal === "function") {
+            window.__openProfileModal();
           }
         }}
         className="p-4 border-t border-slate-800 bg-slate-950/50 flex items-center space-x-3 cursor-pointer hover:bg-slate-900/80 transition-colors group"
