@@ -1,144 +1,160 @@
 # StudyLens AI: An Adaptive Learning and Automated Assessment Generation Platform
 
----
-
-## 🌟 Key Features & Role-Based Workflows
-
-### 🎓 Student Learning Hub
-- **AI Study Assistant & Resource Generator**: Upload lecture slides, PDF syllabi, DOCX papers, or raw notes to generate customized study reviewers, executive summaries, Bloom's taxonomy quizzes, and interactive flashcards.
-- **Active Memory Flashcard Engine**: 3D flip card decks with spacebar/click controls, self-rated recall difficulty ratings (Easy, Good, Hard, Again), and AI-powered term explanations.
-- **Adaptive Bloom's Taxonomy Quizzes**: Interactive quiz portal featuring randomized answer orders, real-time timer counters, instant AI hints, explanation accordions, and post-quiz weak-topic recommendations.
-- **Learning Progress & Knowledge Analytics**: Recharts visual analytics breaking down cognitive performance across Bloom's levels (*Remembering, Understanding, Applying, Analyzing, Evaluating, Creating*), overall accuracy, and study streak tracking.
-- **Personal & Course Learning Repository**: Access official course lecture notes uploaded by faculty while maintaining private personal study notes.
-- **Institutional Notification Feed**: Real-time announcement center with unread badges, filter tabs, priority tags, and mark-as-read toggles.
-
-### 👩‍🏫 Faculty & Instructor Portal
-- **Course & Subject Management**: Overview of active subjects, enrolled student rosters, and uploaded lecture repositories.
-- **AI Assessment Generator**: Convert lecture materials directly into tagged quizzes and flashcard decks.
-- **Pending Grading Queue**: Inspect student quiz attempts, review score breakdowns, and issue personalized qualitative feedback.
-- **Course Bulletins & Notice Publisher**: Post announcements targeted to specific course subjects or role audiences with priority styling (High/Red, Medium/Amber, Low/Blue).
-
-### 🛡️ Administrator & Governance Operations
-- **System Governance Dashboard**: Executive metrics detailing total user counts, active subjects, total quizzes taken, and server uptime.
-- **User Directory & Role Control**: Create new accounts, modify roles (*Student, Teacher, Admin*), reset credentials, and toggle account statuses.
-- **Real-Time Security Audit Trail**: Comprehensive audit logs capturing logins, administrative changes, document uploads, and AI prompt executions with CSV export functionality.
-- **Global Broadcast Center**: Publish institutional announcements across the entire university network.
+> **UN Sustainable Development Goals (SDGs):**
+> - 🎓 **SDG 4: Quality Education**
+> - 💡 **SDG 9: Industry, Innovation, and Infrastructure**
 
 ---
 
-## 🛠️ Technology Stack
+## 📖 Project Overview
 
-- **Frontend**: React 18, TypeScript, Tailwind CSS, Lucide React Icons, Recharts, Motion (`motion/react`)
-- **Backend & Middleware**: Node.js, Express 5, Vite (`middlewareMode`), Multer (File upload handler)
-- **Document Processing**: `pdf-parse` (PDF text extraction), `mammoth` (DOCX parsing), `pdfkit` & `jspdf` (PDF generation)
-- **AI Engine**: Google GenAI SDK (`@google/genai`) powered by `gemini-3.6-flash`
-- **Build System**: Vite 7 & `esbuild` (Bundling `server.ts` into a standalone `dist/server.cjs`)
+**StudyLens AI** is an adaptive web and mobile learning support platform engineered for students and teachers. It leverages artificial intelligence powered by **Groq Inference** to automatically transform uploaded lecture notes, PDFs, DOCX documents, or textbook images into interactive Bloom's taxonomy quizzes, executive summaries, comprehensive study reviewers, and active recall flashcard decks. 
+
+The platform adapts dynamically to student performance trends, providing personalized topic recommendations for review. Teachers can auto-generate exams with answer keys, edit generated questions, manage course subjects, track class performance, and export assessment formats (PDF/DOCX).
+
+---
+
+## 🛠️ Technology Stack (per Specification)
+
+- **Frontend (Web)**: React 18, Vite, Tailwind CSS, Lucide React Icons, Recharts, Motion
+- **Mobile App**: React-Native (Mobile learning mode for on-the-go study)
+- **Backend API**: Python - Flask (`backend/app.py`, REST API framework)
+- **Database**: MySQL (via Flask-SQLAlchemy ORM with SQLite fallback support)
+- **Authentication**: JSON Web Token (JWT) with Role-Based Access Control (`Student`, `Teacher`, `Administrator`)
+- **Cloud Storage**: Cloudinary & Firebase Storage (for uploaded PDFs, DOCX, and lecture modules)
+- **AI Integration**: Groq Inference (official `openai` SDK pointed at Groq's OpenAI-compatible endpoint, GPT-OSS-120B with Llama-3.3-70b fallback)
+
+---
+
+## 📁 Project Structure
+
+```
+StudyLens-AI/
+├─ backend/            Python Flask REST API (app.py, Groq AI, cloud storage, DB)
+├─ frontend/           React web app (Vite build: src/, server.ts, configs, node_modules)
+├─ mobile/             React-Native mobile app (Expo: App.tsx, src/)
+├─ scripts/            Dev orchestrator (scripts/dev.js starts Flask + Vite)
+├─ package.json        Root orchestration scripts (npm run dev / build / lint)
+├─ README.md
+└─ .gitignore
+```
+
+---
+
+## ✨ System Functionalities & Workflows
+
+### 🎓 For Students
+1. **AI-Powered Quiz Generator**: Automatically creates adaptive quizzes from uploaded lecture files.
+2. **AI-Generated Summaries & Reviewers**: Synthesizes key takeaways, topic summaries, and study guides.
+3. **Automatic Flashcard Creation**: Generates 3D active-recall flashcard decks with self-rated difficulty.
+4. **Personalized Learning Path Recommendation**: Recommends review topics based on weak performance areas.
+5. **Performance Analytics Dashboard**: Tracks accuracy across Bloom's Taxonomy cognitive levels.
+6. **Save & Organize Study Materials**: Organizes course and personal study resources.
+7. **Mobile Learning Mode**: React-Native mobile interface for on-the-go study.
+
+### 👩‍🏫 For Teachers
+1. **Upload Lecture Materials**: Uploads lecture slides and notes for AI processing.
+2. **Auto-Generation of Quizzes/Exams**: Creates structured assessments complete with answer keys.
+3. **Class Performance Overview**: Evaluates student test submissions and score distributions.
+4. **Manual Editing**: Refines AI-generated quiz questions before distribution.
+5. **Quiz Distribution**: Publishes quizzes and flashcards directly to enrolled class rosters.
+6. **Exportable Formats**: Exports tests to printable PDF/DOCX formats.
+
+### 🛡️ For Administrators
+1. **Manage Student & Teacher Accounts**: User directory management, credential reset, and status control.
+2. **Monitor Usage Statistics & Activity**: Executive system metrics and real-time security audit trails.
+3. **Content Moderation**: Oversees institutional announcements and uploaded materials.
+4. **Server & Database Monitoring**: Tracks server uptime, MySQL database connectivity, and API response latencies.
 
 ---
 
 ## 📋 Prerequisites
 
-Ensure you have the following installed on your machine:
-
-- **Node.js**: v20.x or higher
-- **npm**: v10.x or higher (or **bun**)
-- **Google Gemini API Key**: Get a free API key from [Google AI Studio](https://aistudio.google.com/)
+- **Python**: v3.10 or higher
+- **Node.js**: v18.x or higher
+- **npm** or **bun**
+- **MySQL Database Server**: (Optional; SQLite file fallback is enabled out-of-the-box)
+- **Groq Inference API Key**: Get a free API key at [Groq Console](https://console.groq.com/keys/)
 
 ---
 
 ## ⚙️ Environment Setup
 
-1. Copy the example environment file to `.env`:
+1. Copy `backend/.env.example` to `backend/.env`:
    ```bash
-   cp .env.example .env
+   cp backend/.env.example backend/.env
    ```
 
-2. Open `.env` and add your Gemini API Key:
+2. Configure your environment variables in `backend/.env`:
    ```env
-   # Google Gemini API Key (Server-Side Execution)
-   GEMINI_API_KEY=your_gemini_api_key_here
-
-   # Server Port Configuration
-   PORT=3000
+   GROQ_API_KEY=your_groq_api_key_here
+   JWT_SECRET=studylens_ai_jwt_secret_key_2026
+   MYSQL_DATABASE_URL=mysql+pymysql://root:password@localhost:3306/studylens_db
+   FLASK_PORT=5000
    ```
 
 ---
 
-## 🚀 How to Run the Application
+## 🚀 How to Run the System
 
 ### 1. Install Dependencies
-Run the following command to install all frontend and backend npm packages:
+
+**Python Backend Dependencies:**
 ```bash
+pip install -r backend/requirements.txt
+```
+
+**Web Frontend Dependencies:**
+```bash
+cd frontend
 npm install
 ```
 
-### 2. Development Mode (Full-Stack Dev Server)
-Start the Express backend with embedded Vite dev server and hot reloading:
+### 2. Configure Environment
+
+Copy `backend/.env.example` to `backend/.env` and add your Groq key (see *Environment Setup* above). MySQL is optional — the app auto-falls back to SQLite if MySQL is unreachable.
+
+> **First-time MySQL setup (optional):** if an older/imported `studylens_db` schema already exists, the app detects the mismatch and prints an instruction. Rebuild it once with:
+> ```bash
+> python backend/scripts/reset_db.py --yes
+> ```
+> *(This drops and recreates all tables in the configured database, then re-seeds the capstone demo data.)*
+
+### 3. Start the Full Stack (Backend + Frontend Together)
+
+From the repo root:
 ```bash
 npm run dev
 ```
-Open **`http://localhost:3000`** or **`http://127.0.0.1:3000`** in your browser.
+The dev runner boots the Python Flask backend first, waits for it on port `5000`, then starts the React web frontend on `http://localhost:3000`.
 
-> **Note for Windows/Edge Users**: The server logs `bound to 0.0.0.0:3000` (which tells Node to accept connections on all network interfaces). Desktop browsers like Microsoft Edge and Chrome will show `ERR_ADDRESS_INVALID` if you type `0.0.0.0` directly into the address bar. Always use **`http://localhost:3000`** in your browser.
+Alternatively, run them in separate terminals:
+- Backend only: `python backend/app.py` (or `npm run dev:api`)
+- Frontend only: `cd frontend && npm run dev` (or `npm run dev:web` from the root)
 
-### 3. Production Build
-To build the production static assets and bundle the server script:
+### 4. Start the React-Native Mobile App (Mobile Mode)
+
+In a separate terminal:
 ```bash
-npm run build
-```
-
-### 4. Production Execution
-To start the bundled CommonJS production server:
-```bash
-npm run start
-```
-
-### 5. Linting & Code Verification
-To validate TypeScript types and ESLint rules:
-```bash
-npm run lint
+cd mobile
+npm start
 ```
 
 ---
 
-## 👤 Pre-configured Demo Accounts
+## 👤 Capstone Project Team & Pre-configured Profiles
 
-StudyLens AI provides built-in demo profiles so you can immediately explore each role-based dashboard:
+> **Institution**: University of Cebu – Main Campus, College of Computer Studies (UC CCS)  
+> **Degree**: Bachelor of Science in Information Technology (BSIT)
 
-| Role | Name | Email | Permissions & Access |
-|---|---|---|---|
-| **Student** | Alex Rivera | `student@studylens.edu` | Full study suite, quizzes, flashcards, progress analytics, and personal notes. |
-| **Teacher** | Prof. Maria Santos | `teacher@studylens.edu` | Course subjects roster, quiz builder, grading queue, and course announcements. |
-| **Admin** | Dr. Arthur Vance | `admin@studylens.edu` | User directory management, audit trail logs, global notice broadcast, and system metrics. |
-
----
-
-## 📂 Directory Structure
-
-```
-├── server.ts                       # Express backend server (API routes, Gemini AI proxy, file upload handlers)
-├── vite.config.ts                  # Vite build and server middleware configuration
-├── package.json                    # Project dependencies and script definitions
-├── .env.example                    # Environment variables declaration
-├── README.md                       # Comprehensive project documentation
-└── src/
-    ├── main.tsx                    # React client entry point
-    ├── App.tsx                     # Main layout router and global state handlers
-    ├── types.ts                    # Shared TypeScript interfaces (Users, Quizzes, Flashcards, Logs, Bulletins)
-    ├── context/
-    │   ├── AuthContext.tsx         # User session, role authentication, and account switching
-    │   └── AnnouncementsContext.tsx# Centralized broadcast state, target filtering, and notification feeds
-    ├── components/
-    │   ├── DashboardLayout.tsx     # Top navigation bar, role badges, theme toggle, sidebar, and notice dropdown
-    │   ├── AnnouncementsModal.tsx  # Broadcast publishing modal
-    │   └── ProtectedRoute.tsx      # Role authorization guard component
-    └── pages/
-        ├── ai/                     # AI Assistant & Resource Generator page
-        ├── learning/               # Assessment portal, Flashcards deck, and Subjects catalog
-        ├── analytics/              # Progress analytics and Bloom's taxonomy charts
-        ├── dashboards/             # Student, Teacher, and Admin role dashboards
-        └── landing/                # Welcome overview landing page
-```
+| Role | Name | Capstone Designation | Email | Permissions & Workflows |
+|---|---|---|---|---|
+| **Student** | John Wendyl S. Sanchez | Project Manager / Lead Researcher | `student@studylens.edu` | Full study suite, adaptive quizzes, flashcards, progress analytics, and mobile mode. |
+| **Student** | Vin Henry S. Ardiente | Programmer / Systems Analyst | `vin@studylens.edu` | System architecture, Flask REST API backend, and Groq Inference integration. |
+| **Student** | Precious Marie B. Salve | UI/UX Designer | `precious@studylens.edu` | Responsive React + Tailwind web UI design, mobile screens, and study dashboards. |
+| **Student** | Jeric Nino G. Solitana | QA Tester / Documentation | `jeric@studylens.edu` | Software specifications, unit/integration/alpha testing, and activity audit logging. |
+| **Teacher** | Christian C. Barral, MIT | Capstone Adviser | `teacher@studylens.edu` | Subject roster management, quiz builder, grading queue, and material uploads. |
+| **Admin** | Neil A. Basabe, DIT | College Dean | `admin@studylens.edu` | Account directory, security audit trail, system metrics, and MySQL database monitoring. |
 
 ---
 

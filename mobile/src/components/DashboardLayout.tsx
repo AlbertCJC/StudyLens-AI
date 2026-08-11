@@ -1,0 +1,267 @@
+import React from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, Modal, ScrollView, SafeAreaView } from 'react-native';
+import {
+  Menu,
+  X,
+  Bell,
+  LogOut,
+  ChevronRight,
+  Sun,
+  Moon,
+  GraduationCap,
+  BookOpen,
+  Sparkles,
+  CheckSquare,
+  Layers,
+  TrendingUp,
+  FolderKanban,
+  Users,
+  Activity,
+} from 'lucide-react-native';
+import { useTheme } from '../theme/ThemeContext';
+import { useAuth, UserRole } from '../context/AuthContext';
+import { useAnnouncements } from '../context/AnnouncementsContext';
+
+export interface MenuItem {
+  key: string;
+  label: string;
+  Icon: React.ComponentType<any>;
+  badge?: string;
+}
+
+interface DashboardLayoutProps {
+  menuItems: MenuItem[];
+  activeKey: string;
+  onNavigate: (key: string) => void;
+  onQuickNavigate?: (key: string) => void;
+  title: string;
+  children: React.ReactNode;
+}
+
+export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQuickNavigate, title, children }: DashboardLayoutProps) {
+  const { colors, isDark, toggleTheme } = useTheme();
+  const { currentUser, switchRole, logout } = useAuth();
+  const { unreadNotifications, unreadAnnouncements } = useAnnouncements();
+  const [drawerOpen, setDrawerOpen] = React.useState(false);
+
+  const role = (currentUser?.role === 'teacher' ? 'teacher' : 'student') as UserRole;
+  const unreadCount = unreadNotifications + unreadAnnouncements;
+
+  const handleNavigate = (key: string) => {
+    setDrawerOpen(false);
+    onNavigate(key);
+  };
+
+  const handleRoleSwitch = (r: UserRole) => {
+    switchRole(r);
+    setDrawerOpen(false);
+    onNavigate('dashboard');
+  };
+
+  return (
+    <View style={[styles.flex, { backgroundColor: colors.background }]}>
+      {/* Topbar */}
+      <View style={[styles.topbar, { backgroundColor: colors.topbarBg, borderBottomColor: colors.border }]}>
+        <View style={styles.topbarLeft}>
+          <TouchableOpacity onPress={() => setDrawerOpen(true)} style={styles.iconBtn}>
+            <Menu size={22} color={colors.foreground} />
+          </TouchableOpacity>
+          <Text style={[styles.topbarTitle, { color: colors.foreground }]}>{title}</Text>
+        </View>
+        <View style={styles.topbarRight}>
+          <TouchableOpacity onPress={toggleTheme} style={styles.iconBtn}>
+            {isDark ? <Sun size={18} color={colors.warning} /> : <Moon size={18} color={colors.mutedForeground} />}
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { if (onQuickNavigate) onQuickNavigate('notifications'); else setDrawerOpen(true); }} style={styles.bellWrap}>
+            <Bell size={20} color={colors.mutedForeground} />
+            {unreadCount > 0 && (
+              <View style={[styles.bellDot, { backgroundColor: colors.primary }]}>
+                <Text style={styles.bellDotText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { if (onQuickNavigate) onQuickNavigate('profile'); else setDrawerOpen(true); }} style={[styles.avatar, { backgroundColor: colors.primary }]}>
+            <Text style={styles.avatarText}>{currentUser?.name ? currentUser.name.slice(0, 2).toUpperCase() : 'SL'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Content */}
+      <View style={styles.flex}>{children}</View>
+
+      {/* Drawer */}
+      <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
+        <View style={[styles.drawerOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+          <TouchableOpacity style={styles.flex} onPress={() => setDrawerOpen(false)} />
+          <SafeAreaView style={[styles.drawer, { backgroundColor: colors.navBg, borderRightColor: colors.border }]}>
+            {/* Brand */}
+            <View style={[styles.brandRow, { borderBottomColor: colors.border }]}>
+              <View style={[styles.brandLogo, { backgroundColor: colors.primary }]}>
+                <BookOpen size={20} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.brandTitle, { color: colors.foreground }]}>StudyLens AI</Text>
+                <Text style={{ color: colors.primary, fontSize: 10, fontWeight: '500', marginTop: 2 }}>Adaptive Learning Platform</Text>
+              </View>
+              <TouchableOpacity onPress={() => setDrawerOpen(false)} style={styles.iconBtn}>
+                <X size={20} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Role Switcher */}
+            <View style={[styles.roleBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+              <View style={[styles.roleHeader, { borderColor: colors.border }]}>
+                <Text style={{ color: colors.mutedForeground, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Active View Role
+                </Text>
+                <Text style={{ color: colors.primary, fontSize: 10, textTransform: 'uppercase', fontFamily: undefined }}>{role}</Text>
+              </View>
+              <View style={styles.roleRow}>
+                {(['student', 'teacher'] as UserRole[]).map((r) => (
+                  <TouchableOpacity
+                    key={r}
+                    onPress={() => handleRoleSwitch(r)}
+                    style={[styles.rolePill, role === r ? { backgroundColor: colors.primary } : { backgroundColor: 'transparent' }]}
+                  >
+                    <Text style={{ fontSize: 11, fontWeight: '500', textTransform: 'capitalize', color: role === r ? '#fff' : colors.mutedForeground }}>
+                      {r}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* Nav */}
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 4 }}>
+              <Text style={[styles.navLabel, { color: colors.mutedForeground }]}>{role} Navigation</Text>
+              {menuItems.map((item) => {
+                const isActive = activeKey === item.key;
+                const Icon = item.Icon;
+                return (
+                  <TouchableOpacity
+                    key={item.key}
+                    onPress={() => handleNavigate(item.key)}
+                    style={[styles.navItem, isActive ? { backgroundColor: colors.navActiveBg } : { backgroundColor: 'transparent' }]}
+                  >
+                    <Icon size={17} color={isActive ? '#fff' : colors.navText} />
+                    <Text style={[styles.navItemText, { color: isActive ? '#fff' : colors.navText }]} numberOfLines={1}>
+                      {item.label}
+                    </Text>
+                    {item.badge && (
+                      <View style={[styles.navBadge, { backgroundColor: isActive ? 'rgba(255,255,255,0.2)' : colors.primarySoft }]}>
+                        <Text style={{ color: isActive ? '#fff' : colors.primary, fontSize: 10, fontWeight: '700' }}>{item.badge}</Text>
+                      </View>
+                    )}
+                    <ChevronRight size={15} color={isActive ? '#fff' : 'rgba(148,163,184,0.5)'} />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {/* User + Logout */}
+            <View style={[styles.userBox, { borderTopColor: colors.border }]}>
+              <View style={styles.userRow}>
+                <View style={[styles.avatarSm, { backgroundColor: colors.primary }]}>
+                  <Text style={styles.avatarText}>{currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : 'J'}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.userName, { color: colors.foreground }]} numberOfLines={1}>{currentUser?.name}</Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 10 }} numberOfLines={1}>{currentUser?.email}</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={logout}
+                style={[styles.logoutBtn, { borderColor: colors.border }]}
+              >
+                <LogOut size={15} color={colors.mutedForeground} />
+                <Text style={{ color: colors.mutedForeground, fontSize: 12, fontWeight: '600' }}>Logout</Text>
+              </TouchableOpacity>
+            </View>
+          </SafeAreaView>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  topbar: {
+    height: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+  },
+  topbarLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  topbarRight: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  topbarTitle: { fontSize: 18, fontWeight: '800' },
+  iconBtn: { padding: 4 },
+  bellWrap: { position: 'relative', padding: 2 },
+  bellDot: {
+    position: 'absolute',
+    top: -3,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  bellDotText: { color: '#fff', fontSize: 9, fontWeight: '900' },
+  avatar: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: '#fff', fontSize: 11, fontWeight: '800' },
+  drawerOverlay: { flex: 1, flexDirection: 'row' },
+  drawer: {
+    width: '82%',
+    maxWidth: 320,
+    height: '100%',
+    borderRightWidth: 1,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+  },
+  brandLogo: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  brandTitle: { fontSize: 16, fontWeight: '800', letterSpacing: -0.3 },
+  roleBox: { margin: 12, borderRadius: 12, borderWidth: 1, padding: 10, gap: 8 },
+  roleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4 },
+  roleRow: {
+    flexDirection: 'row',
+    gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderRadius: 10,
+    padding: 3,
+  },
+  rolePill: { flex: 1, paddingVertical: 6, borderRadius: 8, alignItems: 'center' },
+  navLabel: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8, paddingHorizontal: 8, paddingVertical: 6 },
+  navItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 10,
+  },
+  navItemText: { fontSize: 13, fontWeight: '600', flex: 1 },
+  navBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  userBox: { borderTopWidth: 1, padding: 14, gap: 10 },
+  userRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  avatarSm: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  userName: { fontSize: 12, fontWeight: '700' },
+  logoutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingVertical: 10,
+  },
+});

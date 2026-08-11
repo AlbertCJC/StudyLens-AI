@@ -10,7 +10,21 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.expo
 *.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Local SQLite database
+instance/
+*.db
+
+# Uploaded user materials (local storage fallback)
+uploads/
+backend/uploads/
 
 # Editor directories and files
 .vscode/*
@@ -26,3 +40,4 @@ dist-ssr
 # Environment variables
 .env
 .env.*
+!.env.example
