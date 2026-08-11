@@ -9,7 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { BookOpen, FileText, Download, Eye, Sparkles, UploadCloud, CheckCircle2, X } from 'lucide-react-native';
 import { fetchMaterials, fetchSubjects, uploadMaterial, Material, Subject } from '../services/api';
@@ -119,10 +119,10 @@ export default function MaterialsScreen({ onNavigate }: { onNavigate: (tab: stri
       if (Platform.OS === 'web') {
         Alert.alert('Download', `${m.title}.txt`);
       } else {
-        const path = `${FileSystem.cacheDirectory}${m.title.replace(/[^\w\s]/g, '').slice(0, 40)}.txt`;
-        await FileSystem.writeAsStringAsync(path, text);
+        const file = new File(Paths.cache, `${m.title.replace(/[^\w\s]/g, '').slice(0, 40)}.txt`);
+        file.write(text);
         if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(path, { mimeType: 'text/plain' });
+          await Sharing.shareAsync(file.uri, { mimeType: 'text/plain' });
         }
       }
       await addToStringSet(STORAGE_KEYS.downloadedMaterials, m.id);

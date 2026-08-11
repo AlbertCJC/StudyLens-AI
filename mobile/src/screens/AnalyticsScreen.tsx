@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Alert } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { TrendingUp, Download, Award, Flame, Target, BookOpen, Sparkles, FileText } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
@@ -128,10 +128,10 @@ export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: stri
       ...weakTopics.map((t) => `Review ${t.topic} using materials + AI reviewer`),
     ];
     try {
-      const path = `${FileSystem.cacheDirectory}StudyLens-Progress-Report.txt`;
-      await FileSystem.writeAsStringAsync(path, lines.join('\n'));
-      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(path, { mimeType: 'text/plain' });
-      else Alert.alert('Report ready', path);
+      const file = new File(Paths.cache, 'StudyLens-Progress-Report.txt');
+      file.write(lines.join('\n'));
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: 'text/plain' });
+      else Alert.alert('Report ready', file.uri);
     } catch {
       Alert.alert('Error', 'Could not export the report.');
     }

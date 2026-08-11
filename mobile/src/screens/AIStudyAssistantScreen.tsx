@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import {
   Sparkles,
@@ -142,9 +142,9 @@ export default function AIStudyAssistantScreen({ onNavigate }: { onNavigate: (ta
         Alert.alert('Download', `${filename}.txt`);
         return;
       }
-      const path = `${FileSystem.cacheDirectory}${filename.replace(/[^\w\s-]/g, '').slice(0, 40)}.txt`;
-      await FileSystem.writeAsStringAsync(path, content);
-      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(path, { mimeType: 'text/plain' });
+      const file = new File(Paths.cache, `${filename.replace(/[^\w\s-]/g, '').slice(0, 40)}.txt`);
+      file.write(content);
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: 'text/plain' });
     } catch {
       Alert.alert('Error', 'Could not export the file.');
     }

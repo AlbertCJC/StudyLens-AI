@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { FileText, BookOpen, Download, ChevronLeft, Sparkles, CheckCircle2 } from 'lucide-react-native';
 import { fetchSummaries, fetchReviewers, StudySummary, Reviewer } from '../services/api';
@@ -29,9 +29,9 @@ export default function SummariesScreen({ onNavigate }: { onNavigate: (tab: stri
         Alert.alert('Download', `${title}.txt`);
         return;
       }
-      const path = `${FileSystem.cacheDirectory}${(title || 'summary').replace(/[^\w\s-]/g, '').slice(0, 40)}.txt`;
-      await FileSystem.writeAsStringAsync(path, body);
-      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(path, { mimeType: 'text/plain' });
+      const file = new File(Paths.cache, `${(title || 'summary').replace(/[^\w\s-]/g, '').slice(0, 40)}.txt`);
+      file.write(body);
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: 'text/plain' });
     } catch {
       Alert.alert('Error', 'Could not export the summary.');
     }
