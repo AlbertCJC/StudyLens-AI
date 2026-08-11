@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { useAuth } from "./AuthContext";
+import { authFetch } from "../utils/authFetch";
 
 export interface AnnouncementItem {
   id: string;
@@ -110,7 +111,7 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
   // Fetch announcements from the server (per-user isRead) when the user changes
   useEffect(() => {
     let active = true;
-    fetch(`/api/announcements?userId=${encodeURIComponent(userId)}`)
+    authFetch(`/api/announcements?userId=${encodeURIComponent(userId)}`)
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (!active || !Array.isArray(data)) return;
@@ -164,7 +165,7 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
         next.add(id);
         return next;
       });
-      fetch(`/api/announcements/${id}/read`, {
+      authFetch(`/api/announcements/${id}/read`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId }),
@@ -180,7 +181,7 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
         next.delete(id);
         return next;
       });
-      fetch(`/api/announcements/${id}/unread`, {
+      authFetch(`/api/announcements/${id}/unread`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId }),
@@ -196,7 +197,7 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
       return next;
     });
     announcements.forEach((a) => {
-      fetch(`/api/announcements/${a.id}/read`, {
+      authFetch(`/api/announcements/${a.id}/read`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId }),
@@ -214,7 +215,7 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
       };
       setAnnouncements((prev) => [optimistic, ...prev]);
 
-      fetch("/api/announcements", {
+      authFetch("/api/announcements", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(optimistic),
@@ -237,7 +238,7 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const deleteAnnouncement = useCallback((id: string) => {
     setAnnouncements((prev) => prev.filter((a) => a.id !== id));
-    fetch(`/api/announcements/${id}`, { method: "DELETE" }).catch(() => {});
+    authFetch(`/api/announcements/${id}`, { method: "DELETE" }).catch(() => {});
   }, []);
 
   return (

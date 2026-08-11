@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Sparkles,
   BookOpen,
@@ -19,6 +19,7 @@ import {
   BookMarked,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import { authFetch } from "../../utils/authFetch";
 import type { LearningMaterial, Subject, QuizQuestion } from "../../types";
 
 const friendlyAiError = (message: string, code?: string): string => {
@@ -110,6 +111,18 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({ init
   const [isLoadingSaved, setIsLoadingSaved] = useState(false);
   const [selectedSavedItem, setSelectedSavedItem] = useState<SavedItem | null>(null);
   const [deleteSavedConfirmItem, setDeleteSavedConfirmItem] = useState<SavedItem | null>(null);
+  const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
+  const highlightedCardRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!highlightedItemId || !showSavedLibrary) return;
+    if (!savedItems.some((i) => i.id === highlightedItemId)) return;
+    const timer = setTimeout(() => {
+      highlightedCardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedItemId(null);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [highlightedItemId, showSavedLibrary, savedItems]);
 
   const handleModeSelect = (newMode: "quiz" | "flashcards" | "summary" | "reviewer") => {
     setMode(newMode);
@@ -140,136 +153,114 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({ init
 
   const handleDeleteSavedResource = async (item: SavedItem) => {
     try {
-      const endpoint = item.type === "summary" ? `/api/summaries/${item.id}` : `/api/reviewers/${item.id}`;
-      const res = await fetch(endpoint, { method: "DELETE" });
+      const endpoint =
+        item.type === "summary"
+          ? `/api/summaries/${item.id}`
+          : item.type === "reviewer"
+            ? `/api/reviewers/${item.id}`
+            : item.type === "quiz"
+              ? `/api/quizzes/${item.id}`
+              : `/api/flashcards/${item.id}`;
+      const res = await authFetch(endpoint, { method: "DELETE" });
       if (res.ok) {
         setSavedItems((prev) => prev.filter((i) => i.id !== item.id));
         setDeleteSavedConfirmItem(null);
+      } else {
+        const body = await res.json().catch(() => null);
+        const msg = typeof body?.error === "string" ? body.error : `Server returned status ${res.status}`;
+        setErrorMsg(msg);
       }
     } catch (err) {
       console.error("Delete saved AI resource error:", err);
     }
   };
 
-  const fetchSavedResources = async () => {
-    setIsLoadingSaved(true);
+  const fetchSavedResources = useCallback(async (showLoading = true) => {
+    if (showLoading) setIsLoadingSaved(true);
     try {
-      const [sumRes, revRes] = await Promise.all([
-        fetch(`/api/summaries?userId=${currentUser?.id || ""}`),
-        fetch(`/api/reviewers?userId=${currentUser?.id || ""}`),
+      const userId = currentUser?.id || "";
+      const [sumRes, revRes, quizRes, deckRes] = await Promise.all([
+        authFetch(`/api/summaries?userId=${userId}`),
+        authFetch(`/api/reviewers?userId=${userId}`),
+        authFetch(`/api/quizzes?userId=${userId}`),
+        authFetch(`/api/flashcards?userId=${userId}`),
       ]);
 
       const items: SavedItem[] = [];
 
-      if (sumRes.ok) {
-        const sumData = await sumRes.json();
-        if (Array.isArray(sumData)) {
-          sumData.forEach((s) => {
-            items.push({
-              id: s.id,
-              title: s.title || "AI Lecture Summary",
-              subjectName: s.subjectName || "General Subject",
-              createdAt: s.createdAt ? new Date(s.createdAt).toLocaleDateString() : "Recent",
-              type: "summary",
-              contentPreview: s.executiveSummary || "Summary of lecture concepts...",
-              rawItem: s,
-            });
-          });
+      const pushItems = async (res: Response, type: SavedItem["type"], mapper: (raw: Record<string, unknown>) => SavedItem) => {
+        if (!res.ok) return;
+        const body = await res.json().catch(() => null);
+        if (Array.isArray(body)) {
+          body.forEach((raw) => items.push(mapper(raw as Record<string, unknown>)));
         }
-      }
+      };
 
-      if (revRes.ok) {
-        const revData = await revRes.json();
-        if (Array.isArray(revData)) {
-          revData.forEach((r) => {
-            items.push({
-              id: r.id,
-              title: r.title || "AI Study Reviewer",
-              subjectName: r.subjectName || "General Subject",
-              createdAt: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : "Recent",
-              type: "reviewer",
-              contentPreview: r.overview || "Study reviewer and topic breakdown...",
-              rawItem: r,
-            });
-          });
-        }
-      }
+      await Promise.all([
+        pushItems(sumRes, "summary", (s) => ({
+          id: String(s.id || ""),
+          title: String(s.title || "AI Lecture Summary"),
+          subjectName: String(s.subjectName || "General Subject"),
+          createdAt: s.createdAt ? new Date(String(s.createdAt)).toLocaleDateString() : "Recent",
+          type: "summary",
+          contentPreview: String(s.executiveSummary || "Summary of lecture concepts..."),
+          rawItem: s,
+        })),
+        pushItems(revRes, "reviewer", (r) => ({
+          id: String(r.id || ""),
+          title: String(r.title || "AI Study Reviewer"),
+          subjectName: String(r.subjectName || "General Subject"),
+          createdAt: r.createdAt ? new Date(String(r.createdAt)).toLocaleDateString() : "Recent",
+          type: "reviewer",
+          contentPreview: String(r.overview || "Study reviewer and topic breakdown..."),
+          rawItem: r,
+        })),
+        pushItems(quizRes, "quiz", (q) => ({
+          id: String(q.id || ""),
+          title: String(q.title || "AI Quiz"),
+          subjectName: String(q.subjectName || "General Subject"),
+          createdAt: q.createdAt ? new Date(String(q.createdAt)).toLocaleDateString() : "Recent",
+          type: "quiz",
+          contentPreview: Array.isArray(q.questions) ? `${q.questions.length} questions · ${String(q.difficulty || "medium")}` : "AI quiz...",
+          rawItem: q,
+        })),
+        pushItems(deckRes, "flashcard", (d) => ({
+          id: String(d.id || ""),
+          title: String(d.title || "AI Flashcards"),
+          subjectName: String(d.subjectName || "General Subject"),
+          createdAt: d.createdAt ? new Date(String(d.createdAt)).toLocaleDateString() : "Recent",
+          type: "flashcard",
+          contentPreview: Array.isArray(d.cards) ? `${d.cards.length} flashcards` : "Flashcard deck...",
+          rawItem: d,
+        })),
+      ]);
+
+      items.sort((a, b) => {
+        const ta = a.rawItem?.createdAt ? new Date(String(a.rawItem.createdAt)).getTime() : 0;
+        const tb = b.rawItem?.createdAt ? new Date(String(b.rawItem.createdAt)).getTime() : 0;
+        return (tb || 0) - (ta || 0);
+      });
 
       setSavedItems(items);
     } catch (err) {
       console.error("Fetch saved AI resources error:", err);
     } finally {
-      setIsLoadingSaved(false);
+      if (showLoading) setIsLoadingSaved(false);
     }
-  };
+  }, [currentUser]);
 
   useEffect(() => {
-    let isSubscribed = true;
-    const loadSaved = async () => {
-      setIsLoadingSaved(true);
-      try {
-        const [sumRes, revRes] = await Promise.all([
-          fetch(`/api/summaries?userId=${currentUser?.id || ""}`),
-          fetch(`/api/reviewers?userId=${currentUser?.id || ""}`),
-        ]);
-
-        const items: SavedItem[] = [];
-
-        if (sumRes.ok) {
-          const sumData = await sumRes.json();
-          if (Array.isArray(sumData)) {
-            sumData.forEach((s) => {
-              items.push({
-                id: s.id,
-                title: s.title || "AI Lecture Summary",
-                subjectName: s.subjectName || "General Subject",
-                createdAt: s.createdAt ? new Date(s.createdAt).toLocaleDateString() : "Recent",
-                type: "summary",
-                contentPreview: s.executiveSummary || "Summary of lecture concepts...",
-                rawItem: s,
-              });
-            });
-          }
-        }
-
-        if (revRes.ok) {
-          const revData = await revRes.json();
-          if (Array.isArray(revData)) {
-            revData.forEach((r) => {
-              items.push({
-                id: r.id,
-                title: r.title || "AI Study Reviewer",
-                subjectName: r.subjectName || "General Subject",
-                createdAt: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : "Recent",
-                type: "reviewer",
-                contentPreview: r.overview || "Study reviewer and topic breakdown...",
-                rawItem: r,
-              });
-            });
-          }
-        }
-
-        if (isSubscribed) setSavedItems(items);
-      } catch (err) {
-        console.error("Fetch saved AI resources error:", err);
-      } finally {
-        if (isSubscribed) setIsLoadingSaved(false);
-      }
-    };
-
-    loadSaved();
-    return () => {
-      isSubscribed = false;
-    };
-  }, [currentUser?.id]);
+    const timer = setTimeout(() => void fetchSavedResources(false), 0);
+    return () => clearTimeout(timer);
+  }, [fetchSavedResources]);
 
   useEffect(() => {
     let isSubscribed = true;
     const fetchData = async () => {
       try {
         const [matRes, subRes] = await Promise.all([
-          fetch(`/api/materials?userId=${currentUser?.id || ""}&userRole=${currentUser?.role || ""}`),
-          fetch("/api/subjects"),
+          authFetch(`/api/materials?userId=${currentUser?.id || ""}&userRole=${currentUser?.role || ""}`),
+          authFetch("/api/subjects"),
         ]);
         if (matRes.ok) {
           const matData = await matRes.json();
@@ -332,7 +323,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({ init
       formData.append("uploaderId", currentUser?.id || "usr-student-1");
       formData.append("materialType", isPersonal ? "personal" : "course");
 
-      const res = await fetch("/api/materials/upload", {
+      const res = await authFetch("/api/materials/upload", {
         method: "POST",
         body: formData,
       });
@@ -380,7 +371,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({ init
 
     try {
       const selectedSubject = subjects.find((s) => s.id === subjectId);
-      const res = await fetch("/api/ai/generate", {
+      const res = await authFetch("/api/ai/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -525,6 +516,32 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({ init
           content += `\n`;
         });
       }
+    } else if (targetMode === "quiz") {
+      if (Array.isArray(data.questions)) {
+        data.questions.forEach((q: Record<string, unknown>, i: number) => {
+          content += `Q${i + 1}. ${q.question || ""}\n`;
+          if (Array.isArray(q.options)) {
+            (q.options as string[]).forEach((opt: string, oIdx: number) => {
+              content += `   ${String.fromCharCode(65 + oIdx)}. ${opt}\n`;
+            });
+          }
+          const correct = (q.options as string[] | undefined)?.[Number(q.correctAnswer)];
+          if (correct) content += `   Correct Answer: ${correct}\n`;
+          content += `\n`;
+        });
+      }
+    } else if (targetMode === "flashcard") {
+      if (Array.isArray(data.cards)) {
+        (data.cards as Array<Record<string, unknown>>).forEach((card, i) => {
+          content += `Card ${i + 1}\n`;
+          content += `Q: ${card.question || ""}\n`;
+          content += `A: ${card.answer || ""}\n\n`;
+        });
+      }
+    } else if (downloadTarget) {
+      content += `RESOURCE DATA (JSON)\n`;
+      content += `--------------------------------------------------\n`;
+      content += `${JSON.stringify(data, null, 2)}\n\n`;
     }
 
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
@@ -546,7 +563,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({ init
     setErrorMsg(null);
 
     try {
-      const res = await fetch("/api/ai/save", {
+      const res = await authFetch("/api/ai/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -566,10 +583,14 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({ init
 
       if (res.ok && data) {
         setSavedSuccess(true);
-        fetchSavedResources();
+        setShowSavedLibrary(true);
+        const savedId = (data as { id?: string }).id;
+        if (savedId) setHighlightedItemId(savedId);
+        await fetchSavedResources();
       } else {
         const rawError = typeof data?.error === "string" ? data.error : `Server returned status ${res.status}`;
-        setErrorMsg(friendlyAiError(rawError, ""));
+        const code = typeof data?.code === "string" ? data.code : "";
+        setErrorMsg(friendlyAiError(rawError, code));
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -647,7 +668,10 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({ init
               {savedItems.map((item) => (
                 <div
                   key={item.id}
-                  className="p-4 bg-muted/30 border border-border rounded-xl space-y-2 hover:border-primary/50 transition-all flex flex-col justify-between"
+                  ref={item.id === highlightedItemId ? highlightedCardRef : undefined}
+                  className={`p-4 bg-muted/30 border border-border rounded-xl space-y-2 hover:border-primary/50 transition-all flex flex-col justify-between ${
+                    item.id === highlightedItemId ? "ring-2 ring-blue-500/70 border-blue-500/60" : ""
+                  }`}
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">

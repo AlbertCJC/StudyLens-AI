@@ -21,6 +21,9 @@ export interface Subject {
   teacherName: string;
   studentCount: number;
   materialCount: number;
+  semester?: string;
+  course?: string;
+  schoolYear?: string;
   createdAt: string;
 }
 

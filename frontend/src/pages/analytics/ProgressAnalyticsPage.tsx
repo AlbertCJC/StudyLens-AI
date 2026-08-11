@@ -17,6 +17,7 @@ import {
   Line,
 } from "recharts";
 import { useAuth } from "../../context/AuthContext";
+import { authFetch } from "../../utils/authFetch";
 import type { StudentProgress, Recommendation } from "../../types";
 
 export const ProgressAnalyticsPage: React.FC = () => {
@@ -30,8 +31,8 @@ export const ProgressAnalyticsPage: React.FC = () => {
       try {
         const studentId = currentUser?.id || "usr-student-1";
         const [progRes, recRes] = await Promise.all([
-          fetch(`/api/progress/${studentId}`),
-          fetch(`/api/recommendations/${studentId}`),
+          authFetch(`/api/progress/${studentId}`),
+          authFetch(`/api/recommendations/${studentId}`),
         ]);
         if (progRes.ok) {
           const progData = await progRes.json();
@@ -76,7 +77,7 @@ export const ProgressAnalyticsPage: React.FC = () => {
 
   const handleExportPDF = async () => {
     try {
-      const res = await fetch("/api/convert-to-pdf", {
+      const res = await authFetch("/api/convert-to-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

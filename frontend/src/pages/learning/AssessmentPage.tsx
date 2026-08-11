@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { ConfettiEffect } from "../../components/ConfettiEffect";
+import { authFetch } from "../../utils/authFetch";
 import type { Quiz, QuizQuestion, QuizAttempt, Subject } from "../../types";
 
 interface AssessmentPageProps {
@@ -129,8 +130,8 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     const fetchCatalogData = async () => {
       try {
         const [qRes, sRes] = await Promise.all([
-          fetch(`/api/quizzes?studentId=${currentUser?.id || ""}`),
-          fetch("/api/subjects"),
+          authFetch(`/api/quizzes?studentId=${currentUser?.id || ""}`),
+          authFetch("/api/subjects"),
         ]);
         if (qRes.ok && isSubscribed) {
           const qData = await qRes.json();
@@ -164,7 +165,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     }));
 
     try {
-      const res = await fetch(`/api/quizzes/${activeQuiz.id}/submit`, {
+      const res = await authFetch(`/api/quizzes/${activeQuiz.id}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -313,7 +314,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     setLoadingHint(true);
     setHint(null);
     try {
-      const res = await fetch("/api/hint", {
+      const res = await authFetch("/api/hint", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -396,6 +397,14 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
       const selectedSubject = subjects.find((s) => s.id === newQuizSubjectId) || subjects[0];
       const isTeacher = currentUser?.role === "teacher" || currentUser?.role === "admin";
       
+      const shuffleMcOptions = (q: QuizQuestion): QuizQuestion => {
+        if (q.type !== "multiple_choice" || !q.options || q.options.length < 2) return q;
+        const correctIndex = Number(q.correctAnswer) || 0;
+        const correctText = q.options[correctIndex];
+        const shuffled = [...q.options].sort(() => Math.random() - 0.5);
+        return { ...q, options: shuffled, correctAnswer: shuffled.indexOf(correctText) };
+      };
+
       const defaultQuestions: QuizQuestion[] = [
         {
           id: `q-${Date.now()}-1`,
@@ -430,11 +439,11 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           difficulty: newQuizDifficulty,
           topicTag: newQuizTopic || "Core Concepts",
         },
-      ];
+      ].map(shuffleMcOptions);
 
       const finalQuestions = newQuizQuestions.length > 0 ? newQuizQuestions : defaultQuestions;
 
-      const quizRes = await fetch("/api/quizzes", {
+      const quizRes = await authFetch("/api/quizzes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -486,7 +495,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     if (!editingQuiz) return;
     try {
       const selectedSubject = subjects.find((s) => s.id === editSubjectId);
-      const res = await fetch(`/api/quizzes/${editingQuiz.id}`, {
+      const res = await authFetch(`/api/quizzes/${editingQuiz.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -514,7 +523,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
   const handleTogglePublish = async (quizId: string, currentPub: boolean) => {
     try {
-      const res = await fetch(`/api/quizzes/${quizId}`, {
+      const res = await authFetch(`/api/quizzes/${quizId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isPublished: !currentPub }),
@@ -532,7 +541,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   const handleConfirmDeleteQuiz = async () => {
     if (!quizToDelete) return;
     try {
-      const res = await fetch(`/api/quizzes/${quizToDelete.id}`, { method: "DELETE" });
+      const res = await authFetch(`/api/quizzes/${quizToDelete.id}`, { method: "DELETE" });
       if (res.ok) {
         setQuizzes((prev) => prev.filter((q) => q.id !== quizToDelete.id));
         const userId = currentUser?.id || "guest";

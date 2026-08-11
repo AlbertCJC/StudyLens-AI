@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState } from "react";
 import type { User, UserRole } from "../types";
+import { authFetch, setStoredToken } from "../utils/authFetch";
 
 interface AuthContextType {
   currentUser: User | null;
@@ -7,7 +8,7 @@ interface AuthContextType {
   login: (emailOrUser: string | Partial<User>, role?: UserRole) => Promise<void>;
   register: (name: string, email: string, role: UserRole, department?: string) => Promise<void>;
   updateUser: (updated: User) => Promise<void>;
-  switchRole: (role: UserRole) => void;
+  switchRole: (role: UserRole) => Promise<void>;
   logout: () => void;
 }
 
@@ -30,9 +31,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentUser(user);
     const tok = userToken || `jwt-token-${user.id}-${Date.now()}`;
     setToken(tok);
+    setStoredToken(tok);
     try {
       localStorage.setItem("studylens_user", JSON.stringify(user));
-      localStorage.setItem("studylens_token", tok);
     } catch (e) {
       console.error("Failed to save session to localStorage", e);
     }
@@ -91,7 +92,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const switchRole = (role: UserRole) => {
+  const switchRole = async (role: UserRole) => {
     let targetUser: User;
     if (role === "student") {
       targetUser = {
@@ -122,7 +123,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createdAt: "2023-08-01T08:00:00.000Z",
       };
     }
+
+    // Mint a real JWT for the target role so server-side RBAC works in demo mode.
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: targetUser.email, role: targetUser.role }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        saveUserSession(data.user, data.token);
+        return;
+      }
+    } catch {
+      // backend unreachable; keep local demo session (RBAC endpoints will fall back to query params)
+    }
     saveUserSession(targetUser);
+
     fetch("/api/logs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -139,7 +157,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateUser = async (updated: User) => {
     saveUserSession(updated, token || undefined);
     try {
-      await fetch(`/api/users/${updated.id}`, {
+      await authFetch(`/api/users/${updated.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updated),
@@ -152,9 +170,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     setCurrentUser(null);
     setToken(null);
+    setStoredToken(null);
     try {
       localStorage.removeItem("studylens_user");
-      localStorage.removeItem("studylens_token");
     } catch (e) {
       console.error("Failed to clear localStorage session", e);
     }

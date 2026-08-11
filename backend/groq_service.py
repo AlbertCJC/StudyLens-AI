@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import random
 import time
 
 try:
@@ -15,6 +16,13 @@ GROQ_PRIMARY_MODEL = "openai/gpt-oss-120b"
 GROQ_FALLBACK_MODEL = "llama-3.3-70b-versatile"
 GROQ_MAX_OUTPUT_TOKENS = 4096
 REQUEST_TIMEOUT_SECONDS = 45
+
+# Cap per-request generation counts so each Groq response stays within the output-token
+# budget (roughly 200 tokens per quiz question / flashcard). Requests are also split
+# across content chunks, but a single chunk must never ask for more than MAX_PER_CHUNK.
+MAX_AI_QUESTIONS = 20
+MAX_AI_FLASHCARDS = 20
+MAX_PER_CHUNK = 20
 
 # Records whether the most recent generation degraded to offline content-derived output,
 # so callers can surface a clear "offline mode" notice instead of silently returning fallback results.
@@ -302,12 +310,70 @@ def _build_flashcards_fallback(text_content, count):
 
 
 def _build_summary_fallback(text_content):
+    """Content-derived extractive summary.
+
+    Scores each sentence by significant-word frequency plus a position bonus, then
+    selects the highest-scoring sentences for the executive summary, key takeaways,
+    and bullet points. This produces a condensed summary rather than echoing the
+    raw opening sentences verbatim.
+    """
+    import re
+
     sentences = _sentences(text_content) or [_trim(text_content, 200) or "The material covers key concepts for this subject."]
-    lead = " ".join(sentences[:2])
+
+    if len(sentences) == 1:
+        first = sentences[0]
+        return {
+            "executiveSummary": _trim(first, 400),
+            "keyTakeaways": [_trim(first, 140)],
+            "bulletPoints": [_trim(first, 120)],
+        }
+
+    STOPWORDS = set(
+        "the a an and or but if then for of to in on at by with from as is are was were be been "
+        "being this that these those it its not no so such than too very can could will would should "
+        "may might have has had do does did"
+        .split()
+    )
+
+    sentence_words = []
+    for s in sentences:
+        words = [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'-]*", s)]
+        sentence_words.append(words)
+
+    word_freq = {}
+    for words in sentence_words:
+        for w in words:
+            if w not in STOPWORDS and len(w) > 2:
+                word_freq[w] = word_freq.get(w, 0) + 1
+
+    scored = []
+    n = max(1, len(sentences) - 1)
+    for idx, words in enumerate(sentence_words):
+        score = sum(word_freq.get(w, 0) for w in words if w not in STOPWORDS and len(w) > 2)
+        score *= 1.0 + 0.4 * (1.0 - idx / n)
+        scored.append((score, idx))
+
+    ranked = sorted(scored, key=lambda x: (-x[0], x[1]))
+
+    summary_idx = sorted(idx for _, idx in ranked[:4])
+    executive = _trim(" ".join(sentences[i] for i in summary_idx), 500)
+
+    takeaway_idx = [idx for _, idx in ranked[4:9]]
+    takeaways = [_trim(sentences[i], 140) for i in takeaway_idx]
+
+    bullet_idx = [idx for _, idx in ranked[9:17]]
+    bullets = [_trim(sentences[i], 120) for i in bullet_idx]
+
+    if not takeaways:
+        takeaways = [_trim(executive, 140)]
+    if not bullets:
+        bullets = [_trim(sentences[i], 120) for i in summary_idx[:3]]
+
     return {
-        "executiveSummary": _trim(lead, 280),
-        "keyTakeaways": [_trim(s, 120) for s in sentences[:4]] or [_trim(lead, 120)],
-        "bulletPoints": [_trim(s, 120) for s in sentences[4:9]] or [_trim(s, 120) for s in sentences[:3]]
+        "executiveSummary": executive,
+        "keyTakeaways": takeaways,
+        "bulletPoints": bullets,
     }
 
 
@@ -429,6 +495,34 @@ def _instruction_directive(instructions: str = "") -> str:
         "while still grounding everything in the material text below."
     )
 
+def _randomize_mc_correct_answer(questions: list) -> list:
+    """Shuffles the option order of every multiple-choice question and re-points the
+    correct answer to wherever the correct option moved. This removes the common
+    "all correct answers in position A" bias from both AI and fallback generation.
+    """
+    if not isinstance(questions, list):
+        return questions
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        if q.get("type") != "multiple_choice":
+            continue
+        options = q.get("options")
+        if not isinstance(options, list) or len(options) < 2:
+            continue
+        correct = q.get("correctAnswer")
+        if isinstance(correct, str) and correct.strip().isdigit():
+            correct = int(correct.strip())
+        if not isinstance(correct, int) or not (0 <= correct < len(options)):
+            correct = 0
+        correct_text = options[correct]
+        shuffled = list(options)
+        random.shuffle(shuffled)
+        q["options"] = shuffled
+        q["correctAnswer"] = shuffled.index(correct_text)
+    return questions
+
+
 def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficulty: str = "medium", instructions: str = "") -> list:
     """
     Generates structured assessment questions classified strictly into Bloom's Taxonomy 6 cognitive levels:
@@ -436,6 +530,12 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
     - Remembering, Understanding, Applying, Analyzing, Evaluating, Creating
     """
     blooms_levels = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"]
+
+    try:
+        num_questions = int(num_questions)
+    except (TypeError, ValueError):
+        num_questions = 5
+    num_questions = max(1, min(MAX_AI_QUESTIONS, num_questions))
 
     system_prompt = (
         "You are StudyLens AI Assessment Generator powered by Groq Inference (GPT-OSS-120B). "
@@ -457,6 +557,7 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
 
     chunks = _generation_chunks(text_content, 4000)
     per_chunk = max(1, math.ceil(num_questions / len(chunks)))
+    per_chunk = min(per_chunk, MAX_PER_CHUNK)
 
     questions = []
     for chunk in chunks:
@@ -470,6 +571,7 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
             "- NEVER copy a document sentence verbatim, and NEVER truncate an option with '...'.\n"
             "- Keep the three wrong options the same KIND of answer as the correct one (all short facts, all short terms, etc.) so the question is genuinely discriminating.\n"
             '- "correctAnswer" must be the index of the exactly-correct option; make sure only ONE option is correct.\n'
+            "- Vary the correct answer position across questions (mix indices 0, 1, 2, 3) — never always place the correct option first.\n"
             '- The "explanation" must explain the concept in your OWN words and may briefly cite the material; do not start it with "From the material:" quoting a full sentence.\n'
             f"{_instruction_directive(instructions)}"
             f"\nMaterial Text (section {len(questions) // per_chunk + 1} of {len(chunks)}):\n{chunk}\n\n"
@@ -479,7 +581,7 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
             raw_output = call_groq_ai(prompt, system_prompt=system_prompt, temperature=0.5)
         except GroqOfflineError:
             mark_offline_fallback()
-            return _build_quiz_fallback(text_content, num_questions, difficulty)
+            return _randomize_mc_correct_answer(_build_quiz_fallback(text_content, num_questions, difficulty))
         parsed = _parse_json_answer(raw_output)
         if isinstance(parsed, list):
             questions.extend(parsed)
@@ -488,12 +590,12 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
         for idx, q in enumerate(questions):
             if isinstance(q, dict):
                 q["id"] = f"q-{idx + 1}"
-        return questions[:num_questions]
+        return _randomize_mc_correct_answer(questions[:num_questions])
 
     # Degrade to content-derived questions grounded in the actual material.
     print("[Groq Quiz] Falling back to content-derived question generation.")
     mark_offline_fallback()
-    return _build_quiz_fallback(text_content, num_questions, difficulty)
+    return _randomize_mc_correct_answer(_build_quiz_fallback(text_content, num_questions, difficulty))
 
 
 def generate_flashcards_with_groq(text_content: str, count: int = 5, instructions: str = "") -> list:
@@ -502,8 +604,15 @@ def generate_flashcards_with_groq(text_content: str, count: int = 5, instruction
         "Return a raw JSON array of objects with keys: id, question, answer, topicTag, difficulty."
     )
 
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = 5
+    count = max(1, min(MAX_AI_FLASHCARDS, count))
+
     chunks = _generation_chunks(text_content, 3500)
     per_chunk = max(1, math.ceil(count / len(chunks)))
+    per_chunk = min(per_chunk, MAX_PER_CHUNK)
 
     cards = []
     for chunk in chunks:
@@ -531,13 +640,16 @@ def generate_flashcards_with_groq(text_content: str, count: int = 5, instruction
 def generate_summary_with_groq(text_content: str, instructions: str = "") -> dict:
     system_prompt = (
         "You are StudyLens AI Document Summarizer powered by Groq Inference (GPT-OSS-120B). "
-        "Return JSON with keys: executiveSummary (string), keyTakeaways (list of string), bulletPoints (list of string)."
+        'Return valid JSON with exactly these keys: "executiveSummary" (string of 3-6 sentences), '
+        '"keyTakeaways" (array of 4-8 short paraphrased phrases), "bulletPoints" (array of 6-10 short bullet strings). '
+        "Condense and paraphrase in your OWN words; do not echo sentences from the material verbatim. "
+        "Ground every takeaway and bullet in the definitions and conclusions found in the section."
     )
 
     chunks = _generation_chunks(text_content, 4000)
     summaries = []
     for chunk in chunks:
-        prompt = f"Summarize the following study material section. Read this whole section and capture its definitions and key conclusions:{_instruction_directive(instructions)}\n\nMaterial Text (section {len(summaries) + 1} of {len(chunks)}):\n{chunk}"
+        prompt = f"Read this whole study material section, then write: (1) a concise executiveSummary of its main idea and definitions in 3-6 sentences, (2) keyTakeaways as short paraphrased phrases, (3) bulletPoints as short bullets. Do not copy sentences from the material verbatim. Capture definitions and key conclusions:{_instruction_directive(instructions)}\n\nMaterial Text (section {len(summaries) + 1} of {len(chunks)}):\n{chunk}"
         try:
             raw = call_groq_ai(prompt, system_prompt=system_prompt, temperature=0.5)
         except GroqOfflineError:

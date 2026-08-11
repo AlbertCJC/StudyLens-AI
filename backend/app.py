@@ -132,6 +132,11 @@ class SubjectModel(db.Model):
     created_at = db.Column(db.String(64), nullable=False)
 
     def to_dict(self):
+        roster_count = None
+        try:
+            roster_count = StudentSubjectModel.query.filter_by(subject_id=self.subject_id).count()
+        except Exception:
+            roster_count = None
         return {
             "id": self.subject_id,
             "code": self.subject_code,
@@ -142,7 +147,7 @@ class SubjectModel(db.Model):
             "semester": self.semester,
             "course": self.course,
             "schoolYear": self.school_year,
-            "studentCount": self.student_count,
+            "studentCount": roster_count if roster_count is not None else self.student_count,
             "materialCount": self.material_count,
             "createdAt": self.created_at
         }
@@ -430,6 +435,7 @@ class AnnouncementModel(db.Model):
             "authorName": self.author_name,
             "targetAudience": self.target_audience,
             "priority": self.priority,
+            "subjectId": self.subject_id,
             "createdAt": self.created_at
         }
 
@@ -519,6 +525,44 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
+def _extract_bearer_token():
+    """Returns the bearer token from the request header, or None."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header.split(" ")[1]
+    return None
+
+def require_auth(f):
+    """Strict JWT gate: rejects requests without a valid bearer token (401)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "Authentication required. Please log in.", "code": "AUTH_REQUIRED"}), 401
+        try:
+            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            user = UserModel.query.get(data["user_id"])
+            if not user:
+                raise ValueError("Unknown user")
+        except Exception:
+            return jsonify({"error": "Invalid or expired session. Please log in again.", "code": "INVALID_TOKEN"}), 401
+        request.current_user = user.to_dict()
+        return f(*args, **kwargs)
+    return decorated
+
+def require_roles(*roles):
+    """Strict RBAC gate: requires a valid token whose role is in ``roles`` (else 403)."""
+    def decorator(f):
+        @wraps(f)
+        @require_auth
+        def decorated(*args, **kwargs):
+            current_user = getattr(request, "current_user", None) or {}
+            if current_user.get("role") not in roles:
+                return jsonify({"error": "You do not have permission to perform this action.", "code": "FORBIDDEN"}), 403
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+
 def log_action(user_id, user_name, user_role, action, details):
     try:
         log_item = ActivityLogModel(
@@ -570,6 +614,22 @@ def _json_loads(text):
         return json.loads(text)
     except Exception:
         return []
+
+# Cap AI generation counts so single requests stay within the model's output-token budget.
+MAX_AI_QUESTIONS = 20
+MAX_AI_FLASHCARDS = 20
+
+def _clamp_count(raw, fallback=5, minimum=1, maximum=20):
+    """Safely parses a count value from request data and clamps it to [minimum, maximum]."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = fallback
+    if value < minimum:
+        value = minimum
+    if value > maximum:
+        value = maximum
+    return value
 
 def _clean_extracted_text(text):
     """Normalizes and trims extracted document text for AI consumption."""
@@ -812,14 +872,179 @@ def get_users():
 
 # --- SUBJECTS ---
 @app.route("/api/subjects", methods=["GET"])
+@token_required
 def get_subjects():
+    current_user = getattr(request, "current_user", None) or {}
+    requester_role = current_user.get("role") or request.args.get("userRole", "")
+    requester_id = current_user.get("id") or request.args.get("userId", "")
+
     subs = SubjectModel.query.all()
+
+    # Privacy Rule: teachers only see the subjects they are assigned to manage.
+    if requester_role == "teacher":
+        subs = [s for s in subs if s.teacher_id == requester_id]
+
     return jsonify([s.to_dict() for s in subs])
+
+@app.route("/api/subjects", methods=["POST"])
+@require_roles("admin")
+def create_subject():
+    data = request.json or {}
+    code = (data.get("code") or "").strip()
+    name = (data.get("name") or "").strip()
+    teacher_id = (data.get("teacherId") or "").strip()
+
+    if not code or not name:
+        return jsonify({"error": "Subject code and name are required.", "code": "BAD_REQUEST"}), 400
+    if not teacher_id:
+        return jsonify({"error": "Please assign a teacher to manage this subject.", "code": "BAD_REQUEST"}), 400
+
+    teacher = UserModel.query.get(teacher_id)
+    if not teacher:
+        return jsonify({"error": "Assigned teacher account was not found.", "code": "BAD_REQUEST"}), 400
+    if teacher.role != "teacher":
+        return jsonify({"error": "Only a teacher account can be assigned to manage a subject.", "code": "BAD_REQUEST"}), 400
+
+    if SubjectModel.query.filter_by(subject_code=code).first():
+        return jsonify({"error": f"A subject with code '{code}' already exists.", "code": "DUPLICATE"}), 409
+
+    new_sub = SubjectModel(
+        subject_id=f"sub-{int(datetime.datetime.utcnow().timestamp() * 1000)}",
+        teacher_id=teacher.user_id,
+        subject_code=code,
+        subject_name=name,
+        description=(data.get("description") or "").strip() or None,
+        semester=data.get("semester") or "1st Semester",
+        course=data.get("course") or "BSIT",
+        school_year=data.get("schoolYear") or "2026-2027",
+        teacher_name=teacher.to_dict()["name"],
+        student_count=0,
+        material_count=0,
+        created_at=datetime.datetime.utcnow().isoformat() + "Z"
+    )
+    db.session.add(new_sub)
+    _commit_or_warn("subject creation")
+    log_action(request.current_user["id"], request.current_user["name"], "admin", "SUBJECT_CREATE", f"Created subject '{code} - {name}' and assigned {teacher.to_dict()['name']}")
+    return jsonify(new_sub.to_dict()), 201
+
+@app.route("/api/subjects/<subject_id>", methods=["PUT"])
+@require_roles("admin")
+def update_subject(subject_id):
+    sub = SubjectModel.query.get(subject_id)
+    if not sub:
+        return jsonify({"error": "Subject not found.", "code": "NOT_FOUND"}), 404
+
+    data = request.json or {}
+    new_code = (data.get("code") or sub.subject_code).strip()
+    if data.get("code") and new_code != sub.subject_code and SubjectModel.query.filter_by(subject_code=new_code).first():
+        return jsonify({"error": f"A subject with code '{new_code}' already exists.", "code": "DUPLICATE"}), 409
+
+    sub.subject_code = new_code
+    sub.subject_name = (data.get("name") or sub.subject_name).strip()
+    sub.description = data.get("description") if data.get("description") is not None else sub.description
+    sub.semester = data.get("semester") or sub.semester
+    sub.course = data.get("course") or sub.course
+    sub.school_year = data.get("schoolYear") or sub.school_year
+
+    new_teacher_id = (data.get("teacherId") or "").strip()
+    if new_teacher_id and new_teacher_id != sub.teacher_id:
+        teacher = UserModel.query.get(new_teacher_id)
+        if not teacher or teacher.role != "teacher":
+            return jsonify({"error": "Only a teacher account can be assigned to manage a subject.", "code": "BAD_REQUEST"}), 400
+        sub.teacher_id = teacher.user_id
+        sub.teacher_name = teacher.to_dict()["name"]
+
+    _commit_or_warn("subject update")
+    log_action(request.current_user["id"], request.current_user["name"], "admin", "SUBJECT_UPDATE", f"Updated subject '{sub.subject_code} - {sub.subject_name}'")
+    return jsonify(sub.to_dict()), 200
+
+@app.route("/api/subjects/<subject_id>", methods=["DELETE"])
+@require_roles("admin")
+def delete_subject(subject_id):
+    sub = SubjectModel.query.get(subject_id)
+    if not sub:
+        return jsonify({"error": "Subject not found.", "code": "NOT_FOUND"}), 404
+
+    code_name = f"{sub.subject_code} - {sub.subject_name}"
+    try:
+        StudentSubjectModel.query.filter_by(subject_id=subject_id).delete()
+        db.session.delete(sub)
+        _commit_or_warn("subject deletion")
+    except Exception:
+        db.session.rollback()
+        return jsonify({"error": "Could not delete this subject because it still has linked records.", "code": "CONFLICT"}), 409
+
+    log_action(request.current_user["id"], request.current_user["name"], "admin", "SUBJECT_DELETE", f"Deleted subject '{code_name}'")
+    return jsonify({"success": True}), 200
+
+@app.route("/api/subjects/<subject_id>", methods=["GET"])
+@require_auth
+def get_subject(subject_id):
+    sub = SubjectModel.query.get(subject_id)
+    if not sub:
+        return jsonify({"error": "Subject not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role", "")
+    user_id = current_user.get("id", "")
+
+    # Access rule: admins, or the teacher assigned to manage this subject.
+    if role != "admin" and not (role == "teacher" and user_id == sub.teacher_id):
+        return jsonify({"error": "You are not authorized to view this subject.", "code": "FORBIDDEN"}), 403
+
+    return jsonify(sub.to_dict()), 200
+
+@app.route("/api/subjects/<subject_id>/students", methods=["GET"])
+@require_auth
+def get_subject_students(subject_id):
+    sub = SubjectModel.query.get(subject_id)
+    if not sub:
+        return jsonify({"error": "Subject not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role", "")
+    user_id = current_user.get("id", "")
+
+    # Access rule: admins, or the teacher assigned to manage this subject.
+    if role != "admin" and not (role == "teacher" and user_id == sub.teacher_id):
+        return jsonify({"error": "You are not authorized to view this subject roster.", "code": "FORBIDDEN"}), 403
+
+    enrollments = StudentSubjectModel.query.filter_by(subject_id=subject_id).all()
+    students = []
+    for en in enrollments:
+        student = UserModel.query.get(en.student_id)
+        if student:
+            students.append({
+                "id": student.user_id,
+                "name": student.to_dict()["name"],
+                "email": student.email,
+                "studentId": student.student_id,
+                "dateEnrolled": en.date_enrolled
+            })
+    students.sort(key=lambda s: s["name"].lower())
+    return jsonify(students), 200
 
 # --- MATERIALS ---
 @app.route("/api/materials", methods=["GET"])
+@token_required
 def get_materials():
+    current_user = getattr(request, "current_user", None) or {}
+    requester_role = current_user.get("role") or request.args.get("userRole", "")
+    requester_id = current_user.get("id") or request.args.get("userId", "")
+
     mats = MaterialModel.query.all()
+
+    # Privacy Rule: teachers only see materials belonging to the subjects they manage
+    # (plus their own personal notes). Admins and students see the full catalog.
+    if requester_role == "teacher":
+        managed_subject_ids = {
+            s.subject_id for s in SubjectModel.query.filter_by(teacher_id=requester_id).all()
+        }
+        mats = [
+            m for m in mats
+            if m.subject_id == "personal" or m.subject_id in managed_subject_ids
+        ]
+
     return jsonify([m.to_dict() for m in mats])
 
 @app.route("/api/materials/upload", methods=["POST"])
@@ -841,6 +1066,14 @@ def upload_material():
         return jsonify({"error": "No file or text content provided"}), 400
 
     sub = SubjectModel.query.get(subject_id)
+
+    # Ownership rule: a teacher may only upload course material to a subject they
+    # are assigned to manage. Admins may upload anywhere. Personal notes bypass subjects.
+    if uploader_role == "teacher" and subject_id != "personal":
+        if not sub:
+            return jsonify({"error": "Selected subject was not found.", "code": "NOT_FOUND"}), 404
+        if sub.teacher_id != uploader_id:
+            return jsonify({"error": "You can only upload materials to a subject assigned to you.", "code": "FORBIDDEN"}), 403
 
     cloud_url = None
     file_html_ext = os.path.splitext(filename)[1].replace(".", "").lower() or "txt"
@@ -883,11 +1116,56 @@ def upload_material():
     log_action(uploader_id, uploaded_by, uploader_role, "MATERIAL_UPLOAD", f"Uploaded '{title}' ({file_ext}) to Cloud Storage")
     return jsonify(new_mat.to_dict()), 201
 
+@app.route("/api/materials/<material_id>", methods=["PUT"])
+@token_required
+def update_material(material_id):
+    mat = MaterialModel.query.get(material_id)
+    if not mat:
+        return jsonify({"error": "Material not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role", "")
+    user_id = current_user.get("id", "")
+
+    # Ownership rule: teachers may only edit materials in subjects they manage.
+    if role == "teacher" and mat.subject_id != "personal":
+        subject = SubjectModel.query.get(mat.subject_id)
+        if not subject or subject.teacher_id != user_id:
+            return jsonify({"error": "You can only edit materials from a subject assigned to you.", "code": "FORBIDDEN"}), 403
+
+    data = request.json or {}
+
+    new_title = (data.get("title") or "").strip()
+    if new_title:
+        mat.title = new_title
+    if data.get("description") is not None:
+        mat.description = data.get("description")
+
+    text_input = (data.get("textInput") or "").strip()
+    if text_input:
+        mat.extracted_text = _clean_extracted_text(text_input)
+
+    _commit_or_warn("material update")
+    log_action(user_id or mat.teacher_id, mat.uploaded_by, mat.uploader_role, "MATERIAL_UPDATE", f"Updated '{mat.title}'")
+    return jsonify(mat.to_dict()), 200
+
 @app.route("/api/materials/<material_id>", methods=["DELETE"])
+@token_required
 def delete_material(material_id):
     mat = MaterialModel.query.get(material_id)
     if not mat:
         return jsonify({"error": "Material not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role", "")
+    user_id = current_user.get("id", "")
+
+    # Ownership rule: teachers may only delete materials in subjects they manage.
+    if role == "teacher" and mat.subject_id != "personal":
+        subject = SubjectModel.query.get(mat.subject_id)
+        if not subject or subject.teacher_id != user_id:
+            return jsonify({"error": "You can only delete materials from a subject assigned to you.", "code": "FORBIDDEN"}), 403
+
     subject = SubjectModel.query.get(mat.subject_id)
     if subject and subject.material_count and subject.material_count > 0:
         subject.material_count -= 1
@@ -901,7 +1179,7 @@ def delete_material(material_id):
 def generate_quiz_ai():
     data = request.json or {}
     text_content = data.get("textContent", "Graph traversal BFS and DFS algorithms.")
-    num_questions = int(data.get("numQuestions", 5))
+    num_questions = _clamp_count(data.get("numQuestions", 5), fallback=5, maximum=MAX_AI_QUESTIONS)
     difficulty = data.get("difficulty", "medium")
     
     questions = generate_quiz_with_groq(text_content, num_questions=num_questions, difficulty=difficulty)
@@ -924,7 +1202,8 @@ def generate_quiz_ai():
         created_at=datetime.datetime.utcnow().isoformat() + "Z"
     )
     db.session.add(new_quiz)
-    _commit_or_warn("AI quiz")
+    if not _commit_or_warn("AI quiz"):
+        return jsonify({"error": "Could not save the quiz. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
     
     log_action(new_quiz.teacher_id, new_quiz.created_by_name, new_quiz.quiz_type, "AI_QUIZ_GENERATE", f"Generated {len(questions)} items via Groq GPT-OSS-120B")
 
@@ -934,7 +1213,7 @@ def generate_quiz_ai():
 def generate_flashcards_ai():
     data = request.json or {}
     text_content = data.get("textContent", "Key concepts of data structures.")
-    card_count = int(data.get("cardCount", 5))
+    card_count = _clamp_count(data.get("cardCount", 5), fallback=5, maximum=MAX_AI_FLASHCARDS)
     cards = generate_flashcards_with_groq(text_content, count=card_count)
     
     new_deck = FlashcardDeckModel(
@@ -949,7 +1228,8 @@ def generate_flashcards_ai():
         created_at=datetime.datetime.utcnow().isoformat() + "Z"
     )
     db.session.add(new_deck)
-    _commit_or_warn("AI flashcard deck")
+    if not _commit_or_warn("AI flashcard deck"):
+        return jsonify({"error": "Could not save the flashcard deck. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
     return jsonify(new_deck.to_dict()), 201
 
 @app.route("/api/summaries/generate", methods=["POST"])
@@ -971,7 +1251,8 @@ def generate_summary_ai():
         created_at=datetime.datetime.utcnow().isoformat() + "Z"
     )
     db.session.add(new_sum)
-    _commit_or_warn("AI summary")
+    if not _commit_or_warn("AI summary"):
+        return jsonify({"error": "Could not save the summary. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
     return jsonify(new_sum.to_dict()), 201
 
 @app.route("/api/reviewers/generate", methods=["POST"])
@@ -992,7 +1273,8 @@ def generate_reviewer_ai():
         created_at=datetime.datetime.utcnow().isoformat() + "Z"
     )
     db.session.add(new_rev)
-    _commit_or_warn("AI reviewer")
+    if not _commit_or_warn("AI reviewer"):
+        return jsonify({"error": "Could not save the reviewer. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
     log_action(new_rev.created_by_id, data.get("createdByName", "User"), data.get("userRole", "teacher"), "AI_REVIEWER_GENERATE", f"Generated a {len(reviewer.get('topics', []))}-topic study reviewer via Groq GPT-OSS-120B")
     return jsonify(new_rev.to_dict()), 201
 
@@ -1010,7 +1292,7 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
     instructions = data.get("instructions") or ""
 
     if mode == "quiz":
-        num_questions = int(data.get("quizCount") or data.get("numQuestions") or 5)
+        num_questions = _clamp_count(data.get("quizCount") or data.get("numQuestions") or 5, fallback=5, maximum=MAX_AI_QUESTIONS)
         questions = generate_quiz_with_groq(
             text_content, num_questions=num_questions, difficulty=difficulty, instructions=instructions
         )
@@ -1032,7 +1314,7 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
             "createdAt": created_at
         }
     if mode == "flashcards":
-        card_count = int(data.get("flashcardCount") or data.get("cardCount") or 5)
+        card_count = _clamp_count(data.get("flashcardCount") or data.get("cardCount") or 5, fallback=5, maximum=MAX_AI_FLASHCARDS)
         cards = generate_flashcards_with_groq(text_content, count=card_count, instructions=instructions)
         return {
             "id": f"deck-{timestamp_ms}",
@@ -1160,7 +1442,8 @@ def _persist_generated_resource(mode, payload, data, timestamp_ms, created_at):
         return None
 
     db.session.add(new_model)
-    _commit_or_warn(f"AI {mode} save")
+    if not _commit_or_warn(f"AI {mode} save"):
+        return None
     return new_model
 
 
@@ -1197,7 +1480,7 @@ def generate_ai_resource():
 
     saved = _persist_generated_resource(mode, payload, data, timestamp_ms, created_at)
     if saved is None:
-        return jsonify({"error": f"Unknown generation mode: {mode}", "code": "INVALID_MODE"}), 400
+        return jsonify({"error": "Could not save the generated resource. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
 
     user_role = data.get("userRole") or "student"
     created_by_id = payload.get("createdById") or "usr-teacher-1"
@@ -1218,15 +1501,15 @@ def save_ai_resource():
     """Saves a previously generated (non-persisted) AI resource draft."""
     data = request.json or {}
     mode = data.get("mode")
-    if not mode:
-        return jsonify({"error": "Missing mode.", "code": "INVALID_MODE"}), 400
+    if mode not in ("quiz", "flashcards", "summary", "reviewer"):
+        return jsonify({"error": "Missing or invalid mode.", "code": "INVALID_MODE"}), 400
 
     timestamp_ms = int(datetime.datetime.utcnow().timestamp() * 1000)
     created_at = datetime.datetime.utcnow().isoformat() + "Z"
 
     saved = _persist_generated_resource(mode, data, data, timestamp_ms, created_at)
     if saved is None:
-        return jsonify({"error": f"Unknown mode: {mode}", "code": "INVALID_MODE"}), 400
+        return jsonify({"error": "Could not save the resource. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
 
     created_by_id = data.get("createdById") or "usr-teacher-1"
     created_by_name = data.get("createdByName") or "User"
@@ -1317,10 +1600,21 @@ def create_quiz():
     return jsonify(new_quiz.to_dict()), 201
 
 @app.route("/api/quizzes/<quiz_id>", methods=["PUT"])
+@token_required
 def update_quiz(quiz_id):
     quiz = QuizModel.query.get(quiz_id)
     if not quiz:
         return jsonify({"error": "Quiz not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role", "")
+    user_id = current_user.get("id", "")
+
+    # Ownership rule: teachers may only edit quizzes in subjects they manage.
+    if role == "teacher" and quiz.subject_id and quiz.subject_id != "personal":
+        subject = SubjectModel.query.get(quiz.subject_id)
+        if not subject or subject.teacher_id != user_id:
+            return jsonify({"error": "You can only edit quizzes from a subject assigned to you.", "code": "FORBIDDEN"}), 403
 
     data = request.json or {}
     if "title" in data and data.get("title"):
@@ -1348,6 +1642,7 @@ def update_quiz(quiz_id):
         quiz.is_published = bool(data.get("isPublished"))
 
     _commit_or_warn("quiz update")
+    log_action(user_id or quiz.created_by_id, quiz.created_by_name or "", quiz.quiz_type or "teacher", "QUIZ_UPDATE", f"Updated quiz '{quiz.title}'")
     return jsonify(quiz.to_dict()), 200
 
 @app.route("/api/quizzes/<quiz_id>", methods=["DELETE"])
@@ -1471,7 +1766,11 @@ def submit_quiz_attempt(quiz_id):
 
 @app.route("/api/flashcards", methods=["GET"])
 def get_flashcards():
-    decks = FlashcardDeckModel.query.all()
+    user_id = request.args.get("userId", "")
+    query = FlashcardDeckModel.query
+    if user_id:
+        query = query.filter_by(created_by_id=user_id)
+    decks = query.order_by(FlashcardDeckModel.created_at.desc()).all()
     return jsonify([d.to_dict() for d in decks])
 
 @app.route("/api/flashcards/<deck_id>", methods=["DELETE"])
@@ -1485,12 +1784,20 @@ def delete_flashcard_deck(deck_id):
 
 @app.route("/api/summaries", methods=["GET"])
 def get_summaries():
-    sums = SummaryModel.query.all()
+    user_id = request.args.get("userId", "")
+    query = SummaryModel.query
+    if user_id:
+        query = query.filter_by(created_by_id=user_id)
+    sums = query.order_by(SummaryModel.created_at.desc()).all()
     return jsonify([s.to_dict() for s in sums])
 
 @app.route("/api/reviewers", methods=["GET"])
 def get_reviewers():
-    revs = ReviewerModel.query.all()
+    user_id = request.args.get("userId", "")
+    query = ReviewerModel.query
+    if user_id:
+        query = query.filter_by(created_by_id=user_id)
+    revs = query.order_by(ReviewerModel.created_at.desc()).all()
     return jsonify([r.to_dict() for r in revs])
 
 @app.route("/api/summaries/<summary_id>", methods=["DELETE"])
@@ -1766,6 +2073,7 @@ def seed_database_if_empty():
                 UserModel(user_id="usr-student-3", role_id=1, first_name="Precious Marie", last_name="Salve", email="precious@studylens.edu", role="student", department="Information Technology", student_id="2024-STU-0843", created_at="2024-01-15T08:00:00.000Z"),
                 UserModel(user_id="usr-student-4", role_id=1, first_name="Jeric Nino", last_name="Solitana", email="jeric@studylens.edu", role="student", department="Information Technology", student_id="2024-STU-0844", created_at="2024-01-15T08:00:00.000Z"),
                 UserModel(user_id="usr-teacher-1", role_id=2, first_name="Christian C.", last_name="Barral, MIT", email="teacher@studylens.edu", role="teacher", department="College of Computer Studies", created_at="2023-09-01T08:00:00.000Z"),
+                UserModel(user_id="usr-teacher-2", role_id=2, first_name="Mary Grace", last_name="Valencia", email="teacher2@studylens.edu", role="teacher", department="College of Computer Studies", created_at="2023-09-05T08:00:00.000Z"),
                 UserModel(user_id="usr-admin-1", role_id=3, first_name="Neil A.", last_name="Basabe, DIT", email="admin@studylens.edu", role="admin", department="Dean, College of Computer Studies", created_at="2023-08-01T08:00:00.000Z")
             ]
             db.session.bulk_save_objects(seed_users)
@@ -1773,7 +2081,7 @@ def seed_database_if_empty():
             seed_subs = [
                 SubjectModel(subject_id="sub-101", subject_code="CS 301", subject_name="Data Structures & Algorithms", description="Fundamental data structures, search trees, graphs, sorting algorithms.", teacher_id="usr-teacher-1", teacher_name="Christian C. Barral, MIT", student_count=51, material_count=2, created_at="2024-01-10T08:00:00.000Z"),
                 SubjectModel(subject_id="sub-102", subject_code="AI 402", subject_name="Artificial Intelligence & Neural Networks", description="Machine learning, Groq GPT-OSS-120B inference, and deep learning.", teacher_id="usr-teacher-1", teacher_name="Christian C. Barral, MIT", student_count=45, material_count=1, created_at="2024-01-12T08:00:00.000Z"),
-                SubjectModel(subject_id="sub-103", subject_code="DB 204", subject_name="Database Systems & Architecture", description="Relational database design, MySQL querying, 1NF to 3NF normalization.", teacher_id="usr-teacher-1", teacher_name="Christian C. Barral, MIT", student_count=55, material_count=1, created_at="2024-01-14T08:00:00.000Z")
+                SubjectModel(subject_id="sub-103", subject_code="DB 204", subject_name="Database Systems & Architecture", description="Relational database design, MySQL querying, 1NF to 3NF normalization.", teacher_id="usr-teacher-2", teacher_name="Mary Grace Valencia", student_count=55, material_count=1, created_at="2024-01-14T08:00:00.000Z")
             ]
             db.session.bulk_save_objects(seed_subs)
 
@@ -1790,6 +2098,27 @@ def seed_database_if_empty():
             db.session.bulk_save_objects(seed_notifs)
             db.session.commit()
             print("[Database Seed] 14-table schema initialized with UC CCS Capstone seed data.")
+
+        try:
+            seed_enrollments_needed = (StudentSubjectModel.query.count() == 0)
+        except Exception:
+            seed_enrollments_needed = False
+
+        if seed_enrollments_needed and UserModel.query.count() > 0 and SubjectModel.query.count() > 0:
+            enrollments = [
+                StudentSubjectModel(student_id="usr-student-1", subject_id="sub-101", date_enrolled="2024-01-20T08:00:00.000Z"),
+                StudentSubjectModel(student_id="usr-student-2", subject_id="sub-101", date_enrolled="2024-01-21T08:00:00.000Z"),
+                StudentSubjectModel(student_id="usr-student-3", subject_id="sub-101", date_enrolled="2024-01-22T08:00:00.000Z"),
+                StudentSubjectModel(student_id="usr-student-4", subject_id="sub-101", date_enrolled="2024-01-23T08:00:00.000Z"),
+                StudentSubjectModel(student_id="usr-student-1", subject_id="sub-102", date_enrolled="2024-01-24T08:00:00.000Z"),
+                StudentSubjectModel(student_id="usr-student-2", subject_id="sub-102", date_enrolled="2024-01-24T08:00:00.000Z"),
+                StudentSubjectModel(student_id="usr-student-3", subject_id="sub-102", date_enrolled="2024-01-25T08:00:00.000Z"),
+                StudentSubjectModel(student_id="usr-student-1", subject_id="sub-103", date_enrolled="2024-01-26T08:00:00.000Z"),
+                StudentSubjectModel(student_id="usr-student-4", subject_id="sub-103", date_enrolled="2024-01-27T08:00:00.000Z")
+            ]
+            db.session.bulk_save_objects(enrollments)
+            db.session.commit()
+            print("[Database Seed] Enrolled demo students into course subjects (rosters seeded).")
 
 if __name__ == "__main__":
     seed_database_if_empty()

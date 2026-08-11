@@ -81,6 +81,7 @@ export function DashboardLayout({
     else if (currentPath.includes("assessments")) pageTitle = "Assessments & Tests";
     else if (currentPath.includes("flashcards")) pageTitle = "Flashcards";
     else if (currentPath.includes("analytics")) pageTitle = "Adaptive Progress";
+    else if (/\/subjects\/[^/]+/.test(currentPath)) pageTitle = "Subject Details";
     else if (currentPath.includes("subjects")) pageTitle = "Course Subjects";
     else if (currentPath.includes("announcements")) pageTitle = "Announcements";
     else if (currentPath.includes("users")) pageTitle = "User Management";

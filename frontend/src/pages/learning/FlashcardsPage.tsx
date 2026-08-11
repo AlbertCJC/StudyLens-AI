@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Layers, RotateCw, ArrowLeft, ArrowRight, Smile, Meh, Frown, CheckCircle2, Sparkles, Trash2 } from "lucide-react";
 import type { FlashcardDeck, Flashcard } from "../../types";
 import { useAuth } from "../../context/AuthContext";
+import { authFetch } from "../../utils/authFetch";
 
 export const FlashcardsPage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -18,7 +19,7 @@ export const FlashcardsPage: React.FC = () => {
     let isSubscribed = true;
     const fetchDecks = async () => {
       try {
-        const res = await fetch(`/api/flashcards?userId=${currentUser?.id || ""}`);
+        const res = await authFetch(`/api/flashcards?userId=${currentUser?.id || ""}`);
         if (res.ok) {
           const data = await res.json();
           if (isSubscribed) {
@@ -85,7 +86,7 @@ export const FlashcardsPage: React.FC = () => {
 
   const handleDeleteDeck = async (deckId: string) => {
     try {
-      const res = await fetch(`/api/flashcards/${deckId}`, { method: "DELETE" });
+      const res = await authFetch(`/api/flashcards/${deckId}`, { method: "DELETE" });
       if (res.ok) {
         const remaining = decks.filter((d) => d.id !== deckId);
         setDecks(remaining);

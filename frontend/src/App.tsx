@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AnnouncementsProvider, useAnnouncements, type AnnouncementItem } from "./context/AnnouncementsContext";
+import { authFetch } from "./utils/authFetch";
 import { DashboardLayout, type MenuItem } from "./components/DashboardLayout";
 import { StudentDashboard } from "./pages/dashboards/StudentDashboard";
 import { TeacherDashboard } from "./pages/dashboards/TeacherDashboard";
@@ -36,6 +37,7 @@ import { AssessmentPage } from "./pages/learning/AssessmentPage";
 import { FlashcardsPage } from "./pages/learning/FlashcardsPage";
 import { ProgressAnalyticsPage } from "./pages/analytics/ProgressAnalyticsPage";
 import { SubjectsPage } from "./pages/learning/SubjectsPage";
+import { SubjectDetailPage } from "./pages/learning/SubjectDetailPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { LandingPage } from "./pages/landing/LandingPage";
 import { RemotePage } from "./pages/deployment/RemotePage";
@@ -68,7 +70,7 @@ const AnnouncementsView: React.FC = () => {
 
   // Fetch Subjects for Dropdown
   useEffect(() => {
-    fetch("/api/subjects")
+    authFetch("/api/subjects")
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) setSubjects(data);
@@ -734,6 +736,14 @@ const MainAppContent: React.FC = () => {
           element={
             <RoleGuard allowedRoles={["teacher", "admin"]} userRole={role}>
               <SubjectsPage />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="/subjects/:subjectId"
+          element={
+            <RoleGuard allowedRoles={["teacher", "admin"]} userRole={role}>
+              <SubjectDetailPage />
             </RoleGuard>
           }
         />

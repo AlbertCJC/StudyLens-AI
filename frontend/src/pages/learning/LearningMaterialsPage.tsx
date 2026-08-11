@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { useAuth } from "../../context/AuthContext";
+import { authFetch } from "../../utils/authFetch";
 import type { LearningMaterial, Subject } from "../../types";
 
 interface LearningMaterialsPageProps {
@@ -72,8 +73,8 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
     const fetchData = async () => {
       try {
         const [matRes, subRes] = await Promise.all([
-          fetch(`/api/materials?userId=${currentUser?.id || ""}&userRole=${currentUser?.role || ""}`),
-          fetch("/api/subjects"),
+          authFetch(`/api/materials?userId=${currentUser?.id || ""}&userRole=${currentUser?.role || ""}`),
+          authFetch("/api/subjects"),
         ]);
         if (matRes.ok) {
           const matData = await matRes.json();
@@ -120,7 +121,7 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
       formData.append("uploaderId", currentUser?.id || "usr-teacher-1");
       formData.append("materialType", isPersonalType ? "personal" : "course");
 
-      const res = await fetch("/api/materials/upload", {
+      const res = await authFetch("/api/materials/upload", {
         method: "POST",
         body: formData,
       });
@@ -159,7 +160,7 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await fetch(`/api/materials/${id}`, { method: "DELETE" });
+      const res = await authFetch(`/api/materials/${id}`, { method: "DELETE" });
       if (res.ok) {
         setMaterials((prev) => prev.filter((m) => m.id !== id));
         setDeleteConfirmMat(null);

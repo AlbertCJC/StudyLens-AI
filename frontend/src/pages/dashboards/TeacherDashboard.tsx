@@ -6,6 +6,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { useAuth } from "../../context/AuthContext";
 import { useAnnouncements } from "../../context/AnnouncementsContext";
+import { authFetch } from "../../utils/authFetch";
 import type { Subject, Quiz } from "../../types";
 
 interface TeacherDashboardProps {
@@ -64,8 +65,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
     const fetchData = async () => {
       try {
         const [subRes, qzRes] = await Promise.all([
-          fetch("/api/subjects"),
-          fetch("/api/quizzes"),
+          authFetch("/api/subjects"),
+          authFetch("/api/quizzes"),
         ]);
         if (subRes.ok && isSubscribed) {
           const subData = await subRes.json();

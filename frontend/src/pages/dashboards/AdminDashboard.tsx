@@ -7,6 +7,7 @@ import {
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { useAuth } from "../../context/AuthContext";
 import { useAnnouncements, type AnnouncementItem } from "../../context/AnnouncementsContext";
+import { authFetch } from "../../utils/authFetch";
 import type { User, ActivityLog, UserRole, Subject } from "../../types";
 
 const systemHealthData = [
@@ -110,7 +111,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
   const fetchLogs = async () => {
     setLoadingLogs(true);
     try {
-      const res = await fetch("/api/logs");
+      const res = await authFetch("/api/logs");
       if (res.ok) {
         const data = await res.json();
         setLogs(data);
@@ -125,7 +126,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch("/api/users");
+      const res = await authFetch("/api/users");
       if (res.ok) {
         const data = await res.json();
         setUsers(data);
@@ -140,10 +141,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
     const loadAllData = async () => {
       try {
         const [logsRes, usersRes, subRes, setRes] = await Promise.all([
-          fetch("/api/logs"),
-          fetch("/api/users"),
-          fetch("/api/subjects"),
-          fetch("/api/system/settings"),
+          authFetch("/api/logs"),
+          authFetch("/api/users"),
+          authFetch("/api/subjects"),
+          authFetch("/api/system/settings"),
         ]);
         if (!isMounted) return;
         if (logsRes.ok) setLogs(await logsRes.json());
@@ -177,7 +178,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
     if (!newUserName.trim() || !newUserEmail.trim()) return;
 
     try {
-      const res = await fetch("/api/users", {
+      const res = await authFetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -214,7 +215,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
     if (!editingUser) return;
 
     try {
-      const res = await fetch(`/api/users/${editingUser.id}`, {
+      const res = await authFetch(`/api/users/${editingUser.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -238,7 +239,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
   const handleToggleUserStatus = async (user: User) => {
     const nextStatus = user.status === "suspended" ? "active" : "suspended";
     try {
-      const res = await fetch(`/api/users/${user.id}`, {
+      const res = await authFetch(`/api/users/${user.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: nextStatus }),
@@ -256,7 +257,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
   const handleDeleteUser = async (id: string) => {
     if (!window.confirm("Are you sure you want to delete this user account?")) return;
     try {
-      const res = await fetch(`/api/users/${id}`, { method: "DELETE" });
+      const res = await authFetch(`/api/users/${id}`, { method: "DELETE" });
       if (res.ok) {
         setUsers((prev) => prev.filter((u) => u.id !== id));
         fetchLogs();
@@ -270,7 +271,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
     const tempPass = `Pass-${Math.floor(100000 + Math.random() * 900000)}`;
     alert(`Temporary password generated for ${user.name} (${user.email}):\n\n${tempPass}\n\nPlease share this securely with the user.`);
     // Submit log
-    fetch("/api/logs", {
+    authFetch("/api/logs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -322,7 +323,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
     if (!editingAnn) return;
 
     try {
-      const res = await fetch(`/api/announcements/${editingAnn.id}`, {
+      const res = await authFetch(`/api/announcements/${editingAnn.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -350,7 +351,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
   // Audit Logs Actions
   const handleSimulateTestLog = async () => {
     try {
-      await fetch("/api/logs", {
+      await authFetch("/api/logs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -370,7 +371,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
   const handleClearAuditLogs = async () => {
     if (!window.confirm("Are you sure you want to archive and clear all active audit logs?")) return;
     try {
-      const res = await fetch("/api/logs", { method: "DELETE" });
+      const res = await authFetch("/api/logs", { method: "DELETE" });
       if (res.ok) {
         fetchLogs();
       }
@@ -419,7 +420,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch("/api/system/settings", {
+      const res = await authFetch("/api/system/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(systemSettings),
