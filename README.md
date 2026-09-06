@@ -142,17 +142,31 @@ npm start
 
 ---
 
-## 👤 Capstone Project Team & Pre-configured Profiles
+## 👤 Capstone Project Team & Pre-configured Accounts
 
 > **Institution**: University of Cebu – Main Campus, College of Computer Studies (UC CCS)  
 > **Degree**: Bachelor of Science in Information Technology (BSIT)
 
+### 🔑 Demo Credentials
+
+The system ships with two seeded demo accounts (a teacher and an administrator) for local development only. Students and additional teachers can **self-register** from the sign-up form. Portal switching / 1-click quick logins were removed for security — **sign in normally** (web or mobile).
+
+> Note: Seeded demo account passwords are **not published** and are generated/configured at deploy time. Demo seeding is disabled outside development environments.
+
+> After **5 consecutive failed login attempts**, an account is temporarily locked for **5 minutes**. Forgot-password uses a 6-digit one-time code (see *OTP delivery* below).
+
+### OTP delivery for password reset
+
+There is no SMTP mail service wired up. When a reset code is requested:
+- The 6-digit code is **printed to the backend console** (`[Auth] Password reset OTP for <email>: <code>`).
+- With `OTP_DEV_REVEAL=true` (default in `backend/.env`), the code is also returned as `devCode` in the API response so the web/mobile forgot-password modal can show it as a hint. Set `OTP_DEV_REVEAL=false` in production and connect a real mailer.
+
+### Seed Accounts (seeded profiles)
+
+> The seeded teacher and admin accounts are provisioned for the demo. Student accounts are **not seeded** — they are created by signing up through the registration form.
+
 | Role | Name | Capstone Designation | Email | Permissions & Workflows |
 |---|---|---|---|---|
-| **Student** | John Wendyl S. Sanchez | Project Manager / Lead Researcher | `student@studylens.edu` | Full study suite, adaptive quizzes, flashcards, progress analytics, and mobile mode. |
-| **Student** | Vin Henry S. Ardiente | Programmer / Systems Analyst | `vin@studylens.edu` | System architecture, Flask REST API backend, and Groq Inference integration. |
-| **Student** | Precious Marie B. Salve | UI/UX Designer | `precious@studylens.edu` | Responsive React + Tailwind web UI design, mobile screens, and study dashboards. |
-| **Student** | Jeric Nino G. Solitana | QA Tester / Documentation | `jeric@studylens.edu` | Software specifications, unit/integration/alpha testing, and activity audit logging. |
 | **Teacher** | Christian C. Barral, MIT | Capstone Adviser | `teacher@studylens.edu` | Subject roster management, quiz builder, grading queue, and material uploads. |
 | **Admin** | Neil A. Basabe, DIT | College Dean | `admin@studylens.edu` | Account directory, security audit trail, system metrics, and MySQL database monitoring. |
 

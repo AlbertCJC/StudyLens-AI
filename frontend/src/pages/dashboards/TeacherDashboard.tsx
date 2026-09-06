@@ -1,72 +1,52 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
-  Users, FolderKanban, BookCheck, Award, Sparkles, Plus, Download,
-  CheckCircle2, Clock, BarChart2, MessageSquare, Megaphone, Trash2, X
+  Users, FolderKanban, BookCheck, Award, Plus, Download,
+  BarChart2, MessageSquare, Layers, Megaphone, Trash2, X, ChevronRight, Pencil
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { useAuth } from "../../context/AuthContext";
-import { useAnnouncements } from "../../context/AnnouncementsContext";
+import { useAnnouncements, type AnnouncementItem } from "../../context/AnnouncementsContext";
+import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
+import { RelativeTime } from "../../utils/time";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { AnnouncementComposer } from "../../components/AnnouncementComposer";
+import { CardDetailModal, DetailRow } from "../../components/CardDetailModal";
 import type { Subject, Quiz } from "../../types";
 
 interface TeacherDashboardProps {
   onNavigate: (tab: string) => void;
 }
 
-const subjectEnrollmentData = [
-  { name: "CS 301 Data Structures", students: 45, avgScore: 84 },
-  { name: "IT 202 Web Systems", students: 38, avgScore: 79 },
-  { name: "DS 401 Data Science", students: 29, avgScore: 88 },
-];
-
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }) => {
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const { announcements, addAnnouncement, deleteAnnouncement } = useAnnouncements();
+  const { announcements, deleteAnnouncement } = useAnnouncements();
+  const { showToast } = useToast();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const [analytics, setAnalytics] = useState<{ subjects: Record<string, unknown>[] } | null>(null);
   const [showPostModal, setShowPostModal] = useState(false);
-  const [annTitle, setAnnTitle] = useState("");
-  const [annContent, setAnnContent] = useState("");
-  const [annSubjectId, setAnnSubjectId] = useState("");
-  const [annPriority, setAnnPriority] = useState<"high" | "medium" | "low">("medium");
+  const [annToDelete, setAnnToDelete] = useState<string | null>(null);
+  const [detailCard, setDetailCard] = useState<"students" | "courses" | "assessments" | "materials" | null>(null);
+  const [editingAnn, setEditingAnn] = useState<AnnouncementItem | null>(null);
 
-  const [gradingQueue, setGradingQueue] = useState([
-    { id: "g1", student: "Alex Johnson", quiz: "Data Structures & Trees Midterm", submitted: "25 mins ago", score: "8/10", needsFeedback: true },
-    { id: "g2", student: "Maria Garcia", quiz: "Web Systems REST API Quiz", submitted: "1 hour ago", score: "9/10", needsFeedback: true },
-    { id: "g3", student: "David Chen", quiz: "Data Science Pandas Lab", submitted: "3 hours ago", score: "7/10", needsFeedback: false },
-  ]);
-
-  const handlePostAnnouncement = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!annTitle.trim() || !annContent.trim()) return;
-
-    const selectedSub = subjects.find((s) => s.id === annSubjectId);
-    const subName = selectedSub ? `${selectedSub.code} - ${selectedSub.name}` : undefined;
-
-    addAnnouncement({
-      title: annTitle.trim(),
-      content: annContent.trim(),
-      authorName: currentUser?.name || "Faculty Instructor",
-      targetAudience: "students",
-      priority: annPriority,
-      subjectId: selectedSub ? selectedSub.id : undefined,
-      subjectName: subName,
-      tag: selectedSub ? selectedSub.code : annPriority === "high" ? "Urgent Notice" : "Course Bulletin",
-    });
-
-    setAnnTitle("");
-    setAnnContent("");
-    setAnnSubjectId("");
-    setShowPostModal(false);
+  const openEditAnnouncement = (ann: AnnouncementItem) => {
+    setEditingAnn(ann);
+    setShowPostModal(true);
   };
 
   useEffect(() => {
     let isSubscribed = true;
     const fetchData = async () => {
       try {
-        const [subRes, qzRes] = await Promise.all([
+        const [subRes, qzRes, anRes] = await Promise.all([
           authFetch("/api/subjects"),
-          authFetch("/api/quizzes"),
+          authFetch(`/api/quizzes?userId=${encodeURIComponent(currentUser?.id || "")}&userRole=teacher`),
+          currentUser?.id
+            ? authFetch(`/api/analytics/teacher?teacherId=${encodeURIComponent(currentUser.id)}`)
+            : Promise.resolve(null),
         ]);
         if (subRes.ok && isSubscribed) {
           const subData = await subRes.json();
@@ -76,6 +56,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
           const qzData = await qzRes.json();
           setQuizzes(qzData);
         }
+        if (anRes && anRes.ok && isSubscribed) {
+          const anData = await anRes.json();
+          setAnalytics(anData);
+        }
       } catch (err) {
         console.error("Teacher dashboard fetch error:", err);
       }
@@ -84,23 +68,29 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
     return () => {
       isSubscribed = false;
     };
-  }, []);
+  }, [currentUser?.id]);
 
-  const totalStudents = subjects.reduce((sum, s) => sum + (s.studentCount || 0), 0) || 112;
+  const totalStudents = subjects.reduce((sum, s) => sum + (s.studentCount || 0), 0);
+  const totalMaterials = subjects.reduce((sum, s) => sum + (s.materialCount || 0), 0);
   const totalQuizzes = quizzes.length;
   const publishedQuizzes = quizzes.filter((q) => q.isPublished).length;
 
   const handleExportReport = () => {
+    const anMap = new Map<string, Record<string, unknown>>(
+      (analytics?.subjects ?? []).map((s) => [String(s.subjectId), s])
+    );
     const csvContent =
       "data:text/csv;charset=utf-8," +
-      "Subject Code,Subject Name,Enrolled Students,Created Materials,Assessments,Avg Pass Rate\n" +
+      "Subject Code,Subject Name,Enrolled Students,Created Materials,Assessments,Avg Score (%),Pass Rate (%)\n" +
       subjects
-        .map(
-          (s) =>
-            `"${s.code}","${s.name}",${s.studentCount},${s.materialCount},${
-              quizzes.filter((q) => q.subjectId === s.id).length
-            },82%`
-        )
+        .map((s) => {
+          const a = anMap.get(s.id);
+          const avg = typeof a?.averageScore === "number" ? a.averageScore : "—";
+          const pass = typeof a?.passRate === "number" ? a.passRate : "—";
+          return `"${s.code}","${s.name}",${s.studentCount},${s.materialCount},${
+            quizzes.filter((q) => q.subjectId === s.id).length
+          },${avg},${pass}`;
+        })
         .join("\n");
 
     const encodedUri = encodeURI(csvContent);
@@ -110,50 +100,37 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    showToast("Faculty report exported as CSV.");
   };
 
-  const handleClearGradingItem = (id: string) => {
-    setGradingQueue((prev) => prev.filter((item) => item.id !== id));
-  };
+  const enrollmentData = subjects.map((s) => ({
+    name: s.code,
+    students: s.studentCount || 0,
+  }));
 
   return (
     <div className="space-y-6">
-      {/* Teacher Header Banner - Purple / Indigo Accent */}
-      <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-purple-50/50 border border-purple-200/80 text-slate-900 dark:from-purple-950 dark:via-indigo-950 dark:to-slate-950 dark:border-purple-900/30 dark:text-white rounded-3xl p-6 shadow-sm dark:shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors">
-        <div className="space-y-2">
-          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-purple-100 text-purple-800 border border-purple-200/80 dark:bg-purple-500/30 dark:text-purple-200 dark:border-purple-400/20 text-xs font-semibold backdrop-blur-xs">
-            <Sparkles className="w-3.5 h-3.5 text-purple-600 dark:text-purple-300" />
-            <span>Faculty & Course Instructor Portal</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white">
-            Faculty Dashboard — {currentUser?.name || "Dr. Sarah Smith"}
+      {/* Welcome header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="space-y-1.5">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
+            Welcome back, {currentUser?.name?.split(" ")[0] || "there"}!
           </h1>
-          <p className="text-slate-600 dark:text-purple-100 text-xs sm:text-sm max-w-xl leading-relaxed">
-            Manage course materials, build custom quizzes, trigger AI question generators, and review student attempt performance metrics across active departments.
+          <p className="text-sm text-muted-foreground">
+            Here's what's happening in your classes today.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
-            onClick={() => setShowPostModal(true)}
+            onClick={() => {
+              setEditingAnn(null);
+              setShowPostModal(true);
+            }}
             className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
           >
             <Megaphone className="w-4 h-4" />
             <span>Post Notice</span>
-          </button>
-          <button
-            onClick={() => onNavigate("assessments")}
-            className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Create Quiz</span>
-          </button>
-          <button
-            onClick={() => onNavigate("ai-assistant")}
-            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>AI Resource Generator</span>
           </button>
           <button
             onClick={handleExportReport}
@@ -165,86 +142,109 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
         </div>
       </div>
 
-      {/* 4 Faculty Overview Key Metrics */}
+      {/* Faculty Overview Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-card p-5 rounded-2xl border border-border shadow-xs flex items-center space-x-4">
-          <div className="p-3 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-xl">
-            <Users className="w-6 h-6" />
-          </div>
-          <div>
+        <button
+          type="button"
+          onClick={() => setDetailCard("students")}
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-purple-500/50 hover:shadow-xs transition-all group"
+        >
+          <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Active Students</p>
-            <p className="text-2xl font-black text-foreground">{totalStudents}</p>
-            <p className="text-[11px] text-purple-600 dark:text-purple-400 font-medium mt-0.5">Enrolled in 3 Courses</p>
-          </div>
-        </div>
-
-        <div className="bg-card p-5 rounded-2xl border border-border shadow-xs flex items-center space-x-4">
-          <div className="p-3 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-xl">
-            <FolderKanban className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground">Assigned Courses</p>
-            <p className="text-2xl font-bold text-foreground">{subjects.length || 3}</p>
-            <p className="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium mt-0.5">Active Term Catalog</p>
-          </div>
-        </div>
-
-        <div className="bg-card p-5 rounded-2xl border border-border shadow-xs flex items-center space-x-4">
-          <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl">
-            <BookCheck className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground">Assessments Created</p>
-            <p className="text-2xl font-bold text-foreground">{totalQuizzes}</p>
-            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
-              {publishedQuizzes} Published to Students
+            <p className="text-3xl font-extrabold text-foreground tracking-tight">{totalStudents}</p>
+            <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1">
+              Enrolled across {subjects.length} subject{subjects.length === 1 ? "" : "s"}
             </p>
           </div>
-        </div>
+          <div className="p-3 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-2xl shrink-0 relative">
+            <Users className="w-6 h-6" />
+            <ChevronRight className="w-3 h-3 absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+        </button>
 
-        <div className="bg-card p-5 rounded-2xl border border-border shadow-xs flex items-center space-x-4">
-          <div className="p-3 bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-xl">
+        <button
+          type="button"
+          onClick={() => setDetailCard("courses")}
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-indigo-500/50 hover:shadow-xs transition-all group"
+        >
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-muted-foreground">Assigned Courses</p>
+            <p className="text-3xl font-extrabold text-foreground tracking-tight">{subjects.length}</p>
+          </div>
+          <div className="p-3 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-2xl shrink-0 relative">
+            <FolderKanban className="w-6 h-6" />
+            <ChevronRight className="w-3 h-3 absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setDetailCard("assessments")}
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-emerald-500/50 hover:shadow-xs transition-all group"
+        >
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-muted-foreground">Assessments Created</p>
+            <p className="text-3xl font-extrabold text-foreground tracking-tight">{totalQuizzes}</p>
+            <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1">
+              {publishedQuizzes} published to students
+            </p>
+          </div>
+          <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-2xl shrink-0 relative">
+            <BookCheck className="w-6 h-6" />
+            <ChevronRight className="w-3 h-3 absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setDetailCard("materials")}
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-amber-500/50 hover:shadow-xs transition-all group"
+        >
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-muted-foreground">Materials Uploaded</p>
+            <p className="text-3xl font-extrabold text-foreground tracking-tight">{totalMaterials}</p>
+          </div>
+          <div className="p-3 bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-2xl shrink-0 relative">
             <Award className="w-6 h-6" />
+            <ChevronRight className="w-3 h-3 absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground">Avg Class Score</p>
-            <p className="text-2xl font-bold text-foreground">82%</p>
-            <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium mt-0.5">+4% from last exam</p>
-          </div>
-        </div>
+        </button>
       </div>
 
       {/* Main Grid: Subject Distribution Chart + Grading Queue */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Subject Enrollment & Performance Chart (2 cols) */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="bg-card p-6 rounded-2xl border border-border shadow-xs space-y-4">
+          <div className="bg-card p-6 rounded-2xl border border-border shadow-2xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                  <BarChart2 className="w-5 h-5 text-purple-600 dark:text-purple-400" /> Class Size & Score Distribution
+                  <BarChart2 className="w-5 h-5 text-purple-600 dark:text-purple-400" /> Class Size by Subject
                 </h3>
-                <p className="text-xs text-muted-foreground">Enrolled student count and average pass rate by subject</p>
+                <p className="text-xs text-muted-foreground">Enrolled student count per subject</p>
               </div>
             </div>
 
-            <div className="h-64 w-full pt-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={subjectEnrollmentData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
-                  <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", border: "1px solid #334155", color: "#f8fafc", fontSize: "12px" }}
-                  />
-                  <Bar dataKey="students" fill="#8b5cf6" name="Enrolled Students" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="avgScore" fill="#3b82f6" name="Avg Score (%)" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            {enrollmentData.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-10 text-center">No subjects yet.</p>
+            ) : (
+              <div className="h-64 w-full pt-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={enrollmentData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                    <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", border: "1px solid #334155", color: "#f8fafc", fontSize: "12px" }}
+                    />
+                    <Bar dataKey="students" fill="#8b5cf6" name="Enrolled Students" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
 
           {/* Active Subjects Table / Cards */}
-          <div className="bg-card p-6 rounded-2xl border border-border shadow-xs space-y-4">
+          <div className="bg-card p-6 rounded-2xl border border-border shadow-2xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold text-foreground">Faculty Subject List</h3>
@@ -289,33 +289,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
           </div>
 
           {/* Active Course Bulletins & Announcements */}
-          <div className="bg-card p-6 rounded-2xl border border-border shadow-xs space-y-4">
+          <div className="bg-card p-6 rounded-2xl border border-border shadow-2xs space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <div className="p-2 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-xl">
-                  <Megaphone className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-foreground">Active Course Bulletins & Announcements</h3>
-                  <p className="text-xs text-muted-foreground">Notices published to students across your active course subjects</p>
-                </div>
-              </div>
+              <h3 className="text-base font-bold text-foreground">Announcements</h3>
 
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setShowPostModal(true)}
-                  className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Post Notice</span>
-                </button>
-                <button
-                  onClick={() => onNavigate("announcements")}
-                  className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:underline cursor-pointer"
-                >
-                  View All →
-                </button>
-              </div>
+              <button
+                onClick={() => onNavigate("announcements")}
+                className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:underline cursor-pointer"
+              >
+                View All →
+              </button>
             </div>
 
             <div className="space-y-3">
@@ -340,22 +323,21 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
                               : "bg-blue-500/10 text-blue-600 border border-blue-500/20"
                           }`}
                         >
-                          {ann.priority || "medium"} Priority
+                          {ann.priority || "medium"}
                         </span>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-muted text-muted-foreground uppercase">
-                          Audience: {ann.targetAudience}
-                        </span>
-                        {ann.tag && (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
-                            {ann.tag}
-                          </span>
-                        )}
                       </div>
 
                       <div className="flex items-center space-x-2">
-                        <span className="text-[11px] text-muted-foreground font-mono">{ann.createdAt}</span>
+                        <RelativeTime iso={ann.createdAt} className="text-[11px] text-muted-foreground" />
                         <button
-                          onClick={() => deleteAnnouncement(ann.id)}
+                          onClick={() => openEditAnnouncement(ann)}
+                          className="p-1 text-amber-600 hover:text-amber-700 rounded cursor-pointer"
+                          title="Edit Bulletin"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setAnnToDelete(ann.id)}
                           className="p-1 text-rose-600 hover:text-rose-700 rounded cursor-pointer"
                           title="Delete Bulletin"
                         >
@@ -379,167 +361,170 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
           </div>
         </div>
 
-        {/* Sidebar Column: Pending Grading Queue */}
+        {/* Sidebar Column: Quick AI Actions */}
         <div className="space-y-6">
-          <div className="bg-card p-5 rounded-2xl border border-border shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div className="flex items-center space-x-2">
-                <Clock className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                <h3 className="text-sm font-bold text-foreground">Pending Grading Queue</h3>
-              </div>
-              <span className="px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[10px] font-bold">
-                {gradingQueue.length} Queue
-              </span>
-            </div>
-
-            <div className="space-y-3">
-              {gradingQueue.map((item) => (
-                <div key={item.id} className="p-3.5 rounded-xl border border-border bg-muted/20 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-foreground">{item.student}</span>
-                    <span className="text-[10px] text-muted-foreground font-mono">{item.submitted}</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground font-medium">{item.quiz}</p>
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">Score: {item.score}</span>
-                    <button
-                      onClick={() => handleClearGradingItem(item.id)}
-                      className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-semibold rounded-lg transition-colors flex items-center gap-1"
-                    >
-                      <CheckCircle2 className="w-3 h-3" />
-                      <span>Review & Release</span>
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-              {gradingQueue.length === 0 && (
-                <div className="p-4 text-center text-xs text-muted-foreground">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto mb-1" />
-                  All submissions graded!
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Teacher AI Quick Actions */}
-          <div className="bg-gradient-to-br from-purple-900 to-indigo-950 p-5 rounded-2xl text-white shadow-md space-y-3">
-            <div className="flex items-center space-x-2">
-              <Sparkles className="w-5 h-5 text-purple-300" />
-              <h4 className="text-sm font-bold">AI Quiz Generator</h4>
-            </div>
-            <p className="text-xs text-purple-200 leading-relaxed">
-              Upload any lecture note or PDF document to instantly synthesize Bloom's taxonomy assessments for your students.
+          <div className="bg-card p-5 rounded-2xl border border-border shadow-2xs space-y-3">
+            <h4 className="text-sm font-bold text-foreground">Generate Study Materials</h4>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Create quizzes, flashcards, or summaries from your lecture notes and documents.
             </p>
             <button
               onClick={() => onNavigate("ai-assistant")}
-              className="w-full py-2.5 bg-purple-500 hover:bg-purple-400 text-white font-bold text-xs rounded-xl transition-all shadow-md flex items-center justify-center space-x-1"
+              className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a43c4] text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center space-x-1"
             >
               <MessageSquare className="w-4 h-4" />
-              <span>Launch Creator Studio</span>
+              <span>Launch AI Study Assistant</span>
+            </button>
+            <button
+              onClick={() => onNavigate("flashcards")}
+              className="w-full py-2.5 bg-[#5b51d8]/10 hover:bg-[#5b51d8]/20 text-[#5b51d8] dark:text-[#818cf8] font-bold text-xs rounded-xl transition-all flex items-center justify-center space-x-1"
+            >
+              <Layers className="w-4 h-4" />
+              <span>Open Flashcards Deck</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* POST ANNOUNCEMENT MODAL FOR TEACHER */}
-      {showPostModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-card border border-border rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-border">
-              <div className="flex items-center space-x-2">
-                <div className="p-2 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-xl">
-                  <Megaphone className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-foreground">Post Course Announcement</h3>
-                  <p className="text-xs text-muted-foreground">Broadcast notice to enrolled students</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowPostModal(false)}
-                className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      <AnnouncementComposer
+        open={showPostModal}
+        onClose={() => { setShowPostModal(false); setEditingAnn(null); }}
+        editingAnn={editingAnn}
+      />
 
-            <form onSubmit={handlePostAnnouncement} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold mb-1">Notice Title</label>
-                <input
-                  type="text"
-                  required
-                  value={annTitle}
-                  onChange={(e) => setAnnTitle(e.target.value)}
-                  placeholder="e.g. Midterm Coverage & Lab Submission Deadline"
-                  className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-purple-500"
+      <ConfirmDialog
+        open={annToDelete !== null}
+        title="Delete Bulletin"
+        message='Are you sure you want to delete this announcement? This action cannot be undone.'
+        confirmLabel="Yes, Delete"
+        destructive
+        onConfirm={() => {
+          if (annToDelete) {
+            deleteAnnouncement(annToDelete);
+            showToast("Announcement deleted.");
+          }
+          setAnnToDelete(null);
+        }}
+        onCancel={() => setAnnToDelete(null)}
+      />
+
+      <CardDetailModal
+        open={detailCard === "students"}
+        title="Active Students"
+        subtitle={`${totalStudents} student${totalStudents === 1 ? "" : "s"} enrolled across your ${subjects.length} course subject${subjects.length === 1 ? "" : "s"}.`}
+        onClose={() => setDetailCard(null)}
+      >
+        {subjects.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No assigned subjects yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {subjects.map((s) => (
+              <li key={s.id}>
+                <DetailRow
+                  label={`${s.code} — ${s.name}`}
+                  trailing={
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                      {s.studentCount || 0} enrolled
+                    </span>
+                  }
+                  onClick={() => navigate(`/subjects/${s.id}`)}
                 />
-              </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardDetailModal>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold mb-1">Associated Course Subject</label>
-                  <select
-                    value={annSubjectId}
-                    onChange={(e) => setAnnSubjectId(e.target.value)}
-                    className="w-full p-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white font-semibold"
-                  >
-                    <option value="" className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">-- Select Enrolled Subject --</option>
-                    {subjects.map((s) => (
-                      <option key={s.id} value={s.id} className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">
-                        {s.code} - {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-bold mb-1">Notice Priority</label>
-                  <select
-                    value={annPriority}
-                    onChange={(e) => setAnnPriority(e.target.value as "high" | "medium" | "low")}
-                    className="w-full p-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white font-semibold"
-                  >
-                    <option value="high" className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">High (Urgent Red)</option>
-                    <option value="medium" className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">Medium (Standard Amber)</option>
-                    <option value="low" className="bg-white text-slate-900 dark:bg-[#182238] dark:text-white font-medium">Low (General Blue)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold mb-1">Notice Details & Content</label>
-                <textarea
-                  required
-                  rows={4}
-                  value={annContent}
-                  onChange={(e) => setAnnContent(e.target.value)}
-                  placeholder="Provide clear details regarding exam schedules, assignment updates, or lecture materials..."
-                  className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-purple-500"
+      <CardDetailModal
+        open={detailCard === "courses"}
+        title="Assigned Courses"
+        subtitle={`You are currently assigned to ${subjects.length} course subject${subjects.length === 1 ? "" : "s"}.`}
+        onClose={() => setDetailCard(null)}
+      >
+        {subjects.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No assigned subjects yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {subjects.map((s) => (
+              <li key={s.id}>
+                <DetailRow
+                  label={`${s.code} — ${s.name}`}
+                  sublabel={[s.semester, s.course].filter(Boolean).join(" • ") || undefined}
+                  onClick={() => navigate(`/subjects/${s.id}`)}
                 />
-              </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardDetailModal>
 
-              <div className="pt-3 flex justify-end space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setShowPostModal(false)}
-                  className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground font-semibold rounded-xl cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-md cursor-pointer flex items-center space-x-1.5"
-                >
-                  <Megaphone className="w-3.5 h-3.5" />
-                  <span>Publish Notice</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <CardDetailModal
+        open={detailCard === "assessments"}
+        title="Assessments Created"
+        subtitle={`${totalQuizzes} assessment${totalQuizzes === 1 ? "" : "s"} total, ${publishedQuizzes} published to students.`}
+        onClose={() => setDetailCard(null)}
+      >
+        {quizzes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No assessments created yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {quizzes.map((q) => (
+              <li key={q.id}>
+                <DetailRow
+                  label={q.title}
+                  sublabel={q.subjectName}
+                  trailing={
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                        q.isPublished
+                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {q.isPublished ? "Published" : "Draft"}
+                    </span>
+                  }
+                  onClick={() => {
+                    setDetailCard(null);
+                    onNavigate("assessments");
+                  }}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardDetailModal>
+
+      <CardDetailModal
+        open={detailCard === "materials"}
+        title="Materials Uploaded"
+        subtitle={`${totalMaterials} learning material${totalMaterials === 1 ? "" : "s"} across all of your subjects.`}
+        onClose={() => setDetailCard(null)}
+      >
+        {subjects.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No assigned subjects yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {subjects.map((s) => (
+              <li key={s.id}>
+                <DetailRow
+                  label={`${s.code} — ${s.name}`}
+                  sublabel={`Open the materials library for this subject`}
+                  trailing={
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                      {s.materialCount || 0} material{(s.materialCount || 0) === 1 ? "" : "s"}
+                    </span>
+                  }
+                  onClick={() => {
+                    setDetailCard(null);
+                    onNavigate("materials");
+                  }}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardDetailModal>
     </div>
   );
 };

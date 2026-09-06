@@ -65,11 +65,12 @@ export interface QuizQuestion {
   question: string;
   type: QuestionType;
   options?: string[];
-  correctAnswer: string | number; // index or text string
+  correctAnswer: string | number | number[]; // index (or text for identification); array = multiple correct options
   explanation: string;
   bloomsLevel: BloomsTaxonomy;
   difficulty: DifficultyLevel;
   topicTag: string;
+  isNew?: boolean; // flagged on questions added in a follow-up "add more" turn
 }
 
 export interface Quiz {
@@ -83,10 +84,19 @@ export interface Quiz {
   createdByName: string;
   quizType?: "teacher" | "student";
   questions: QuizQuestion[];
+  instructions?: string | null;
   isPublished: boolean;
   timeLimitMinutes?: number;
   passPercentage: number;
   difficulty: DifficultyLevel;
+  attemptsAllowed?: number; // 0 = unlimited (default)
+  attemptsUsed?: number; // student requester only, from quiz list
+  lastScore?: number; // latest attempt percentage (student requester only)
+  bestScore?: number; // highest attempt percentage (student requester only)
+  lastScoreRaw?: number; // latest attempt raw score (student requester only)
+  lastMaxScore?: number; // latest attempt max score (student requester only)
+  revealAnswers?: boolean; // teacher toggle: students can see correct answers
+  deadline?: string | null; // ISO timestamp: submissions blocked after this
   createdAt: string;
 }
 
@@ -94,6 +104,19 @@ export interface QuizAnswerSubmission {
   questionId: string;
   userAnswer: string | number;
   isCorrect: boolean;
+}
+
+export interface QuizFeedbackItem {
+  questionId: string;
+  question: string;
+  options?: (string | number)[];
+  userAnswer?: string | number | null;
+  correctAnswer?: string | number | (string | number)[] | null;
+  isCorrect: boolean;
+  explanation?: string;
+  topic?: string;
+  bloomsLevel?: string;
+  difficulty?: string;
 }
 
 export interface QuizAttempt {
@@ -106,11 +129,14 @@ export interface QuizAttempt {
   subjectName: string;
   score: number;
   maxScore: number;
+  totalPoints: number;
   percentage: number;
   passed: boolean;
   answers: QuizAnswerSubmission[];
+  feedback?: QuizFeedbackItem[];
   weakTopics: string[];
   strongTopics: string[];
+  submittedAt: string;
   completedAt: string;
 }
 
@@ -174,6 +200,12 @@ export interface TopicPerformance {
   accuracyPercentage: number;
 }
 
+export interface MasteredTopic {
+  topic: string;
+  currentAccuracy: number;
+  improvedFrom?: number | null;
+}
+
 export interface StudentProgress {
   studentId: string;
   totalQuizzesTaken: number;
@@ -183,7 +215,35 @@ export interface StudentProgress {
   topicPerformances: TopicPerformance[];
   weakTopics: string[];
   strongTopics: string[];
+  masteredTopics?: MasteredTopic[];
   recentQuizAttempts: QuizAttempt[];
+}
+
+export interface SubjectStudentGrade {
+  studentId: string;
+  studentName: string;
+  attemptCount: number;
+  averagePercentage: number;
+  attempts: QuizAttempt[];
+}
+
+export interface SubjectGrades {
+  subjectId: string;
+  subjectName: string;
+  studentId?: string;
+  studentName?: string;
+  attemptCount?: number;
+  averagePercentage?: number;
+  attempts?: QuizAttempt[];
+  students?: SubjectStudentGrade[];
+}
+
+export interface RecommendationStep {
+  step: number;
+  type: "review" | "flashcard" | "reviewer" | "quiz" | "summary";
+  title: string;
+  targetId: string | null;
+  difficultyTarget: DifficultyLevel;
 }
 
 export interface Recommendation {
@@ -195,6 +255,8 @@ export interface Recommendation {
   description: string;
   targetId: string; // quizId or reviewerId or deckId
   difficultyTarget: DifficultyLevel;
+  accuracyPercentage?: number | null;
+  steps?: RecommendationStep[];
   createdAt: string;
 }
 
@@ -216,5 +278,17 @@ export interface ActivityLog {
   action: string;
   details: string;
   ipAddress?: string;
+  device?: string;
+  browser?: string;
   timestamp: string;
+}
+
+export interface GeneratedReport {
+  id: string;
+  generatedBy: string;
+  reportType: "Student Performance" | "Quiz Analytics" | "Subject Summary" | "AI Usage";
+  generatedAt: string;
+  title: string;
+  targetId?: string | null;
+  summary?: Record<string, unknown> | null;
 }

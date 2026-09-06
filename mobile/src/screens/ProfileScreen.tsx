@@ -1,163 +1,353 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Alert } from 'react-native';
-import { User, LogOut, Moon, Sun, GraduationCap, Building2, FileBadge, Sparkles, PenLine, Save, ShieldCheck } from 'lucide-react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { Building2, Calendar, CheckCircle2, Edit3, Save, Camera, FileBadge, Trash2, Moon, Sun } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { uploadAvatar, resolveMaterialFileUrl } from '../services/api';
 import { Card, Badge, Field, PrimaryButton, OutlineButton, SectionHeader, Modal } from '../components/ui';
 
 export default function ProfileScreen({ onNavigate }: { onNavigate: (tab: string) => void }) {
   const { colors, isDark, toggleTheme } = useTheme();
-  const { currentUser, updateProfile, logout, switchRole } = useAuth();
+  const { currentUser, updateProfile, logout, changePassword } = useAuth();
+  const { showToast } = useToast();
 
-  const [editOpen, setEditOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(currentUser?.name || '');
-  const [email, setEmail] = useState(currentUser?.email || '');
-  const [department, setDepartment] = useState(currentUser?.department || '');
-  const [studentId, setStudentId] = useState(currentUser?.studentId || '');
-  const [saving, setSaving] = useState(false);
+
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
+
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [removingAvatar, setRemovingAvatar] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
 
   if (!currentUser) return null;
 
   const initial = (currentUser.name || 'U').charAt(0).toUpperCase();
-  const roleLabel = currentUser.role === 'teacher' ? 'Teacher' : 'Student';
+  const initials = currentUser.name
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
 
-  const saveProfile = async () => {
-    setSaving(true);
+  const pickAvatar = async () => {
+    if (!currentUser || uploadingAvatar || !isEditing) return;
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      showToast('Allow photo library access to choose a profile photo.', 'error');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    setUploadingAvatar(true);
     try {
-      await updateProfile({ name: name.trim() || currentUser.name, email: email.trim() || currentUser.email, department: department.trim(), studentId: studentId.trim() });
-      Alert.alert('Profile updated', 'Your changes have been saved on this device.');
-      setEditOpen(false);
+      const ext = (asset.mimeType?.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+      const updated = await uploadAvatar(
+        currentUser.id,
+        asset.uri,
+        `avatar_${Date.now()}.${ext}`,
+        asset.mimeType || 'image/jpeg'
+      );
+      await updateProfile({ avatar: updated.avatar });
+      showToast('Profile photo updated.');
     } catch (err) {
-      Alert.alert('Error', 'Could not save profile changes.');
+      showToast((err as Error).message || 'Could not upload the profile photo.', 'error');
     } finally {
-      setSaving(false);
+      setUploadingAvatar(false);
+    }
+  };
+
+  const removePhoto = async () => {
+    if (!currentUser?.avatar || removingAvatar) return;
+    setRemovingAvatar(true);
+    try {
+      await updateProfile({ avatar: null });
+      showToast('Profile photo removed.');
+    } catch (err) {
+      showToast((err as Error).message || 'Could not remove the profile photo.', 'error');
+    } finally {
+      setRemovingAvatar(false);
+    }
+  };
+
+  const handleSave = () => {
+    if (!name.trim()) {
+      showToast('Full name is required.', 'error');
+      return;
+    }
+    setIsEditing(false);
+    updateProfile({ name: name.trim() }).catch(() => showToast('Could not save profile changes.', 'error'));
+    showToast('Profile updated successfully!');
+  };
+
+  const handlePasswordChange = async () => {
+    if (!newPassword || newPassword.length < 6) {
+      showToast('Password must be at least 6 characters.', 'error');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showToast('Passwords do not match.', 'error');
+      return;
+    }
+    setPasswordSubmitting(true);
+    try {
+      await changePassword(currentPassword, newPassword);
+      showToast('Password updated successfully!');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setShowPasswordChange(false);
+    } catch (err) {
+      showToast((err as Error).message || 'Could not update the password. Check your current password and try again.', 'error');
+    } finally {
+      setPasswordSubmitting(false);
     }
   };
 
   const confirmLogout = () => {
-    Alert.alert('Log out of StudyLens AI?', 'Your session will be cleared from this device.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log Out', style: 'destructive', onPress: () => logout() },
-    ]);
+    setLogoutOpen(true);
   };
+
+  const doLogout = () => {
+    setLogoutOpen(false);
+    logout();
+  };
+
+  const roleBadge = (() => {
+    switch (currentUser.role) {
+      case 'admin':
+        return { label: 'System Administrator', color: '#e11d48' };
+      case 'teacher':
+        return { label: 'Faculty Instructor', color: '#9333ea' };
+      default:
+        return { label: 'Enrolled Student', color: colors.primary };
+    }
+  })();
+
+  const roleInfo = (() => {
+    switch (currentUser.role) {
+      case 'student':
+        return {
+          description:
+            "You're enrolled in your subjects and have everything you need to study — AI-generated quizzes, flashcards, summaries, and reviewers built from your actual lecture materials, plus your own progress analytics.",
+          highlights: [
+            'Study your enrolled subjects and course materials',
+            'Take teacher quizzes and personal practice drills',
+            'Generate AI quizzes, flashcards, and reviewers',
+            'Track your mastery and get study recommendations',
+          ],
+        };
+      case 'teacher':
+        return {
+          description:
+            'You manage your assigned subjects and publish everything students need — lecture materials, quizzes, and class announcements — while keeping an eye on how the class is performing.',
+          highlights: [
+            'Upload and organize lecture materials',
+            'Build, publish, and manage quizzes',
+            'Post class bulletins and announcements',
+            'Monitor student progress and performance',
+          ],
+        };
+      default:
+        return {
+          description:
+            'You keep the platform running smoothly — managing accounts and roles, maintaining the subject catalog, moderating materials, and watching over activity and system performance.',
+          highlights: [
+            'Manage user accounts and assign roles',
+            'Maintain the subject catalog and rosters',
+            'Moderate uploaded learning materials',
+            'Review activity logs and system performance',
+          ],
+        };
+    }
+  })();
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={styles.content}>
-      {/* Profile banner */}
-      <View style={[styles.banner, { backgroundColor: colors.surfaceAlt }]}>
-        <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
-          <Text style={[styles.avatarText, { color: '#fff' }]}>{initial}</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.bannerTitle, { color: colors.foreground }]} numberOfLines={1}>
-            {currentUser.name}
-          </Text>
-          <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>{currentUser.email}</Text>
-          <View style={styles.roleRow}>
-            <Badge text={roleLabel} color={currentUser.role === 'teacher' ? '#2563eb' : colors.primary} bg={currentUser.role === 'teacher' ? 'rgba(37,99,235,0.12)' : colors.indigoSoft} />
-            {currentUser.status === 'active' && <Badge text="Active" color={colors.success} bg={colors.successSoft} />}
+      {/* Hero banner */}
+      <View style={[styles.banner, { backgroundColor: colors.primary }]}>
+        <View style={styles.bannerInner}>
+          <View>
+            <TouchableOpacity
+              onPress={isEditing ? pickAvatar : undefined}
+              disabled={!isEditing || uploadingAvatar}
+              style={[styles.avatar, { backgroundColor: 'rgba(255,255,255,0.2)', overflow: 'hidden' }]}
+            >
+              {currentUser.avatar ? (
+                <Image source={{ uri: resolveMaterialFileUrl(currentUser.avatar) || undefined }} style={styles.avatarImage} />
+              ) : uploadingAvatar ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.avatarText}>{initials || initial}</Text>
+              )}
+            </TouchableOpacity>
+            {isEditing && (
+              <View style={[styles.avatarBadge, { backgroundColor: '#fff' }]}>
+                <Camera size={11} color={colors.primary} />
+              </View>
+            )}
+            {isEditing && currentUser.avatar && (
+              <TouchableOpacity onPress={removePhoto} disabled={removingAvatar} style={[styles.avatarRemove, { backgroundColor: colors.danger }]}>
+                {removingAvatar ? <ActivityIndicator size="small" color="#fff" /> : <Trash2 size={11} color="#fff" />}
+              </TouchableOpacity>
+            )}
           </View>
+
+          <View style={styles.bannerBody}>
+            <View style={styles.nameRow}>
+              <Text style={styles.bannerName} numberOfLines={1}>{currentUser.name}</Text>
+              <Badge text={roleBadge.label} color="#fff" bg="rgba(255,255,255,0.18)" />
+            </View>
+            <Text style={styles.bannerEmail}>{currentUser.email}</Text>
+            <View style={styles.bannerMeta}>
+              <View style={styles.metaItem}>
+                <Building2 size={13} color="rgba(255,255,255,0.85)" />
+                <Text style={styles.metaText}>{currentUser.department || 'General Department'}</Text>
+              </View>
+              {currentUser.studentId ? (
+                <View style={styles.metaItem}>
+                  <FileBadge size={13} color="rgba(255,255,255,0.85)" />
+                  <Text style={[styles.metaText, { fontFamily: 'monospace' }]}>ID: {currentUser.studentId}</Text>
+                </View>
+              ) : null}
+              <View style={styles.metaItem}>
+                <Calendar size={13} color="rgba(255,255,255,0.85)" />
+                <Text style={styles.metaText}>Joined {new Date(currentUser.createdAt).toLocaleDateString()}</Text>
+              </View>
+            </View>
+          </View>
+
+          {!isEditing ? (
+            <TouchableOpacity onPress={() => { setName(currentUser.name); setIsEditing(true); }} style={styles.editBtn}>
+              <Edit3 size={13} color="#fff" />
+              <Text style={styles.editBtnText}>Edit Profile</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity onPress={handleSave} style={styles.editBtn}>
+              <Save size={13} color="#fff" />
+              <Text style={styles.editBtnText}>Save Edit</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
-      {/* Info */}
-      <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border, gap: 12 }]}>
+      {/* Account details */}
+      <Card style={styles.panel}>
         <SectionHeader title="Account Details" />
-        {currentUser.studentId && (
-          <View style={styles.infoRow}>
-            <View style={[styles.infoIcon, { backgroundColor: colors.indigoSoft }]}>
-              <FileBadge size={16} color={colors.primary} />
+        {isEditing ? (
+          <View style={{ gap: 12 }}>
+            <Field label="Full Name" value={name} onChangeText={setName} placeholder="Your name" />
+            <View>
+              <Text style={styles.readOnlyLabel}>Department / Faculty (Read-only)</Text>
+              <View style={[styles.readOnlyBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+                <Text style={{ color: colors.mutedForeground, fontSize: 13, fontWeight: '600' }}>{currentUser.department || 'General'}</Text>
+              </View>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Student ID</Text>
-              <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>{currentUser.studentId}</Text>
+            <View>
+              <Text style={styles.readOnlyLabel}>Email Address (Read-only)</Text>
+              <View style={[styles.readOnlyBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+                <Text style={{ color: colors.mutedForeground, fontSize: 13, fontWeight: '600' }}>{currentUser.email}</Text>
+              </View>
+            </View>
+            <View style={styles.btnRow}>
+              <OutlineButton label="Cancel" onPress={() => setIsEditing(false)} style={{ flex: 1 }} />
+              <PrimaryButton label="Save Changes" onPress={handleSave} disabled={!name.trim()} style={{ flex: 1 }} />
+            </View>
+          </View>
+        ) : (
+          <View style={{ gap: 8 }}>
+            <View style={[styles.detailBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+              <Text style={styles.detailLabel}>Full Name</Text>
+              <Text style={[styles.detailValue, { color: colors.foreground }]}>{currentUser.name}</Text>
+            </View>
+            <View style={[styles.detailBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+              <Text style={styles.detailLabel}>Email Address</Text>
+              <Text style={[styles.detailValue, { color: colors.foreground }]}>{currentUser.email}</Text>
+            </View>
+            <View style={[styles.detailBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+              <Text style={styles.detailLabel}>User Role</Text>
+              <Text style={[styles.detailValue, { color: colors.foreground, textTransform: 'capitalize' }]}>{currentUser.role}</Text>
+            </View>
+            <View style={[styles.detailBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+              <Text style={styles.detailLabel}>Department</Text>
+              <Text style={[styles.detailValue, { color: colors.foreground }]}>{currentUser.department || 'General'}</Text>
             </View>
           </View>
         )}
-        <View style={styles.infoRow}>
-          <View style={[styles.infoIcon, { backgroundColor: colors.successSoft }]}>
-            <GraduationCap size={16} color={colors.success} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Department</Text>
-            <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>{currentUser.department || 'Not set'}</Text>
-          </View>
-        </View>
-        <View style={styles.infoRow}>
-          <View style={[styles.infoIcon, { backgroundColor: colors.warningSoft }]}>
-            <Building2 size={16} color={colors.warning} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Institution</Text>
-            <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>University of Cebu - Main Campus</Text>
-          </View>
-        </View>
-      </View>
+      </Card>
 
-      {/* Quick actions */}
-      <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border, gap: 8 }]}>
-        <SectionHeader title="Quick Actions" />
-        <TouchableOpacity
-          onPress={() => {
-            setName(currentUser.name);
-            setEmail(currentUser.email);
-            setDepartment(currentUser.department || '');
-            setStudentId(currentUser.studentId || '');
-            setEditOpen(true);
-          }}
-          style={[styles.actionRow, { borderColor: colors.border }]}
-        >
-          <PenLine size={17} color={colors.primary} />
-          <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700', flex: 1 }}>Edit Profile Information</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={toggleTheme} style={[styles.actionRow, { borderColor: colors.border }]}>
+      {/* Security & credentials */}
+      <Card style={styles.panel}>
+        <SectionHeader title="Security & Credentials" />
+        {!showPasswordChange ? (
+          <TouchableOpacity onPress={() => setShowPasswordChange(true)} style={[styles.securityRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]} activeOpacity={0.7}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.securityTitle, { color: colors.foreground }]}>Password Authentication</Text>
+              <Text style={[styles.securitySub, { color: colors.mutedForeground }]}>Keep your StudyLens account protected</Text>
+            </View>
+            <View style={[styles.changePwBtn, { backgroundColor: colors.indigoSoft }]}>
+              <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}>Change Password</Text>
+            </View>
+          </TouchableOpacity>
+        ) : (
+          <View style={[styles.securityForm, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+            <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '800' }}>Set New Password</Text>
+            <Field label="Current Password" value={currentPassword} onChangeText={setCurrentPassword} placeholder="Enter your current password" secureTextEntry />
+            <Field label="New Password" value={newPassword} onChangeText={setNewPassword} placeholder="At least 8 characters" secureTextEntry />
+            <Field label="Confirm Password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Re-enter new password" secureTextEntry />
+            <View style={styles.btnRow}>
+              <OutlineButton label="Cancel" onPress={() => { setShowPasswordChange(false); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); }} style={{ flex: 1 }} />
+              <PrimaryButton label={passwordSubmitting ? 'Updating...' : 'Update Password'} onPress={handlePasswordChange} loading={passwordSubmitting} disabled={passwordSubmitting} style={{ flex: 1 }} />
+            </View>
+          </View>
+        )}
+      </Card>
+
+      {/* Appearance */}
+      <Card style={styles.panel}>
+        <TouchableOpacity onPress={toggleTheme} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
           {isDark ? <Sun size={17} color={colors.warning} /> : <Moon size={17} color={colors.primary} />}
           <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700', flex: 1 }}>Toggle Dark / Light Mode</Text>
           <Badge text={isDark ? 'Dark' : 'Light'} color={isDark ? colors.warning : colors.primary} bg={isDark ? colors.warningSoft : colors.indigoSoft} />
         </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => {
-            const targetRole = currentUser.role === 'teacher' ? 'student' : 'teacher';
-            switchRole(targetRole);
-          }}
-          style={[styles.actionRow, { borderColor: colors.border }]}
-        >
-          <ShieldCheck size={17} color={colors.success} />
-          <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700', flex: 1 }}>
-            Switch Role to {currentUser.role === 'teacher' ? 'Student' : 'Teacher'}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => onNavigate('ai-assistant')} style={[styles.actionRow, { borderColor: colors.border }]}>
-          <Sparkles size={17} color="#d97706" />
-          <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700', flex: 1 }}>Open AI Resource Generator</Text>
-        </TouchableOpacity>
-      </View>
+      </Card>
 
-      {/* About */}
-      <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border, gap: 8 }]}>
-        <SectionHeader title="About StudyLens AI" />
-        <Text style={{ color: colors.mutedForeground, fontSize: 12, lineHeight: 19 }}>
-          Adaptive learning & automated assessment generation platform powered by Groq GPT-OSS-120B inference. Built for the
-          College of Computer Studies, University of Cebu - Main Campus.
-        </Text>
-        <Badge text="Version 2.0.0 (Groq GPT-OSS-120B Edition)" color={colors.primary} />
-      </View>
+      {/* About my role */}
+      <Card style={styles.panel}>
+        <SectionHeader title="About My Role" />
+        <Text style={{ color: colors.mutedForeground, fontSize: 12, lineHeight: 19 }}>{roleInfo.description}</Text>
+        <View style={{ gap: 8, marginTop: 10 }}>
+          {roleInfo.highlights.map((h) => (
+            <View key={h} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+              <CheckCircle2 size={14} color={colors.success} style={{ marginTop: 1 }} />
+              <Text style={{ color: colors.mutedForeground, fontSize: 12, flex: 1, lineHeight: 17 }}>{h}</Text>
+            </View>
+          ))}
+        </View>
+      </Card>
 
       <PrimaryButton label="Log Out" color={colors.danger} onPress={confirmLogout} />
       <Text style={{ color: colors.mutedForeground, fontSize: 10, textAlign: 'center' }}>
         Logged in as {currentUser.email}
       </Text>
 
-      {/* Edit modal */}
-      <Modal visible={editOpen} onClose={() => setEditOpen(false)} title="Edit Profile" subtitle="Changes are saved on this device">
+      <Modal visible={logoutOpen} onClose={() => setLogoutOpen(false)} title="Log out of StudyLens AI?" subtitle="Your session will be cleared from this device.">
         <View style={{ gap: 12 }}>
-          <Field label="Full Name" value={name} onChangeText={setName} placeholder="Your name" />
-          <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@studylens.edu" keyboardType="email-address" />
-          <Field label="Department" value={department} onChangeText={setDepartment} placeholder="e.g. Computer Science" />
-          <Field label="Student ID" value={studentId} onChangeText={setStudentId} placeholder="e.g. 2024-STU-0841" />
-          <View style={styles.modalActions}>
-            <OutlineButton label="Cancel" onPress={() => setEditOpen(false)} style={{ flex: 1 }} />
-            <PrimaryButton label="Save Changes" onPress={saveProfile} loading={saving} disabled={saving || !name.trim()} style={{ flex: 1 }} />
+          <View style={styles.btnRow}>
+            <OutlineButton label="Cancel" onPress={() => setLogoutOpen(false)} style={{ flex: 1 }} />
+            <PrimaryButton label="Log Out" color={colors.danger} onPress={doLogout} style={{ flex: 1 }} />
           </View>
         </View>
       </Modal>
@@ -167,14 +357,32 @@ export default function ProfileScreen({ onNavigate }: { onNavigate: (tab: string
 
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 32, gap: 14 },
-  banner: { flexDirection: 'row', alignItems: 'center', gap: 14, borderRadius: 16, padding: 18 },
-  avatar: { width: 62, height: 62, borderRadius: 31, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 26, fontWeight: '900' },
-  bannerTitle: { fontSize: 18, fontWeight: '800' },
-  roleRow: { flexDirection: 'row', gap: 6, marginTop: 6 },
-  panel: { borderRadius: 16, borderWidth: 1, padding: 16 },
-  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  infoIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 12, borderWidth: 1, padding: 13 },
-  modalActions: { flexDirection: 'row', gap: 10, marginTop: 6 },
+  banner: { borderRadius: 16, padding: 18, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  bannerInner: { flexDirection: 'column', gap: 12 },
+  avatar: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center' },
+  avatarImage: { width: 68, height: 68, borderRadius: 34 },
+  avatarBadge: { position: 'absolute', bottom: -1, right: -1, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#5b51d8' },
+  avatarRemove: { position: 'absolute', bottom: -1, right: -1, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#5b51d8' },
+  avatarText: { fontSize: 26, fontWeight: '900', color: '#fff' },
+  bannerBody: { gap: 8 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  bannerName: { fontSize: 20, fontWeight: '800', color: '#fff', maxWidth: '100%' },
+  bannerEmail: { color: 'rgba(255,255,255,0.85)', fontSize: 13 },
+  bannerMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaText: { color: 'rgba(255,255,255,0.85)', fontSize: 12 },
+  editBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.2)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 9 },
+  editBtnText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  panel: { gap: 12, padding: 16 },
+  readOnlyLabel: { fontSize: 11, fontWeight: '600', marginBottom: 6, color: '#64748b' },
+  readOnlyBox: { borderWidth: 1, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 },
+  btnRow: { flexDirection: 'row', gap: 10, marginTop: 6 },
+  detailBox: { borderWidth: 1, borderRadius: 12, padding: 12 },
+  detailLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, color: '#64748b' },
+  detailValue: { fontSize: 14, fontWeight: '800', marginTop: 3 },
+  securityRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderWidth: 1, borderRadius: 12, padding: 14 },
+  securityTitle: { fontSize: 14, fontWeight: '700' },
+  securitySub: { fontSize: 12, marginTop: 2 },
+  changePwBtn: { borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+  securityForm: { borderWidth: 1, borderRadius: 12, padding: 14, gap: 12 },
 });

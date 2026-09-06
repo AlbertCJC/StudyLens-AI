@@ -60,7 +60,10 @@ async function main() {
   let chosen = null;
   for (const cmd of pythonCmd) {
     try {
-      backend = spawn(cmd, ["app.py"], {
+      // shell:true is required on Windows to resolve "py"/"python" launchers;
+      // pass a single quoted command string (DEP0190) instead of an args array.
+      const command = `${cmd.includes(" ") ? `"${cmd}"` : cmd} app.py`;
+      backend = spawn(command, {
         cwd: backendDir,
         shell: process.platform === "win32",
         stdio: ["ignore", "pipe", "pipe"],

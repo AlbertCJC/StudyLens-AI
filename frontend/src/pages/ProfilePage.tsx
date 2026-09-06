@@ -1,22 +1,84 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
-import { User, Mail, Shield, Building2, Calendar, Award, CheckCircle2, Lock, Edit3, Save, Sparkles, BookOpen, ShieldCheck } from "lucide-react";
-import { motion } from "motion/react";
+import { useToast } from "../context/ToastContext";
+import { User, Mail, Shield, Building2, Calendar, Award, CheckCircle2, Lock, Edit3, Save, Camera, UserCheck, BookOpen, ShieldCheck, Trash2 } from "lucide-react";
+import { authFetch } from "../utils/authFetch";
+import { checkPasswordStrength } from "../utils/password";
+import { PasswordRequirements } from "../components/PasswordRequirements";
 import type { User as UserType } from "../types";
 
 export const ProfilePage: React.FC = () => {
-  const { currentUser, updateUser } = useAuth();
+  const { currentUser, updateUser, refreshSession } = useAuth();
+  const { showToast } = useToast();
 
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(currentUser?.name || "");
-  const [department, setDepartment] = useState(currentUser?.department || "General");
-  const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Password state
   const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [passwordMsg, setPasswordMsg] = useState("");
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
+
+  // Avatar state
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [removingAvatar, setRemovingAvatar] = useState(false);
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type)) {
+      showToast("Please choose a PNG, JPG, GIF, or WEBP image.", "error");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showToast("The image must be 5 MB or smaller.", "error");
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await authFetch(`/api/users/${currentUser.id}/avatar`, { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.error || "Could not upload the image. Please try again.", "error");
+        return;
+      }
+      await updateUser(data);
+      showToast("Profile photo updated.");
+    } catch {
+      showToast("Could not reach the server. Please try again.", "error");
+    } finally {
+      setUploadingAvatar(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleRemovePhoto = async () => {
+    if (!currentUser?.avatar || removingAvatar) return;
+    setRemovingAvatar(true);
+    try {
+      const res = await authFetch(`/api/users/${currentUser.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ avatar: null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.error || "Could not remove the photo. Please try again.", "error");
+        return;
+      }
+      await updateUser(data);
+      showToast("Profile photo removed.");
+    } catch {
+      showToast("Could not reach the server. Please try again.", "error");
+    } finally {
+      setRemovingAvatar(false);
+    }
+  };
 
   if (!currentUser) {
     return (
@@ -28,34 +90,60 @@ export const ProfilePage: React.FC = () => {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    performSave();
+  };
+
+  const performSave = async () => {
     const updated: UserType = {
       ...currentUser,
       name: name.trim() || currentUser.name,
-      department: department.trim() || currentUser.department,
     };
-    updateUser(updated);
+    await updateUser(updated);
     setIsEditing(false);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    showToast("Profile updated successfully!");
   };
 
-  const handlePasswordChange = (e: React.FormEvent) => {
+  const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPassword || newPassword.length < 6) {
-      setPasswordMsg("Password must be at least 6 characters.");
+    const strengthErr = checkPasswordStrength(newPassword);
+    if (strengthErr) {
+      showToast(strengthErr, "error");
       return;
     }
     if (newPassword !== confirmPassword) {
-      setPasswordMsg("Passwords do not match.");
+      showToast("Passwords do not match.", "error");
       return;
     }
-    setPasswordMsg("Password updated successfully!");
-    setNewPassword("");
-    setConfirmPassword("");
-    setTimeout(() => {
+    setPasswordSubmitting(true);
+    try {
+      const res = await authFetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.error || "Could not update the password. Please try again.", "error");
+        return;
+      }
+      showToast("Password updated successfully!");
+      // The backend bumped token_version when the password changed, so the old
+      // JWT is invalid; swap in the freshly issued token to stay signed in.
+      if (data.token && data.user) {
+        refreshSession(data.user, data.token);
+      }
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
       setShowPasswordChange(false);
-      setPasswordMsg("");
-    }, 2000);
+    } catch {
+      showToast("Could not reach the server. Please check your connection and try again.", "error");
+    } finally {
+      setPasswordSubmitting(false);
+    }
   };
 
   const initials = currentUser.name
@@ -91,13 +179,76 @@ export const ProfilePage: React.FC = () => {
   const badge = getRoleBadge();
   const BadgeIcon = badge.icon;
 
+  const roleInfo = {
+    student: {
+      description:
+        "You're enrolled in your subjects and have everything you need to study — AI-generated quizzes, flashcards, summaries, and reviewers built from your actual lecture materials, plus your own progress analytics.",
+      highlights: [
+        "Study your enrolled subjects and course materials",
+        "Take teacher quizzes and personal practice drills",
+        "Generate AI quizzes, flashcards, and reviewers",
+        "Track your mastery and get study recommendations",
+      ],
+    },
+    teacher: {
+      description:
+        "You manage your assigned subjects and publish everything students need — lecture materials, quizzes, and class announcements — while keeping an eye on how the class is performing.",
+      highlights: [
+        "Upload and organize lecture materials",
+        "Build, publish, and manage quizzes",
+        "Post class bulletins and announcements",
+        "Monitor student progress and performance",
+      ],
+    },
+    admin: {
+      description:
+        "You keep the platform running smoothly — managing accounts and roles, maintaining the subject catalog, moderating materials, and watching over activity and system performance.",
+      highlights: [
+        "Manage user accounts and assign roles",
+        "Maintain the subject catalog and rosters",
+        "Moderate uploaded learning materials",
+        "Review activity logs and system performance",
+      ],
+    },
+  }[currentUser.role] as { description: string; highlights: string[] };
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Top Banner Header */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-800 p-6 sm:p-8 text-white shadow-xl">
+      <div className="relative overflow-hidden rounded-xl bg-[#5b51d8] p-6 sm:p-8 text-white shadow-md">
         <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start gap-5">
-          <div className="h-20 w-20 rounded-full bg-white/20 backdrop-blur-md text-white flex items-center justify-center font-bold text-2xl ring-4 ring-white/30 shadow-inner shrink-0">
-            {initials}
+          <div className="relative shrink-0">
+            {currentUser.avatar ? (
+              <img
+                src={currentUser.avatar}
+                alt={currentUser.name}
+                className="h-20 w-20 rounded-full object-cover ring-4 ring-white/30 shadow-inner"
+              />
+            ) : (
+              <div className="h-20 w-20 rounded-full bg-white/20 backdrop-blur-md text-white flex items-center justify-center font-bold text-2xl ring-4 ring-white/30 shadow-inner">
+                {initials}
+              </div>
+            )}
+            {isEditing && (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingAvatar}
+                title={uploadingAvatar ? "Uploading..." : "Change profile photo"}
+                className="absolute bottom-0 right-0 h-7 w-7 rounded-full bg-white text-[#5b51d8] flex items-center justify-center shadow-md border border-white/60 hover:scale-105 transition-transform cursor-pointer disabled:opacity-60"
+              >
+                <Camera className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {isEditing && currentUser.avatar && (
+              <button
+                onClick={handleRemovePhoto}
+                disabled={removingAvatar}
+                title={removingAvatar ? "Removing..." : "Remove photo"}
+                className="absolute -bottom-1 -right-7 h-7 w-7 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-md border border-white/60 hover:scale-105 transition-transform cursor-pointer disabled:opacity-60"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           <div className="flex-1 text-center sm:text-left space-y-2">
@@ -133,25 +284,14 @@ export const ProfilePage: React.FC = () => {
             </button>
           ) : (
             <button
-              onClick={() => setIsEditing(false)}
-              className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all cursor-pointer border border-white/20"
+              onClick={performSave}
+              className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm border border-white/20"
             >
-              Cancel Edit
+              <Save className="w-3.5 h-3.5" /> Save Edit
             </button>
           )}
         </div>
       </div>
-
-      {savedSuccess && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-xl text-sm font-medium flex items-center gap-2"
-        >
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          Profile updated successfully!
-        </motion.div>
-      )}
 
       {/* Main Details Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -180,13 +320,14 @@ export const ProfilePage: React.FC = () => {
 
                 <div>
                   <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">
-                    Department / Faculty
+                    Department / Faculty (Read-only)
                   </label>
                   <input
                     type="text"
-                    value={department}
-                    onChange={(e) => setDepartment(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+                    value={currentUser.department || "General"}
+                    disabled
+                    title="Department is managed by the administration"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-muted text-muted-foreground text-sm font-medium cursor-not-allowed"
                   />
                 </div>
 
@@ -275,11 +416,16 @@ export const ProfilePage: React.FC = () => {
             ) : (
               <form onSubmit={handlePasswordChange} className="space-y-4 p-4 rounded-xl bg-muted/30 border border-border">
                 <p className="text-xs font-bold text-foreground">Set New Password</p>
-                {passwordMsg && (
-                  <p className={`text-xs font-medium ${passwordMsg.includes("successfully") ? "text-emerald-500" : "text-rose-500"}`}>
-                    {passwordMsg}
-                  </p>
-                )}
+                <div>
+                  <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">Current Password</label>
+                  <input
+                    type="password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    placeholder="Enter your current password"
+                    className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
+                  />
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">New Password</label>
@@ -287,10 +433,12 @@ export const ProfilePage: React.FC = () => {
                       type="password"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
+                      minLength={8}
                       placeholder="••••••••"
                       required
                       className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
                     />
+                    <PasswordRequirements password={newPassword} />
                   </div>
                   <div>
                     <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">Confirm Password</label>
@@ -307,9 +455,10 @@ export const ProfilePage: React.FC = () => {
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold cursor-pointer"
+                    disabled={passwordSubmitting}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-60"
                   >
-                    Update Password
+                    {passwordSubmitting ? "Updating..." : "Update Password"}
                   </button>
                   <button
                     type="button"
@@ -324,36 +473,35 @@ export const ProfilePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Role Overview & Platform Capabilities */}
+        {/* Right Column: About My Role */}
         <div className="space-y-6">
           <div className="bg-card border border-border rounded-2xl p-6 space-y-4 shadow-sm">
             <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-indigo-500" />
-              Role Access & Privileges
+              <UserCheck className="w-4 h-4 text-indigo-500" />
+              About My Role
             </h3>
 
-            <div className="space-y-3 text-xs">
-              <div className="p-3 rounded-xl bg-indigo-500/5 border border-indigo-500/10 space-y-1">
-                <p className="font-bold text-indigo-600 dark:text-indigo-400">Current Role: {currentUser.role.toUpperCase()}</p>
-                <p className="text-muted-foreground leading-relaxed">
-                  {currentUser.role === "admin"
-                    ? "Full administrative control over user accounts, subject catalog, system announcements, and audit activity logs."
-                    : currentUser.role === "teacher"
-                    ? "Access to create and manage courses, post class bulletins, generate AI study materials, and monitor student progress."
-                    : "Access to enrolled subjects, AI study assistant, quizzes, flashcards, and personalized progress analytics."}
-                </p>
-              </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">{roleInfo.description}</p>
 
-              <div className="p-3 rounded-xl bg-muted/40 border border-border space-y-1">
-                <p className="font-bold text-foreground">Session Token</p>
-                <p className="font-mono text-[10px] text-muted-foreground truncate">
-                  {currentUser.id}
-                </p>
-              </div>
-            </div>
+            <ul className="space-y-2 text-xs">
+              {roleInfo.highlights.map((h) => (
+                <li key={h} className="flex items-start gap-2 text-muted-foreground">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                  {h}
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        onChange={handleAvatarChange}
+        className="hidden"
+      />
     </div>
   );
 };

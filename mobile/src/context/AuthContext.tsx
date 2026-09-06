@@ -1,54 +1,54 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { apiLogin, apiRegister, setAuthToken, User } from '../services/api';
+import { apiLogin, apiRegister, apiChangePassword, apiVerifyTwoFactor, apiVerifyEmail, apiResendEmailCode, setAuthToken, invalidateApiCache, updateUser, User, EmailVerificationPending } from '../services/api';
 import { STORAGE_KEYS, getJSON, setJSON, removeItem } from '../utils/storage';
 
-export type UserRole = 'student' | 'teacher';
+export type UserRole = 'student' | 'teacher' | 'admin';
 
 export interface AuthUser extends User {}
+
+export interface TwoFactorPending {
+  userId: string;
+  email: string;
+}
+
+export class TwoFactorRequiredError extends Error {
+  constructor(public readonly pending: TwoFactorPending) {
+    super('Two-factor authentication is required.');
+    this.name = 'TwoFactorRequiredError';
+  }
+}
+
+export class EmailVerificationRequiredError extends Error {
+  constructor(public readonly pending: EmailVerificationPending) {
+    super('Email verification is required.');
+    this.name = 'EmailVerificationRequiredError';
+  }
+}
 
 interface AuthContextType {
   currentUser: AuthUser | null;
   token: string | null;
   hydrated: boolean;
   isOnline: boolean;
-  login: (email: string, role?: UserRole) => Promise<AuthUser>;
-  quickLogin: (profile: Partial<AuthUser>) => Promise<AuthUser>;
-  register: (name: string, email: string, role: UserRole, department?: string) => Promise<AuthUser>;
-  switchRole: (role: UserRole) => void;
+  pendingTwoFactor: TwoFactorPending | null;
+  pendingEmailVerification: EmailVerificationPending | null;
+  login: (email: string, role?: UserRole, password?: string) => Promise<AuthUser>;
+  register: (name: string, email: string, role: UserRole, department?: string, password?: string) => Promise<AuthUser>;
+  verifyTwoFactor: (code: string) => Promise<AuthUser>;
+  cancelTwoFactor: () => void;
+  verifyEmail: (code: string) => Promise<AuthUser>;
+  resendEmailCode: () => Promise<void>;
+  cancelEmailVerification: () => void;
   logout: () => void;
   updateProfile: (patch: Partial<AuthUser>) => Promise<AuthUser>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const DEMO_USERS: Record<UserRole, AuthUser> = {
-  student: {
-    id: 'usr-student-1',
-    name: 'John Wendyl S. Sanchez',
-    firstName: 'John Wendyl',
-    lastName: 'Sanchez',
-    email: 'student@studylens.edu',
-    role: 'student',
-    department: 'Computer Science',
-    studentId: '2024-STU-0841',
-    status: 'active',
-    createdAt: '2024-01-15T08:00:00.000Z',
-  },
-  teacher: {
-    id: 'usr-teacher-1',
-    name: 'Christian C. Barral, MIT',
-    firstName: 'Christian C.',
-    lastName: 'Barral, MIT',
-    email: 'teacher@studylens.edu',
-    role: 'teacher',
-    department: 'College of Computer Studies',
-    status: 'active',
-    createdAt: '2023-09-01T08:00:00.000Z',
-  },
-};
-
 const normalizeRole = (role?: string): UserRole => {
-  if (role === 'teacher' || role === 'admin') return 'teacher';
+  if (role === 'admin') return 'admin';
+  if (role === 'teacher') return 'teacher';
   return 'student';
 };
 
@@ -56,18 +56,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
-
-  useEffect(() => {
-    getJSON<{ token: string; user: AuthUser }>(STORAGE_KEYS.session).then((session) => {
-      if (session?.token && session?.user) {
-        const user = { ...session.user, role: normalizeRole(session.user.role) };
-        setToken(session.token);
-        setAuthToken(session.token);
-        setCurrentUser(user);
-      }
-      setHydrated(true);
-    });
-  }, []);
+  const [pendingTwoFactor, setPendingTwoFactor] = useState<TwoFactorPending | null>(null);
+  const [pendingEmailVerification, setPendingEmailVerification] = useState<EmailVerificationPending | null>(null);
 
   const persistSession = useCallback((user: AuthUser, userToken: string) => {
     setCurrentUser(user);
@@ -76,75 +66,99 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setJSON(STORAGE_KEYS.session, { token: userToken, user });
   }, []);
 
-  const login = useCallback(
-    async (email: string, role?: UserRole): Promise<AuthUser> => {
-      try {
-        const data = await apiLogin(email, role);
-        const user = { ...data.user, role: normalizeRole(data.user.role) };
-        persistSession(user, data.token);
-        return user;
-      } catch (err) {
-        const user = { ...DEMO_USERS[role || 'student'] };
-        persistSession(user, `jwt-token-${user.id}-${Date.now()}`);
-        return user;
+  useEffect(() => {
+    getJSON<{ token: string; user: AuthUser }>(STORAGE_KEYS.session).then(async (session) => {
+      if (session?.token && session?.user) {
+        // Guard against corrupted avatar placeholders ("None"/"null"/"undefined").
+        const rawAvatar = session.user.avatar as unknown;
+        const badAvatar =
+          !rawAvatar ||
+          ['none', 'null', 'undefined'].includes(String(rawAvatar).trim().toLowerCase());
+        const user = {
+          ...session.user,
+          role: normalizeRole(session.user.role),
+          ...(badAvatar ? { avatar: undefined } : {}),
+        };
+        setToken(session.token);
+        setAuthToken(session.token);
+        setCurrentUser(user);
       }
+      setHydrated(true);
+    });
+  }, [persistSession]);
+
+  const login = useCallback(
+    async (email: string, role?: UserRole, password?: string): Promise<AuthUser> => {
+      const data = await apiLogin(email, role, undefined, password);
+      if ('requiresEmailVerification' in data) {
+        setPendingEmailVerification(data);
+        throw new EmailVerificationRequiredError(data);
+      }
+      if ('twoFactorRequired' in data) {
+        setPendingTwoFactor({ userId: data.userId, email: data.email });
+        throw new TwoFactorRequiredError({ userId: data.userId, email: data.email });
+      }
+      const user = { ...data.user, role: normalizeRole(data.user.role) };
+      setPendingTwoFactor(null);
+      setPendingEmailVerification(null);
+      persistSession(user, data.token);
+      return user;
     },
     [persistSession]
   );
 
-  const quickLogin = useCallback(
-    async (profile: Partial<AuthUser>): Promise<AuthUser> => {
-      const role = normalizeRole(profile.role) as UserRole;
-      try {
-        const data = await apiLogin(profile.email || '', role, {
-          id: profile.id,
-          name: profile.name,
-          email: profile.email,
-          role,
-          department: profile.department,
-          studentId: profile.studentId,
-        });
-        const user = { ...data.user, role: normalizeRole(data.user.role) };
-        persistSession(user, data.token);
-        return user;
-      } catch {
-        const demo = DEMO_USERS[role];
-        const user = { ...demo, ...profile, role } as AuthUser;
-        persistSession(user, `jwt-token-${user.id}-${Date.now()}`);
-        return user;
-      }
+  const verifyTwoFactor = useCallback(
+    async (code: string): Promise<AuthUser> => {
+      if (!pendingTwoFactor) throw new Error('No pending two-factor verification.');
+      const data = await apiVerifyTwoFactor(pendingTwoFactor.userId, code);
+      const user = { ...data.user, role: normalizeRole(data.user.role) };
+      setPendingTwoFactor(null);
+      persistSession(user, data.token);
+      return user;
     },
-    [persistSession]
+    [pendingTwoFactor, persistSession]
   );
+
+  const verifyEmail = useCallback(
+    async (code: string): Promise<AuthUser> => {
+      if (!pendingEmailVerification) throw new Error('No pending email verification.');
+      const data = await apiVerifyEmail(pendingEmailVerification.userId, code);
+      if ('requiresEmailVerification' in data) {
+        setPendingEmailVerification(data);
+        throw new EmailVerificationRequiredError(data);
+      }
+      const user = { ...data.user, role: normalizeRole(data.user.role) };
+      setPendingEmailVerification(null);
+      persistSession(user, data.token);
+      return user;
+    },
+    [pendingEmailVerification, persistSession]
+  );
+
+  const resendEmailCode = useCallback(async (): Promise<void> => {
+    if (!pendingEmailVerification) throw new Error('No pending email verification.');
+    const pending = await apiResendEmailCode(pendingEmailVerification.userId);
+    setPendingEmailVerification((prev) => ({ ...(prev || {}), ...pending, userId: pending.userId }));
+  }, [pendingEmailVerification]);
+
+  const cancelEmailVerification = useCallback(() => {
+    setPendingEmailVerification(null);
+  }, []);
+
+  const cancelTwoFactor = useCallback(() => {
+    setPendingTwoFactor(null);
+  }, []);
 
   const register = useCallback(
-    async (name: string, email: string, role: UserRole, department?: string): Promise<AuthUser> => {
-      try {
-        const data = await apiRegister(name, email, role, department);
-        const user = { ...data.user, role: normalizeRole(data.user.role) };
-        persistSession(user, data.token);
-        return user;
-      } catch {
-        const user: AuthUser = {
-          id: `usr-${role}-${Date.now()}`,
-          name,
-          email: email || `user${Date.now()}@studylens.edu`,
-          role,
-          department: department || (role === 'student' ? 'Computer Science' : 'Computer Science & IT'),
-          status: 'active',
-          createdAt: new Date().toISOString(),
-        };
-        persistSession(user, `jwt-token-${user.id}-${Date.now()}`);
-        return user;
+    async (name: string, email: string, role: UserRole, department?: string, password?: string): Promise<AuthUser> => {
+      const data = await apiRegister(name, email, role, department, password);
+      if ('requiresEmailVerification' in data) {
+        setPendingEmailVerification(data);
+        throw new EmailVerificationRequiredError(data);
       }
-    },
-    [persistSession]
-  );
-
-  const switchRole = useCallback(
-    (role: UserRole) => {
-      const user = DEMO_USERS[role];
-      persistSession(user, `jwt-token-${user.id}-${Date.now()}`);
+      const user = { ...data.user, role: normalizeRole(data.user.role) };
+      persistSession(user, data.token);
+      return user;
     },
     [persistSession]
   );
@@ -153,8 +167,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentUser(null);
     setToken(null);
     setAuthToken(null);
+    setPendingEmailVerification(null);
+    setPendingTwoFactor(null);
+    invalidateApiCache();
     removeItem(STORAGE_KEYS.session);
   }, []);
+
+  const changePassword = useCallback(
+    async (currentPassword: string, newPassword: string): Promise<void> => {
+      if (!currentUser) throw new Error('No active session');
+      const data = await apiChangePassword(currentPassword, newPassword);
+      // The backend bumped token_version when the password changed, so the old
+      // JWT is invalid; swap in the freshly issued token to stay signed in.
+      if (data.token && data.user) {
+        persistSession({ ...data.user, role: normalizeRole(data.user.role) }, data.token);
+      }
+    },
+    [currentUser, persistSession]
+  );
 
   const updateProfile = useCallback(
     async (patch: Partial<AuthUser>): Promise<AuthUser> => {
@@ -162,6 +192,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updated = { ...currentUser, ...patch, name: patch.name || currentUser.name };
       await setJSON(STORAGE_KEYS.profileEdits(currentUser.id), updated);
       setCurrentUser(updated);
+      // Persist into the session payload too: hydration reads the session key,
+      // so profile-only edits (e.g. avatar removal) survive an app restart.
+      try {
+        const session = await getJSON<{ token: string; user: AuthUser }>(STORAGE_KEYS.session);
+        if (session?.token) {
+          await setJSON(STORAGE_KEYS.session, { token: session.token, user: updated });
+        }
+      } catch {
+        // Non-fatal: the profileEdits copy still holds the change.
+      }
+      updateUser(currentUser.id, {
+        name: updated.name,
+        role: updated.role as 'student' | 'teacher' | 'admin',
+        avatar: updated.avatar ?? null,
+        department: updated.department,
+        status: updated.status,
+      }).catch(() => {});
       return updated;
     },
     [currentUser]
@@ -169,7 +216,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider
-      value={{ currentUser, token, hydrated, isOnline: !!token, login, quickLogin, register, switchRole, logout, updateProfile }}
+      value={{ currentUser, token, hydrated, isOnline: !!token, pendingTwoFactor, pendingEmailVerification, login, register, verifyTwoFactor, cancelTwoFactor, verifyEmail, resendEmailCode, cancelEmailVerification, logout, updateProfile, changePassword }}
     >
       {children}
     </AuthContext.Provider>

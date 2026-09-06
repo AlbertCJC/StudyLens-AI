@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
   Users,
@@ -15,15 +15,29 @@ import {
   FileCode,
   Download,
   Eye,
-  CheckCircle2,
   XCircle,
   Pencil,
   ShieldCheck,
+  BarChart2,
+  UserCheck,
+  ChevronRight,
+  ChevronDown,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
-import { useAnnouncements } from "../../context/AnnouncementsContext";
+import { useAnnouncements, type AnnouncementItem } from "../../context/AnnouncementsContext";
+import { useToast } from "../../context/ToastContext";
+import { AnnouncementComposer } from "../../components/AnnouncementComposer";
+import { Pagination, slicePage } from "../../components/Pagination";
 import { authFetch } from "../../utils/authFetch";
-import type { Subject, LearningMaterial, Quiz, QuizQuestion, DifficultyLevel, BloomsTaxonomy } from "../../types";
+import type {
+  Subject,
+  LearningMaterial,
+  Quiz,
+  QuizQuestion,
+  DifficultyLevel,
+  BloomsTaxonomy,
+  SubjectGrades,
+} from "../../types";
 
 interface EnrolledStudent {
   id: string;
@@ -33,7 +47,15 @@ interface EnrolledStudent {
   dateEnrolled: string;
 }
 
-type TabKey = "people" | "materials" | "quizzes" | "announcements";
+interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  studentId?: string | null;
+}
+
+type TabKey = "people" | "materials" | "quizzes" | "announcements" | "grades";
 
 const QUESTION_TYPES = ["multiple_choice", "true_false", "identification", "short_answer"] as const;
 const BLOOMS_LEVELS: BloomsTaxonomy[] = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"];
@@ -53,12 +75,24 @@ interface DraftQuestion {
 export const SubjectDetailPage: React.FC = () => {
   const { subjectId } = useParams<{ subjectId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { currentUser } = useAuth();
-  const { announcements, addAnnouncement } = useAnnouncements();
+  const { announcements, deleteAnnouncement } = useAnnouncements();
+  const { showToast } = useToast();
 
   const [subject, setSubject] = useState<Subject | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabKey>("people");
+  const initialTabParam = searchParams.get("tab") as TabKey | null;
+  const validTabs: TabKey[] = ["people", "materials", "quizzes", "announcements", "grades"];
+  const [activeTab, setActiveTab] = useState<TabKey>(
+    initialTabParam && validTabs.includes(initialTabParam) ? initialTabParam : "people"
+  );
+
+  useEffect(() => {
+    const t = searchParams.get("tab") as TabKey | null;
+    if (t && validTabs.includes(t) && t !== activeTab) setActiveTab(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // Students
   const [students, setStudents] = useState<EnrolledStudent[]>([]);
@@ -72,6 +106,17 @@ export const SubjectDetailPage: React.FC = () => {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [quizzesLoading, setQuizzesLoading] = useState(true);
 
+  // Grades
+  const [grades, setGrades] = useState<SubjectGrades | null>(null);
+  const [gradesLoading, setGradesLoading] = useState(true);
+  const [expandedGradeStudents, setExpandedGradeStudents] = useState<Record<string, boolean>>({});
+
+  // Assign students (admin only)
+  const [allStudents, setAllStudents] = useState<AdminUser[]>([]);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
+  const [assigningStudents, setAssigningStudents] = useState(false);
+
   // Upload Material Modal
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -79,7 +124,6 @@ export const SubjectDetailPage: React.FC = () => {
   const [uploadDescription, setUploadDescription] = useState("");
   const [uploadRawText, setUploadRawText] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState<string | null>(null);
 
   // Edit Material Modal
   const [materialToEdit, setMaterialToEdit] = useState<LearningMaterial | null>(null);
@@ -87,7 +131,6 @@ export const SubjectDetailPage: React.FC = () => {
   const [editDescription, setEditDescription] = useState("");
   const [editRawText, setEditRawText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
-  const [editMsg, setEditMsg] = useState<string | null>(null);
 
   // Create Quiz Modal
   const [showQuizModal, setShowQuizModal] = useState(false);
@@ -103,15 +146,19 @@ export const SubjectDetailPage: React.FC = () => {
 
   // Post Announcement Modal
   const [showAnnounceModal, setShowAnnounceModal] = useState(false);
-  const [annTitle, setAnnTitle] = useState("");
-  const [annContent, setAnnContent] = useState("");
-  const [annPriority, setAnnPriority] = useState<"high" | "medium" | "low">("medium");
-  const [annAudience, setAnnAudience] = useState<"all" | "students" | "teachers">("all");
-  const [postingAnn, setPostingAnn] = useState(false);
+  const [editingAnn, setEditingAnn] = useState<AnnouncementItem | null>(null);
+  const [announcementToDelete, setAnnouncementToDelete] = useState<AnnouncementItem | null>(null);
+  const [detailAnn, setDetailAnn] = useState<AnnouncementItem | null>(null);
 
   // Delete confirmations
   const [materialToDelete, setMaterialToDelete] = useState<LearningMaterial | null>(null);
   const [quizToDelete, setQuizToDelete] = useState<Quiz | null>(null);
+
+  // Pagination
+  const [matPage, setMatPage] = useState(1);
+  const [quizPage, setQuizPage] = useState(1);
+  const [annPage, setAnnPage] = useState(1);
+  const [peoplePage, setPeoplePage] = useState(1);
 
   useEffect(() => {
     let active = true;
@@ -139,10 +186,11 @@ export const SubjectDetailPage: React.FC = () => {
     if (!subject || !currentUser) return;
     let active = true;
     (async () => {
-      const [sRes, mRes, qRes] = await Promise.all([
+      const [sRes, mRes, qRes, gRes] = await Promise.all([
         authFetch(`/api/subjects/${subject.id}/students`),
         authFetch(`/api/materials?userId=${currentUser.id || ""}&userRole=${currentUser.role || ""}`),
-        authFetch(`/api/quizzes?userId=${currentUser.id || ""}`),
+        authFetch(`/api/quizzes?userId=${currentUser.id || ""}&userRole=${currentUser.role || ""}`),
+        authFetch(`/api/subjects/${subject.id}/grades`),
       ]);
       if (!active) return;
       if (sRes.ok) setStudents((await sRes.json()) as EnrolledStudent[]);
@@ -152,16 +200,42 @@ export const SubjectDetailPage: React.FC = () => {
       }
       if (qRes.ok) {
         const all = (await qRes.json()) as Quiz[];
-        setQuizzes(all.filter((q) => q.subjectId === subject.id));
+        const staff =
+          currentUser?.role === "admin" ||
+          (currentUser?.role === "teacher" && currentUser.id === subject.teacherId);
+        setQuizzes(all.filter((q) => q.subjectId === subject.id && (staff || q.isPublished !== false)));
       }
+      if (gRes.ok) setGrades((await gRes.json()) as SubjectGrades);
       setStudentsLoading(false);
       setMaterialsLoading(false);
       setQuizzesLoading(false);
+      setGradesLoading(false);
     })();
     return () => {
       active = false;
     };
   }, [subject, currentUser]);
+
+  // Admin only: load the student directory for assignment + load subject grades.
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "admin" || !subject) return;
+    let active = true;
+    const loadStudentsForAssign = async () => {
+      try {
+        const res = await authFetch("/api/users");
+        if (active && res.ok) {
+          const data = (await res.json()) as AdminUser[];
+          setAllStudents(data.filter((u) => u.role === "student"));
+        }
+      } catch (err) {
+        console.error("Fetch students error:", err);
+      }
+    };
+    loadStudentsForAssign();
+    return () => {
+      active = false;
+    };
+  }, [currentUser, subject]);
 
   const resolveFileUrl = (mat: LearningMaterial): string | null => {
     const url = mat.fileUrl;
@@ -191,15 +265,68 @@ export const SubjectDetailPage: React.FC = () => {
     }
   };
 
+  // Text-based materials download as a PDF rendered from their extracted content.
+  const downloadMaterialAsPdf = async (mat: LearningMaterial) => {
+    try {
+      const res = await authFetch("/api/convert-to-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: mat.title || "Learning Material",
+          // Mirror the on-screen preview: meta line under the heading, then
+          // description and extracted text as separate paragraphs.
+          metaLine: [
+            (mat.fileType || "").toUpperCase(),
+            mat.fileSize,
+            mat.uploadedBy ? `Uploaded by ${mat.uploadedBy}` : "",
+          ]
+            .filter(Boolean)
+            .join("  •  "),
+          content: [mat.description, mat.extractedText].filter(Boolean).join("\n\n"),
+        }),
+      });
+      if (!res.ok) throw new Error(`Server returned status ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${mat.title || "material"}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("Material downloaded as PDF.", "success");
+    } catch {
+      showToast("Could not generate the PDF. Opening the original file instead.", "error");
+      openFile(mat);
+    }
+  };
+
+  // Inline material preview modal state
+  const [viewingMaterial, setViewingMaterial] = useState<LearningMaterial | null>(null);
+  const [previewQuiz, setPreviewQuiz] = useState<Quiz | null>(null);
+
+  const groupAttemptsByQuiz = <T extends { id: string; quizTitle: string }>(attempts: T[]) => {
+    const groups: { title: string; entries: T[] }[] = [];
+    for (const att of attempts) {
+      let g = groups.find((x) => x.title === att.quizTitle);
+      if (!g) {
+        g = { title: att.quizTitle, entries: [] };
+        groups.push(g);
+      }
+      g.entries.push(att);
+    }
+    return groups;
+  };
+
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadFile && !uploadRawText.trim()) {
-      setUploadMsg("Upload a file or paste lecture text.");
+      showToast("Upload a file or paste lecture text.", "error");
       return;
     }
     if (!subject) return;
     setUploading(true);
-    setUploadMsg(null);
     try {
       const formData = new FormData();
       if (uploadFile) formData.append("file", uploadFile);
@@ -222,6 +349,7 @@ export const SubjectDetailPage: React.FC = () => {
         setUploadDescription("");
         setUploadRawText("");
         setShowUploadModal(false);
+        showToast("Material uploaded successfully.");
       } else {
         const errText = await res.text().catch(() => "");
         let msg = "Upload failed.";
@@ -230,11 +358,11 @@ export const SubjectDetailPage: React.FC = () => {
         } catch {
           msg = errText || msg;
         }
-        setUploadMsg(msg);
+        showToast(msg, "error");
       }
     } catch (err: unknown) {
       console.error("Upload error:", err);
-      setUploadMsg("Upload error: " + (err instanceof Error ? err.message : String(err)));
+      showToast("Upload error: " + (err instanceof Error ? err.message : String(err)), "error");
     } finally {
       setUploading(false);
     }
@@ -246,9 +374,11 @@ export const SubjectDetailPage: React.FC = () => {
       if (res.ok) {
         setMaterials((prev) => prev.filter((m) => m.id !== mat.id));
         setMaterialToDelete(null);
+        showToast("Material deleted.");
       }
     } catch (err) {
       console.error("Delete material error:", err);
+      showToast("Could not delete the material. Please try again.", "error");
     }
   };
 
@@ -257,14 +387,12 @@ export const SubjectDetailPage: React.FC = () => {
     setEditTitle(mat.title);
     setEditDescription(mat.description || "");
     setEditRawText(mat.extractedText || "");
-    setEditMsg(null);
   };
 
   const handleUpdateMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!materialToEdit || !editTitle.trim()) return;
     setSavingEdit(true);
-    setEditMsg(null);
     try {
       const res = await authFetch(`/api/materials/${materialToEdit.id}`, {
         method: "PUT",
@@ -279,13 +407,14 @@ export const SubjectDetailPage: React.FC = () => {
         const updated = (await res.json()) as LearningMaterial;
         setMaterials((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
         setMaterialToEdit(null);
+        showToast("Material updated successfully.");
       } else {
         const errData = await res.json().catch(() => ({}));
-        setEditMsg(errData.error || "Could not update the material.");
+        showToast(errData.error || "Could not update the material.", "error");
       }
     } catch (err) {
       console.error("Update material error:", err);
-      setEditMsg("Update failed. Please try again.");
+      showToast("Update failed. Please try again.", "error");
     } finally {
       setSavingEdit(false);
     }
@@ -411,9 +540,10 @@ export const SubjectDetailPage: React.FC = () => {
           setQuizDescription("");
           setDraftQuestions([]);
           setShowQuizModal(false);
+          showToast("Quiz updated successfully.");
         } else {
           const errData = await res.json().catch(() => ({}));
-          alert(errData.error || "Could not update the quiz.");
+          showToast(errData.error || "Could not update the quiz.", "error");
         }
       } else {
         const res = await authFetch("/api/quizzes", {
@@ -428,13 +558,15 @@ export const SubjectDetailPage: React.FC = () => {
           setQuizDescription("");
           setDraftQuestions([]);
           setShowQuizModal(false);
+          showToast("Quiz created successfully.");
         } else {
           const errData = await res.json().catch(() => ({}));
-          alert(errData.error || "Could not create the quiz.");
+          showToast(errData.error || "Could not create the quiz.", "error");
         }
       }
     } catch (err) {
       console.error("Save quiz error:", err);
+      showToast("Could not save the quiz. Please try again.", "error");
     } finally {
       setCreatingQuiz(false);
     }
@@ -449,9 +581,11 @@ export const SubjectDetailPage: React.FC = () => {
       });
       if (res.ok) {
         setQuizzes((prev) => prev.map((q) => (q.id === quiz.id ? { ...q, isPublished: !q.isPublished } : q)));
+        showToast(quiz.isPublished ? "Quiz unpublished." : "Quiz published.");
       }
     } catch (err) {
       console.error("Toggle quiz publish error:", err);
+      showToast("Could not update the quiz visibility. Please try again.", "error");
     }
   };
 
@@ -461,45 +595,70 @@ export const SubjectDetailPage: React.FC = () => {
       if (res.ok) {
         setQuizzes((prev) => prev.filter((q) => q.id !== quiz.id));
         setQuizToDelete(null);
+        showToast("Quiz deleted.");
       }
     } catch (err) {
       console.error("Delete quiz error:", err);
+      showToast("Could not delete the quiz. Please try again.", "error");
     }
   };
 
-  const handlePostAnnouncement = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!subject || !annTitle.trim() || !annContent.trim()) return;
-    setPostingAnn(true);
+  const openEditAnnouncement = (ann: AnnouncementItem) => {
+    setEditingAnn(ann);
+    setShowAnnounceModal(true);
+  };
+
+  const openAssignStudents = () => {
+    setSelectedStudentIds(new Set(students.map((s) => s.id)));
+    setShowAssignModal(true);
+  };
+
+  const toggleAssignStudent = (studentId: string) => {
+    setSelectedStudentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(studentId)) next.delete(studentId);
+      else next.add(studentId);
+      return next;
+    });
+  };
+
+  const handleSaveAssignment = async () => {
+    if (!subject) return;
+    setAssigningStudents(true);
+    const enrolled = new Set(students.map((s) => s.id));
+    const toAdd = Array.from(selectedStudentIds).filter((id) => !enrolled.has(id));
+    const toRemove = Array.from(enrolled).filter((id) => !selectedStudentIds.has(id));
     try {
-      addAnnouncement({
-        title: annTitle.trim(),
-        content: annContent.trim(),
-        authorName: `${currentUser?.name || "Faculty Instructor"} (${subject.code})`,
-        targetAudience: annAudience,
-        priority: annPriority,
-        subjectId: subject.id,
-        subjectName: `${subject.code} - ${subject.name}`,
-        tag: subject.code,
-      });
-      setAnnTitle("");
-      setAnnContent("");
-      setShowAnnounceModal(false);
+      if (toAdd.length > 0) {
+        const res = await authFetch(`/api/subjects/${subject.id}/students`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ studentIds: toAdd }),
+        });
+        if (!res.ok) throw new Error("Could not assign the selected students.");
+      }
+      if (toRemove.length > 0) {
+        const res = await authFetch(`/api/subjects/${subject.id}/students`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ studentIds: toRemove }),
+        });
+        if (!res.ok) throw new Error("Could not remove the selected students.");
+      }
+      const res = await authFetch(`/api/subjects/${subject.id}/students`);
+      if (res.ok) setStudents((await res.json()) as EnrolledStudent[]);
+      setShowAssignModal(false);
+      showToast("Student enrollment updated.");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not update the roster.", "error");
     } finally {
-      setPostingAnn(false);
+      setAssigningStudents(false);
     }
   };
 
   const subjectAnnouncements = subject
     ? announcements.filter((a) => a.subjectId === subject.id)
     : [];
-
-  const tabs: { key: TabKey; label: string; icon: React.ElementType; count?: number }[] = [
-    { key: "people", label: "People", icon: Users, count: students.length + 1 },
-    { key: "materials", label: "Materials", icon: FileText, count: materials.length },
-    { key: "quizzes", label: "Quizzes", icon: GraduationCap, count: quizzes.length },
-    { key: "announcements", label: "Announcements", icon: Bell, count: subjectAnnouncements.length },
-  ];
 
   if (notFound) {
     return (
@@ -529,6 +688,20 @@ export const SubjectDetailPage: React.FC = () => {
     );
   }
 
+  const isStaff =
+    currentUser?.role === "admin" ||
+    (currentUser?.role === "teacher" && currentUser.id === subject.teacherId);
+  const canManage = currentUser?.role === "teacher" && currentUser.id === subject.teacherId;
+  const isStudent = currentUser?.role === "student";
+
+  const tabs: { key: TabKey; label: string; icon: React.ElementType; count?: number }[] = [
+    { key: "people", label: "People", icon: Users, count: students.length + 1 },
+    { key: "materials", label: "Materials", icon: FileText, count: materials.length },
+    { key: "quizzes", label: "Quizzes", icon: GraduationCap, count: quizzes.length },
+    { key: "announcements", label: "Announcements", icon: Bell, count: subjectAnnouncements.length },
+    { key: "grades", label: "Grades", icon: BarChart2, count: isStaff ? grades?.students?.length : grades?.attemptCount },
+  ];
+
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -540,54 +713,44 @@ export const SubjectDetailPage: React.FC = () => {
         <span>Back to Subjects</span>
       </button>
 
-      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-100 border border-blue-200/80 text-slate-900 dark:from-slate-950 dark:via-indigo-950 dark:to-blue-900 dark:border-blue-900/30 dark:text-white rounded-2xl p-6 shadow-xs dark:shadow-lg transition-colors">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="space-y-2 min-w-0">
-            <div className="flex items-center space-x-2 flex-wrap">
-              <span className="px-3 py-1 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-xs font-bold rounded-lg">
-                {subject.code}
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0 space-y-1">
+          <div className="flex items-center space-x-2 flex-wrap">
+            <h1 className="text-base font-bold text-foreground leading-tight truncate">{subject.name}</h1>
+            <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold rounded-md">
+              {subject.code}
+            </span>
+            {subject.semester && (
+              <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold rounded-md uppercase tracking-wide">
+                {subject.semester} • {subject.schoolYear || ""}
               </span>
-              {subject.semester && (
-                <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold rounded-lg uppercase tracking-wide">
-                  {subject.semester} • {subject.schoolYear || ""}
-                </span>
-              )}
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{subject.name}</h1>
-            {subject.description && (
-              <p className="text-xs text-slate-600 dark:text-slate-300 max-w-2xl leading-relaxed">
-                {subject.description}
-              </p>
             )}
-            <div className="flex items-center space-x-4 pt-1 text-xs text-slate-600 dark:text-slate-300">
-              <span className="inline-flex items-center space-x-1">
-                <Users className="w-3.5 h-3.5" />
-                <strong>{subject.studentCount}</strong> students
-              </span>
-              <span className="inline-flex items-center space-x-1">
-                <FileText className="w-3.5 h-3.5" />
-                <strong>{subject.materialCount}</strong> materials
-              </span>
-              {subject.course && <span>Program: {subject.course}</span>}
-            </div>
           </div>
+          <p className="text-[11px] text-muted-foreground leading-tight max-w-2xl truncate">
+            {subject.description || `Managed by ${isStaff ? "the faculty" : "your instructor"} • ${subject.studentCount} students • ${subject.materialCount} materials`}
+          </p>
+        </div>
 
-          <div className="flex items-center space-x-2 self-start lg:self-center">
-            <Link
-              to="/materials"
-              className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all inline-flex items-center space-x-1.5 cursor-pointer"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Manage Materials</span>
-            </Link>
-            <Link
-              to="/assessments"
-              className="px-3 py-2 border border-blue-300/60 dark:border-blue-500/40 text-blue-700 dark:text-blue-300 hover:bg-blue-500/10 rounded-xl text-xs font-bold transition-all inline-flex items-center space-x-1.5 cursor-pointer"
-            >
-              <GraduationCap className="w-3.5 h-3.5" />
-              <span>Manage Quizzes</span>
-            </Link>
-          </div>
+        <div className="flex items-center space-x-2 shrink-0">
+          {currentUser?.role !== "admin" && (
+            <>
+              <Link
+                to="/materials"
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all inline-flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>{canManage ? "Manage Materials" : "View Materials"}</span>
+              </Link>
+              <Link
+                to={isStudent ? `/assessments?quizId=${quizzes[0]?.id || ""}` : "/assessments"}
+                className="px-3 py-2 border border-blue-300/60 dark:border-blue-500/40 text-blue-700 dark:text-blue-300 hover:bg-blue-500/10 rounded-xl text-xs font-bold transition-all inline-flex items-center space-x-1.5 cursor-pointer"
+              >
+                <GraduationCap className="w-3.5 h-3.5" />
+                <span>{canManage ? "Manage Quizzes" : "Take Quizzes"}</span>
+              </Link>
+            </>
+          )}
         </div>
       </div>
 
@@ -630,8 +793,16 @@ export const SubjectDetailPage: React.FC = () => {
               <Users className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               <span>People in this Subject</span>
             </h2>
-            <span className="text-xs font-semibold text-muted-foreground">
-              {students.length + 1} people
+            <span className="flex items-center space-x-2">
+              {currentUser?.role === "admin" && (
+                <button
+                  onClick={openAssignStudents}
+                  className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  <span>Assign Students</span>
+                </button>
+              )}
             </span>
           </div>
 
@@ -648,9 +819,6 @@ export const SubjectDetailPage: React.FC = () => {
                 </p>
               </div>
             </div>
-            <span className="text-[10px] font-bold uppercase tracking-wide bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2.5 py-1 rounded-lg shrink-0">
-              Teacher
-            </span>
           </div>
 
           <div className="text-xs font-semibold text-muted-foreground pt-1">
@@ -664,30 +832,25 @@ export const SubjectDetailPage: React.FC = () => {
               No students are enrolled in this subject yet.
             </p>
           ) : (
+            <>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
                     <th className="py-2 pr-4 font-semibold">Student</th>
                     <th className="py-2 pr-4 font-semibold">Student ID</th>
-                    <th className="py-2 pr-4 font-semibold">Email</th>
-                    <th className="py-2 font-semibold">Role</th>
+                    <th className="py-2 font-semibold">Email</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {students.map((s) => (
+                  {slicePage(students, peoplePage).map((s) => (
                     <tr key={s.id} className="border-b border-border/60 last:border-0">
                       <td className="py-2.5 pr-4 font-bold text-foreground">{s.name}</td>
                       <td className="py-2.5 pr-4 font-mono text-muted-foreground">{s.studentId || "—"}</td>
-                      <td className="py-2.5 pr-4 text-muted-foreground">
+                      <td className="py-2.5 text-muted-foreground">
                         <span className="flex items-center space-x-1">
                           <Mail className="w-3 h-3 shrink-0" />
-                          <span className="truncate">{s.email}</span>
-                        </span>
-                      </td>
-                      <td className="py-2.5">
-                        <span className="text-[10px] font-bold uppercase tracking-wide bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-1 rounded-lg shrink-0">
-                          Student
+                          <span className="truncate">{s.email || "—"}</span>
                         </span>
                       </td>
                     </tr>
@@ -695,6 +858,13 @@ export const SubjectDetailPage: React.FC = () => {
                 </tbody>
               </table>
             </div>
+
+            <Pagination
+              page={peoplePage}
+              total={students.length}
+              onPageChange={(p) => setPeoplePage(p)}
+            />
+            </>
           )}
         </div>
       )}
@@ -707,16 +877,17 @@ export const SubjectDetailPage: React.FC = () => {
               <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               <span>Uploaded Materials</span>
             </h2>
-            <button
-              onClick={() => {
-                setUploadMsg(null);
-                setShowUploadModal(true);
-              }}
-              className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Upload Material</span>
-            </button>
+            {canManage && (
+              <button
+                onClick={() => {
+                  setShowUploadModal(true);
+                }}
+                className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload Material</span>
+              </button>
+            )}
           </div>
 
           {materialsLoading ? (
@@ -726,11 +897,14 @@ export const SubjectDetailPage: React.FC = () => {
               No materials uploaded for this subject yet. Upload lecture notes, slide decks, or PDFs.
             </p>
           ) : (
+            <>
             <div className="space-y-2.5">
-              {materials.map((mat) => (
+              {slicePage(materials, matPage).map((mat) => (
                 <div
                   key={mat.id}
-                  className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-muted/30 gap-3"
+                  onClick={() => setViewingMaterial(mat)}
+                  className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-muted/30 gap-3 cursor-pointer hover:border-primary/50 hover:bg-muted/50 transition-all"
+                  title="View material"
                 >
                   <div className="flex items-center space-x-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
@@ -739,38 +913,53 @@ export const SubjectDetailPage: React.FC = () => {
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-foreground truncate">{mat.title}</p>
                       <p className="text-[10px] text-muted-foreground truncate">
-                        {mat.uploadedBy} • {mat.fileType?.toUpperCase() || "TEXT"} {mat.fileSize ? `• ${mat.fileSize}` : ""}
+                        {mat.fileType?.toUpperCase() || "TEXT"} {mat.fileSize ? `• ${mat.fileSize}` : ""}
                       </p>
                     </div>
                   </div>
                   <div className="flex items-center space-x-1 shrink-0">
                     {resolveFileUrl(mat) && (
                       <button
-                        onClick={() => openFile(mat)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isRenderable(mat)) openFile(mat);
+                          else downloadMaterialAsPdf(mat);
+                        }}
                         className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
-                        title={isRenderable(mat) ? "Open" : "Download"}
+                        title={isRenderable(mat) ? "Open" : "Download as PDF"}
                       >
                         {isRenderable(mat) ? <Eye className="w-4 h-4" /> : <Download className="w-4 h-4" />}
                       </button>
                     )}
-                    <button
-                      onClick={() => openEditMaterial(mat)}
-                      className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer"
-                      title="Edit Material"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setMaterialToDelete(mat)}
-                      className="p-2 text-rose-600 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
-                      title="Delete Material"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {canManage && (
+                      <>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openEditMaterial(mat); }}
+                          className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer"
+                          title="Edit Material"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setMaterialToDelete(mat); }}
+                          className="p-2 text-rose-600 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
+                          title="Delete Material"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
+
+            <Pagination
+              page={matPage}
+              total={materials.length}
+              onPageChange={(p) => setMatPage(p)}
+            />
+            </>
           )}
         </div>
       )}
@@ -783,19 +972,21 @@ export const SubjectDetailPage: React.FC = () => {
               <GraduationCap className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               <span>Quizzes & Assessments</span>
             </h2>
-            <button
-              onClick={() => {
-                setQuizToEdit(null);
-                setQuizTitle("");
-                setQuizDescription("");
-                setDraftQuestions([]);
-                setShowQuizModal(true);
-              }}
-              className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Create Quiz</span>
-            </button>
+            {canManage && (
+              <button
+                onClick={() => {
+                  setQuizToEdit(null);
+                  setQuizTitle("");
+                  setQuizDescription("");
+                  setDraftQuestions([]);
+                  setShowQuizModal(true);
+                }}
+                className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Create Quiz</span>
+              </button>
+            )}
           </div>
 
           {quizzesLoading ? (
@@ -805,50 +996,108 @@ export const SubjectDetailPage: React.FC = () => {
               No quizzes created for this subject yet.
             </p>
           ) : (
+            <>
             <div className="space-y-2.5">
-              {quizzes.map((quiz) => (
+              {slicePage(quizzes, quizPage).map((quiz) => (
                 <div
                   key={quiz.id}
                   className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-muted/30 gap-3"
                 >
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-foreground truncate">{quiz.title}</p>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewQuiz(quiz)}
+                    className="min-w-0 flex-1 text-left cursor-pointer group"
+                    title="View quiz details"
+                  >
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <p className="text-xs font-bold text-foreground truncate group-hover:text-primary transition-colors">{quiz.title}</p>
+                      {(quiz.attemptsUsed ?? 0) > 0 && (
+                        <span
+                          className="text-sm font-bold text-primary shrink-0 tabular-nums"
+                          title="Latest attempt score"
+                        >
+                          {quiz.lastScoreRaw ?? 0}/{quiz.lastMaxScore ?? 0}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[10px] text-muted-foreground truncate">
                       {quiz.questions?.length || 0} questions • {quiz.difficulty} •{" "}
                       {quiz.timeLimitMinutes ? `${quiz.timeLimitMinutes} min` : "No time limit"} • Pass {quiz.passPercentage}%
+                      {quiz.deadline
+                        ? ` • Due ${new Date(quiz.deadline).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
+                        : ""}
                     </p>
-                  </div>
+                  </button>
                   <div className="flex items-center space-x-1.5 shrink-0">
-                    <button
-                      onClick={() => handleToggleQuizPublish(quiz)}
-                      className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
-                        quiz.isPublished
-                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                          : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                      }`}
-                      title={quiz.isPublished ? "Click to unpublish" : "Click to publish"}
-                    >
-                      {quiz.isPublished ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                      <span>{quiz.isPublished ? "Published" : "Draft"}</span>
-                    </button>
-                    <button
-                      onClick={() => openEditQuiz(quiz)}
-                      className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer"
-                      title="Edit Quiz"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setQuizToDelete(quiz)}
-                      className="p-2 text-rose-600 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
-                      title="Delete Quiz"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {canManage ? (
+                      <>
+                        <button
+                          onClick={() => handleToggleQuizPublish(quiz)}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                            quiz.isPublished
+                              ? "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                              : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                          }`}
+                          title={quiz.isPublished ? "Unpublish Quiz" : "Publish Quiz"}
+                        >
+                          {quiz.isPublished ? "Unpublish" : "Publish"}
+                        </button>
+                        <button
+                          onClick={() => openEditQuiz(quiz)}
+                          className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer"
+                          title="Edit Quiz"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setQuizToDelete(quiz)}
+                          className="p-2 text-rose-600 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
+                          title="Delete Quiz"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    ) : (quiz.attemptsAllowed || 0) > 0 &&
+                      (quiz.attemptsUsed ?? 0) >= (quiz.attemptsAllowed || 0) ? (
+                      <span
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold bg-muted text-muted-foreground"
+                        title="Attempt limit reached for this quiz"
+                      >
+                        Attempts Exceeded
+                      </span>
+                    ) : (
+                      <>
+                        {(quiz.attemptsAllowed || 0) > 0 && (
+                          <span className="text-[10px] text-muted-foreground font-semibold whitespace-nowrap">
+                            {Math.max(0, (quiz.attemptsAllowed || 0) - (quiz.attemptsUsed ?? 0))} attempt
+                            {(quiz.attemptsAllowed || 0) - (quiz.attemptsUsed ?? 0) === 1 ? "" : "s"} left
+                          </span>
+                        )}
+                        <button
+                          onClick={() =>
+                            navigate(
+                              `/assessments?quizId=${quiz.id}&returnTo=${encodeURIComponent(`/subjects/${subjectId}?tab=quizzes`)}`
+                            )
+                          }
+                          className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all cursor-pointer"
+                          title="Start this quiz"
+                        >
+                          <GraduationCap className="w-3.5 h-3.5" />
+                          <span>{(quiz.attemptsUsed ?? 0) > 0 ? "Retake Quiz" : "Take Quiz"}</span>
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
+
+            <Pagination
+              page={quizPage}
+              total={quizzes.length}
+              onPageChange={(p) => setQuizPage(p)}
+            />
+            </>
           )}
         </div>
       )}
@@ -861,17 +1110,18 @@ export const SubjectDetailPage: React.FC = () => {
               <Bell className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               <span>Class Announcements</span>
             </h2>
-            <button
-              onClick={() => {
-                setAnnTitle("");
-                setAnnContent("");
-                setShowAnnounceModal(true);
-              }}
-              className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
-            >
-              <Megaphone className="w-3.5 h-3.5" />
-              <span>Post Announcement</span>
-            </button>
+            {canManage && (
+              <button
+                onClick={() => {
+                  setEditingAnn(null);
+                  setShowAnnounceModal(true);
+                }}
+                className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+              >
+                <Megaphone className="w-3.5 h-3.5" />
+                <span>Post Announcement</span>
+              </button>
+            )}
           </div>
 
           {subjectAnnouncements.length === 0 ? (
@@ -879,11 +1129,23 @@ export const SubjectDetailPage: React.FC = () => {
               No announcements posted for this subject yet.
             </p>
           ) : (
+            <>
             <div className="space-y-2.5">
-              {subjectAnnouncements.map((a) => (
-                <div key={a.id} className="p-3.5 rounded-xl border border-border bg-muted/30 space-y-1.5">
+              {slicePage(subjectAnnouncements, annPage).map((a) => {
+                const canManageAnn =
+                  (a.authorId && a.authorId === currentUser?.id) ||
+                  (currentUser?.role === "teacher" && currentUser.id === subject.teacherId);
+                return (
+                <div key={a.id} onClick={() => setDetailAnn(a)} className="p-3.5 rounded-xl border border-border bg-muted/30 space-y-1.5 cursor-pointer hover:border-primary/50 hover:bg-muted/50 transition-all">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-bold text-foreground truncate">{a.title}</p>
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <p className="text-xs font-bold text-foreground truncate">{a.title}</p>
+                      {a.subjectName && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 shrink-0">
+                          {a.subjectName}
+                        </span>
+                      )}
+                    </div>
                     <span
                       className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-full shrink-0 ${
                         a.priority === "high"
@@ -897,12 +1159,235 @@ export const SubjectDetailPage: React.FC = () => {
                     </span>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2">{a.content}</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {a.authorName} • {a.createdAt}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] text-muted-foreground">
+                      {a.authorName} • {a.createdAt}
+                    </p>
+                    {canManageAnn && (
+                      <div className="flex items-center space-x-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => openEditAnnouncement(a)}
+                          className="p-1.5 text-amber-600 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer"
+                          title="Edit Announcement"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setAnnouncementToDelete(a)}
+                          className="p-1.5 text-rose-600 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
+                          title="Delete Announcement"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
+
+            <Pagination
+              page={annPage}
+              total={subjectAnnouncements.length}
+              onPageChange={(p) => setAnnPage(p)}
+            />
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ===== Grades Tab ===== */}
+      {activeTab === "grades" && (
+        <div className="bg-card rounded-2xl border border-border p-6 space-y-4">
+          <h2 className="text-base font-bold text-foreground flex items-center space-x-2">
+            <BarChart2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <span>Quiz Grades & Final Grade</span>
+          </h2>
+
+          {gradesLoading ? (
+            <p className="text-xs text-muted-foreground py-6 text-center">Loading grades...</p>
+          ) : isStaff ? (
+            grades?.students && grades.students.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-6 text-center">
+                No quiz attempts recorded for this subject yet.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {(grades?.students || []).map((st) => {
+                  const isExpanded = !!expandedGradeStudents[st.studentId];
+                  return (
+                    <div key={st.studentId} className="p-4 rounded-xl border border-border bg-muted/30 space-y-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedGradeStudents((prev) => ({ ...prev, [st.studentId]: !isExpanded }))
+                        }
+                        className="w-full flex items-center justify-between gap-3 cursor-pointer group"
+                        title={isExpanded ? "Hide grades" : "Show grades"}
+                      >
+                        <p className="text-xs font-bold text-foreground truncate group-hover:text-primary transition-colors">
+                          {st.studentName}
+                        </p>
+                        <span className="text-muted-foreground shrink-0">
+                          {isExpanded ? (
+                            <ChevronDown className="w-4 h-4" />
+                          ) : (
+                            <ChevronRight className="w-4 h-4" />
+                          )}
+                        </span>
+                      </button>
+                      {isExpanded && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-[10px] text-muted-foreground">{st.attemptCount} attempt(s)</p>
+                            <span
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${
+                                st.averagePercentage >= 75
+                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                  : st.averagePercentage >= 60
+                                    ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                    : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                              }`}
+                            >
+                              Final Grade: {st.averagePercentage}%
+                            </span>
+                          </div>
+                          {st.attempts.length > 0 && (
+                            <div className="space-y-2.5 pt-1">
+                              {groupAttemptsByQuiz(st.attempts).map((grp) => (
+                                <div key={grp.entries[0].id} className="space-y-1">
+                                  <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-card border border-border/60">
+                                    <div className="min-w-0">
+                                      <p className="text-[11px] font-bold text-foreground truncate">
+                                        {grp.title}
+                                        {grp.entries.length > 1 && (
+                                          <span className="ml-1.5 text-[9px] font-bold uppercase text-primary">Latest</span>
+                                        )}
+                                      </p>
+                                      <p className="text-[10px] text-muted-foreground">{grp.entries[0].completedAt}</p>
+                                    </div>
+                                    <div className="flex items-center space-x-2 shrink-0">
+                                      <span className="text-[11px] font-mono font-bold text-foreground">
+                                        {grp.entries[0].score}/{grp.entries[0].maxScore}
+                                      </span>
+                                      <span
+                                        className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-full ${
+                                          grp.entries[0].passed
+                                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                            : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                                        }`}
+                                      >
+                                        {grp.entries[0].percentage}%
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {grp.entries.slice(1).map((att) => (
+                                    <div
+                                      key={att.id}
+                                      className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-muted/40 border border-border/40 ml-4"
+                                    >
+                                      <p className="text-[10px] text-muted-foreground truncate">
+                                        Previous attempt • {att.completedAt}
+                                      </p>
+                                      <div className="flex items-center space-x-2 shrink-0">
+                                        <span className="text-[10px] font-mono text-muted-foreground">
+                                          {att.score}/{att.maxScore}
+                                        </span>
+                                        <span className={`text-[10px] font-bold ${att.passed ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                                          {att.percentage}%
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : (
+            <>
+              {grades && (grades.attempts || []).length === 0 ? (
+                <p className="text-xs text-muted-foreground py-6 text-center">
+                  You haven't taken any quizzes in this subject yet. Take a quiz to see your grade.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  <div className="p-5 rounded-xl border border-blue-500/20 bg-blue-500/5 flex items-center justify-between">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                        Final Grade (average of all quiz scores)
+                      </p>
+                      <p className="text-3xl font-black text-foreground mt-1">
+                        {grades?.averagePercentage || 0}%
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {grades?.attemptCount || 0} quiz attempt(s)
+                      </p>
+                    </div>
+                    <BarChart2 className="w-10 h-10 text-blue-600 dark:text-blue-400" />
+                  </div>
+
+                  <div className="space-y-3">
+                    {groupAttemptsByQuiz(grades?.attempts || []).map((grp) => (
+                      <div key={grp.entries[0].id} className="space-y-1.5">
+                        <div
+                          className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-muted/30 gap-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-foreground truncate">
+                              {grp.title}
+                              {grp.entries.length > 1 && (
+                                <span className="ml-1.5 text-[9px] font-bold uppercase text-primary">Latest</span>
+                              )}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">{grp.entries[0].completedAt}</p>
+                          </div>
+                          <div className="flex items-center space-x-2 shrink-0">
+                            <span className="text-[11px] font-mono font-bold text-foreground">
+                              {grp.entries[0].score}/{grp.entries[0].maxScore}
+                            </span>
+                            <span
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase ${
+                                grp.entries[0].passed
+                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                  : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                              }`}
+                            >
+                              {grp.entries[0].percentage}%
+                            </span>
+                          </div>
+                        </div>
+                        {grp.entries.slice(1).map((att) => (
+                          <div
+                            key={att.id}
+                            className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-muted/40 border border-border/40 ml-5 gap-3"
+                          >
+                            <p className="text-[10px] text-muted-foreground truncate">
+                              Previous attempt • {att.completedAt}
+                            </p>
+                            <div className="flex items-center space-x-2 shrink-0">
+                              <span className="text-[10px] font-mono text-muted-foreground">
+                                {att.score}/{att.maxScore}
+                              </span>
+                              <span className={`text-[10px] font-bold ${att.passed ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                                {att.percentage}%
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -915,7 +1400,7 @@ export const SubjectDetailPage: React.FC = () => {
             if (e.target === e.currentTarget) setShowUploadModal(false);
           }}
         >
-          <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between">
               <h3 className="text-lg font-bold text-foreground">Upload Material</h3>
               <button
@@ -969,8 +1454,6 @@ export const SubjectDetailPage: React.FC = () => {
                 ></textarea>
               </div>
 
-              {uploadMsg && <p className="text-rose-600 text-[10px]">{uploadMsg}</p>}
-
               <div className="pt-2 flex items-center justify-end space-x-2">
                 <button
                   type="button"
@@ -1000,7 +1483,7 @@ export const SubjectDetailPage: React.FC = () => {
             if (e.target === e.currentTarget) setMaterialToEdit(null);
           }}
         >
-          <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between">
               <h3 className="text-lg font-bold text-foreground">Edit Material</h3>
               <button
@@ -1044,8 +1527,6 @@ export const SubjectDetailPage: React.FC = () => {
                 ></textarea>
               </div>
 
-              {editMsg && <p className="text-rose-600 text-[10px]">{editMsg}</p>}
-
               <div className="pt-2 flex items-center justify-end space-x-2">
                 <button
                   type="button"
@@ -1075,7 +1556,7 @@ export const SubjectDetailPage: React.FC = () => {
             if (e.target === e.currentTarget) setShowQuizModal(false);
           }}
         >
-          <div className="bg-card rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-card rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between">
               <h3 className="text-lg font-bold text-foreground">
                 {quizToEdit ? "Edit Quiz" : "Create Quiz"}
@@ -1341,90 +1822,103 @@ export const SubjectDetailPage: React.FC = () => {
         </div>
       )}
 
-      {/* ===== Post Announcement Modal ===== */}
-      {showAnnounceModal && (
+      <AnnouncementComposer
+        open={showAnnounceModal}
+        onClose={() => { setShowAnnounceModal(false); setEditingAnn(null); }}
+        editingAnn={editingAnn}
+        presetSubjectId={subject?.id}
+        presetSubjectName={subject ? `${subject.code} - ${subject.name}` : undefined}
+      />
+
+      {/* ===== Assign Students Modal (admin only) ===== */}
+      {showAssignModal && (
         <div
           className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setShowAnnounceModal(false);
+            if (e.target === e.currentTarget) setShowAssignModal(false);
           }}
         >
-          <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4">
+          <div className="bg-card rounded-2xl max-w-lg w-full p-6 shadow-xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between">
-              <h3 className="text-lg font-bold text-foreground">Post Class Announcement</h3>
+              <div>
+                <h3 className="text-lg font-bold text-foreground">Assign Students</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Select which students to enroll in {subject.code} - {subject.name}
+                </p>
+              </div>
               <button
-                onClick={() => setShowAnnounceModal(false)}
+                onClick={() => setShowAssignModal(false)}
                 className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handlePostAnnouncement} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-foreground mb-1">Title</label>
-                <input
-                  type="text"
-                  value={annTitle}
-                  onChange={(e) => setAnnTitle(e.target.value)}
-                  placeholder="e.g., Reminder: Quiz on Friday"
-                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-foreground mb-1">Message</label>
-                <textarea
-                  rows={4}
-                  value={annContent}
-                  onChange={(e) => setAnnContent(e.target.value)}
-                  placeholder="Write your announcement to the class..."
-                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                ></textarea>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-foreground mb-1">Priority</label>
-                  <select
-                    value={annPriority}
-                    onChange={(e) => setAnnPriority(e.target.value as "high" | "medium" | "low")}
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-muted-foreground">
+                {selectedStudentIds.size} selected of {allStudents.length} students
+              </p>
+              <button
+                onClick={() =>
+                  setSelectedStudentIds(
+                    selectedStudentIds.size === allStudents.length
+                      ? new Set()
+                      : new Set(allStudents.map((s) => s.id))
+                  )
+                }
+                className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+              >
+                {selectedStudentIds.size === allStudents.length ? "Clear all" : "Select all"}
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {allStudents.length === 0 ? (
+                <p className="text-xs text-muted-foreground py-4 text-center">
+                  No student accounts found. Create student accounts from the admin dashboard.
+                </p>
+              ) : (
+                allStudents.map((s) => (
+                  <label
+                    key={s.id}
+                    className="flex items-center justify-between p-3 rounded-xl border border-border bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
                   >
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-foreground mb-1">Audience</label>
-                  <select
-                    value={annAudience}
-                    onChange={(e) => setAnnAudience(e.target.value as "all" | "students" | "teachers")}
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="all">Everyone</option>
-                    <option value="students">Students</option>
-                    <option value="teachers">Teachers</option>
-                  </select>
-                </div>
-              </div>
-              <div className="pt-2 flex items-center justify-end space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAnnounceModal(false)}
-                  className="px-4 py-2 border border-border rounded-xl font-semibold text-muted-foreground hover:bg-muted cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={postingAnn}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
-                >
-                  {postingAnn ? "Posting..." : "Post Announcement"}
-                </button>
-              </div>
-            </form>
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={selectedStudentIds.has(s.id)}
+                        onChange={() => toggleAssignStudent(s.id)}
+                        className="accent-blue-600 w-4 h-4 cursor-pointer shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-foreground truncate">{s.name}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">{s.email}</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold text-muted-foreground bg-muted px-2 py-1 rounded-lg shrink-0">
+                      {s.studentId || "—"}
+                    </span>
+                  </label>
+                ))
+              )}
+            </div>
+
+            <div className="pt-2 flex items-center justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => setShowAssignModal(false)}
+                className="px-4 py-2 border border-border rounded-xl font-semibold text-muted-foreground hover:bg-muted cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveAssignment}
+                disabled={assigningStudents}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
+              >
+                {assigningStudents ? "Saving..." : "Save Enrollment"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1437,7 +1931,7 @@ export const SubjectDetailPage: React.FC = () => {
             if (e.target === e.currentTarget) setMaterialToDelete(null);
           }}
         >
-          <div className="bg-card rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-border space-y-4">
+          <div className="bg-card rounded-2xl max-w-sm w-full p-6 shadow-xl border border-border space-y-4">
             <h3 className="text-base font-bold text-foreground">Delete this material?</h3>
             <p className="text-xs text-muted-foreground">
               "{materialToDelete.title}" will be permanently removed from this subject.
@@ -1468,7 +1962,7 @@ export const SubjectDetailPage: React.FC = () => {
             if (e.target === e.currentTarget) setQuizToDelete(null);
           }}
         >
-          <div className="bg-card rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-border space-y-4">
+          <div className="bg-card rounded-2xl max-w-sm w-full p-6 shadow-xl border border-border space-y-4">
             <h3 className="text-base font-bold text-foreground">Delete this quiz?</h3>
             <p className="text-xs text-muted-foreground">
               "{quizToDelete.title}" and its records will be permanently removed.
@@ -1486,10 +1980,418 @@ export const SubjectDetailPage: React.FC = () => {
               >
                 Delete
               </button>
+              </div>
+          </div>
+        </div>
+      )}
+
+      {announcementToDelete && (
+        <div
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setAnnouncementToDelete(null);
+          }}
+        >
+          <div className="bg-card rounded-2xl max-w-sm w-full p-6 shadow-xl border border-border space-y-4">
+            <h3 className="text-base font-bold text-foreground">Delete this announcement?</h3>
+            <p className="text-xs text-muted-foreground">
+              "{announcementToDelete.title}" will be permanently removed for everyone.
+            </p>
+            <div className="flex items-center justify-end space-x-2">
+              <button
+                onClick={() => setAnnouncementToDelete(null)}
+                className="px-4 py-2 border border-border rounded-xl font-semibold text-muted-foreground hover:bg-muted cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const target = announcementToDelete;
+                  setAnnouncementToDelete(null);
+                  deleteAnnouncement(target.id);
+                  showToast("Announcement deleted.");
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer"
+              >
+                Delete
+              </button>
+             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Announcement Detail Modal */}
+      {detailAnn && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setDetailAnn(null)}
+        >
+          <div
+            className="bg-card border border-border p-6 rounded-2xl max-w-xl w-full shadow-2xl space-y-5 animate-in fade-in zoom-in-95 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-border">
+              <div className="space-y-1.5">
+                <div className="flex items-center space-x-2 flex-wrap gap-1">
+                  <span
+                    className={`px-2.5 py-0.5 text-[11px] font-bold rounded-full uppercase tracking-wider ${
+                      detailAnn.priority === "high"
+                        ? "bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
+                        : detailAnn.priority === "medium"
+                        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                        : "bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+                    }`}
+                  >
+                    {detailAnn.priority.toUpperCase()}
+                  </span>
+                  {detailAnn.subjectName && (
+                    <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                      {detailAnn.subjectName}
+                    </span>
+                  )}
+                </div>
+                <h2 className="text-lg font-bold text-foreground leading-snug">{detailAnn.title}</h2>
+              </div>
+              <button
+                onClick={() => setDetailAnn(null)}
+                className="p-1 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between text-xs text-muted-foreground bg-muted/30 p-3 rounded-xl border border-border">
+              <div className="flex items-center space-x-2">
+                <div className="p-1.5 bg-primary/10 text-primary rounded-lg">
+                  <GraduationCap className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="font-bold text-foreground">{detailAnn.authorName}</p>
+                  <p className="text-[10px] text-muted-foreground">Announcement Author</p>
+                </div>
+              </div>
+              <span className="font-medium text-foreground">{detailAnn.createdAt}</span>
+            </div>
+
+            <div className="bg-muted/20 p-4 rounded-xl border border-border/60 text-xs text-foreground leading-relaxed whitespace-pre-wrap min-h-[120px]">
+              {detailAnn.content}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-border">
+              <button
+                onClick={() => setDetailAnn(null)}
+                className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Close Notice
+              </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Material Preview Modal */}
+      {viewingMaterial && (
+        <div
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setViewingMaterial(null);
+          }}
+        >
+          <div className="bg-card rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-border space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-foreground truncate">{viewingMaterial.title}</h3>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {viewingMaterial.fileType?.toUpperCase() || "TEXT"}
+                  {viewingMaterial.fileSize ? ` • ${viewingMaterial.fileSize}` : ""} • {viewingMaterial.uploadedBy}
+                </p>
+              </div>
+              <button
+                onClick={() => setViewingMaterial(null)}
+                className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg transition-all cursor-pointer shrink-0"
+                title="Close"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            {viewingMaterial.description && (
+              <p className="text-xs text-muted-foreground">{viewingMaterial.description}</p>
+            )}
+
+            <div className="rounded-xl border border-border bg-muted/20 p-4 max-h-[45vh] overflow-y-auto">
+              {viewingMaterial.extractedText ? (
+                <pre className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed">
+                  {viewingMaterial.extractedText}
+                </pre>
+              ) : (
+                <p className="text-xs text-muted-foreground italic">
+                  No readable text preview is available for this material. Use the button below to open or download the
+                  original file.
+                </p>
+              )}
+            </div>
+
+            <div className="flex justify-end space-x-2 flex-wrap">
+              {resolveFileUrl(viewingMaterial) && isRenderable(viewingMaterial) && (
+                <button
+                  onClick={() => openFile(viewingMaterial)}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  Open Original
+                </button>
+              )}
+              {resolveFileUrl(viewingMaterial) && (
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const url = resolveFileUrl(viewingMaterial);
+                    if (!url) return;
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = viewingMaterial.title || "material";
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }}
+                  className="px-4 py-2 border border-primary/50 text-primary hover:bg-primary/10 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  title="Save the original uploaded file"
+                >
+                  Download Original
+                </button>
+              )}
+              {!isRenderable(viewingMaterial) && (
+                <button
+                  onClick={() => downloadMaterialAsPdf(viewingMaterial)}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  title="Download the material content as PDF"
+                >
+                  Download as PDF
+                </button>
+              )}
+              <button
+                onClick={() => setViewingMaterial(null)}
+                className="px-4 py-2 border border-border rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted transition-all cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quiz Preview Modal */}
+      {previewQuiz &&
+        (() => {
+          const pq = previewQuiz;
+          const pqIsCourseQuiz = (pq.quizType || (pq.createdById?.startsWith("usr-teacher") ? "teacher" : "student")) === "teacher";
+          const pqExhausted =
+            pqIsCourseQuiz && (pq.attemptsAllowed || 0) > 0 && (pq.attemptsUsed || 0) >= (pq.attemptsAllowed || 0);
+          const pqOverdue = !!pq.deadline && new Date(pq.deadline).getTime() < Date.now();
+          return (
+            <div
+              className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setPreviewQuiz(null);
+              }}
+            >
+              <div className="bg-card border border-border rounded-2xl max-w-2xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] flex flex-col">
+                <div className="flex items-center justify-between pb-3 border-b border-border p-5 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
+                      <GraduationCap className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center space-x-2 flex-wrap">
+                        {pq.subjectName ? (
+                          <span className="px-2.5 py-0.5 bg-primary/10 text-primary font-mono text-[10px] font-bold rounded-md uppercase tracking-wider">
+                            {pq.subjectName}
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 bg-amber-500/10 text-amber-600 font-mono text-[10px] font-bold rounded-md uppercase tracking-wider border border-amber-500/30">
+                            Unassigned
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 bg-muted text-muted-foreground font-mono text-[10px] font-bold rounded-md uppercase tracking-wider">
+                          {pqIsCourseQuiz ? "Course Quiz" : "Practice Quiz"}
+                        </span>
+                        {pqOverdue && (
+                          <span className="px-2 py-0.5 bg-rose-500/10 text-rose-600 font-mono text-[10px] font-bold rounded-md uppercase tracking-wider border border-rose-500/30">
+                            Deadline Passed
+                          </span>
+                        )}
+                        {(pq.attemptsUsed ?? 0) > 0 && (
+                          <span className="text-base font-bold text-primary ml-auto shrink-0 tabular-nums">
+                            {pq.lastScoreRaw ?? 0}/{pq.lastMaxScore ?? 0}
+                          </span>
+                        )}
+                      </div>
+                      <h3 className="text-base font-bold text-foreground mt-1">{pq.title}</h3>
+                      <p className="text-xs text-muted-foreground">
+                        {pq.questions?.length || 0} Questions · {pq.timeLimitMinutes || 15} min · Pass {pq.passPercentage || 70}% · {pq.difficulty || "medium"}
+                        {pq.deadline && ` · Due ${new Date(pq.deadline).toLocaleString()}`}
+                        {pqIsCourseQuiz && (
+                          <span className={pqExhausted ? " text-rose-600 font-semibold" : ""}>
+                            {" · "}
+                            {(pq.attemptsAllowed || 0) > 0
+                              ? `${pq.attemptsUsed || 0}/${pq.attemptsAllowed} attempts`
+                              : "Unlimited attempts"}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setPreviewQuiz(null)}
+                    className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {pq.description && (
+                  <div className="px-5">
+                    <p className="text-xs text-muted-foreground leading-relaxed">{pq.description}</p>
+                  </div>
+                )}
+
+                <div className="px-5 overflow-y-auto space-y-3 pr-3 flex-1">
+                  {isStaff ? (
+                    pq.questions && pq.questions.length > 0 ? (
+                      pq.questions.map((q, idx) => (
+                        <div key={q.id || idx} className="p-3.5 bg-muted/30 border border-border rounded-xl space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-foreground text-xs">Question {idx + 1}</span>
+                            <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold rounded uppercase tracking-wider">
+                              {q.type === "multiple_choice"
+                                ? Array.isArray(q.correctAnswer)
+                                  ? "Multiple Select"
+                                  : "Multiple Choice"
+                                : q.type === "true_false"
+                                  ? "True / False"
+                                  : "Identification"}
+                            </span>
+                          </div>
+                          <p className="text-sm font-semibold text-foreground leading-snug">{q.question}</p>
+                          {q.type === "multiple_choice" && q.options && q.options.length > 0 && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                              {q.options.map((opt, oIdx) => (
+                                <div key={oIdx} className="flex items-start space-x-1.5 text-xs text-muted-foreground">
+                                  <span className="font-bold text-foreground">{String.fromCharCode(65 + oIdx)}.</span>
+                                  <span>{opt}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {q.type === "true_false" && (
+                            <div className="text-xs text-muted-foreground flex items-center space-x-2">
+                              <span className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-bold">True</span>
+                              <span className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-bold">False</span>
+                            </div>
+                          )}
+                          {q.topicTag && (
+                            <div className="flex items-center space-x-1.5">
+                              <span className="px-1.5 py-0.5 bg-primary/10 text-primary rounded text-[10px] font-bold uppercase tracking-wider">{q.topicTag}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="py-10 text-center space-y-2">
+                        <GraduationCap className="w-8 h-8 text-muted-foreground mx-auto opacity-40" />
+                        <p className="text-sm font-semibold text-foreground">No questions in this quiz yet.</p>
+                      </div>
+                    )
+                  ) : (
+                    <div className="py-10 text-center space-y-2">
+                      <GraduationCap className="w-8 h-8 text-muted-foreground mx-auto opacity-40" />
+                      <p className="text-sm font-semibold text-foreground">Questions hidden until you start</p>
+                      <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
+                        The questions and answer choices for this quiz are revealed only when you take it.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between gap-2 pt-3 border-t border-border p-5 pt-3 flex-wrap">
+                  <div className="flex items-center space-x-2 flex-wrap">
+                    {canManage && (
+                      <>
+                        {pq.subjectId && pq.subjectId !== "personal" && (
+                          <button
+                            onClick={() => {
+                              handleToggleQuizPublish(pq);
+                              setPreviewQuiz(null);
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                              pq.isPublished
+                                ? "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                                : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                            }`}
+                            title={pq.isPublished ? "Unpublish Quiz" : "Publish Quiz"}
+                          >
+                            {pq.isPublished ? "Unpublish" : "Publish"}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            openEditQuiz(pq);
+                            setPreviewQuiz(null);
+                          }}
+                          className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                          title="Edit Quiz details & questions"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setQuizToDelete(pq);
+                            setPreviewQuiz(null);
+                          }}
+                          className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                          title="Delete Quiz"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Delete</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    {!isStaff &&
+                      (pqExhausted ? (
+                        <span className="px-4 py-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-bold cursor-not-allowed">
+                          Attempts exhausted
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            const q = pq;
+                            setPreviewQuiz(null);
+                            navigate(
+                              `/assessments?quizId=${q.id}&returnTo=${encodeURIComponent(`/subjects/${subjectId}?tab=quizzes`)}`
+                            );
+                          }}
+                          disabled={pqOverdue && (pq.attemptsUsed ?? 0) === 0}
+                          className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <span>{(pq.attemptsUsed ?? 0) > 0 ? "Retake Quiz" : "Take Quiz"}</span>
+                        </button>
+                      ))}
+                    <button
+                      onClick={() => setPreviewQuiz(null)}
+                      className="px-4 py-2 border border-border rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted transition-all cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </div>
   );
 };

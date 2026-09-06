@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   BookOpen,
-  Sparkles,
   CheckSquare,
   Layers,
   TrendingUp,
@@ -12,21 +11,24 @@ import {
   Bell,
   Activity,
   BookCheck,
-  CheckCircle2,
-  CheckCheck,
-  Circle,
   Plus,
   Trash2,
   X,
-  Megaphone,
   GraduationCap,
-  Eye,
-  Cloud,
-  Server,
+  Pencil,
+  FileText,
+  Settings,
+  Sparkles,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AnnouncementsProvider, useAnnouncements, type AnnouncementItem } from "./context/AnnouncementsContext";
-import { authFetch } from "./utils/authFetch";
+import { ToastProvider } from "./context/ToastContext";
+import { useToast } from "./context/ToastContext";
+import { authFetch, getStoredToken } from "./utils/authFetch";
+import { clearWorkspace } from "./utils/aiWorkspaceCache";
+import { RelativeTime } from "./utils/time";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { AnnouncementComposer } from "./components/AnnouncementComposer";
 import { DashboardLayout, type MenuItem } from "./components/DashboardLayout";
 import { StudentDashboard } from "./pages/dashboards/StudentDashboard";
 import { TeacherDashboard } from "./pages/dashboards/TeacherDashboard";
@@ -36,28 +38,25 @@ import { AIStudyAssistantPage } from "./pages/ai/AIStudyAssistantPage";
 import { AssessmentPage } from "./pages/learning/AssessmentPage";
 import { FlashcardsPage } from "./pages/learning/FlashcardsPage";
 import { ProgressAnalyticsPage } from "./pages/analytics/ProgressAnalyticsPage";
+import { TeacherAnalyticsPage } from "./pages/analytics/TeacherAnalyticsPage";
 import { SubjectsPage } from "./pages/learning/SubjectsPage";
 import { SubjectDetailPage } from "./pages/learning/SubjectDetailPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { LandingPage } from "./pages/landing/LandingPage";
-import { RemotePage } from "./pages/deployment/RemotePage";
-import { SelfHostedPage } from "./pages/deployment/SelfHostedPage";
+import { ReportsPage } from "./pages/reports/ReportsPage";
 import type { LearningMaterial, Subject } from "./types";
 
 const AnnouncementsView: React.FC = () => {
   const { currentUser } = useAuth();
-  const { announcements, unreadCount, markAsRead, markAsUnread, markAllAsRead, addAnnouncement, deleteAnnouncement } = useAnnouncements();
-  const [filter, setFilter] = useState<"all" | "unread">("all");
+  const { announcements, deleteAnnouncement } = useAnnouncements();
+  const { showToast } = useToast();
   const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>("all");
   const [subjects, setSubjects] = useState<Subject[]>([]);
   
-  // Post Announcement Modal
+  // Post/Edit Announcement Modal
   const [showPostModal, setShowPostModal] = useState(false);
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [subjectId, setSubjectId] = useState("");
-  const [targetAudience, setTargetAudience] = useState<"all" | "students" | "teachers">("all");
-  const [priority, setPriority] = useState<"high" | "medium" | "low">("medium");
+  const [editingAnn, setEditingAnn] = useState<AnnouncementItem | null>(null);
+  const [annToDelete, setAnnToDelete] = useState<string | null>(null);
 
   // Selected Announcement Detail Modal
   const [detailItem, setDetailItem] = useState<AnnouncementItem | null>(null);
@@ -85,12 +84,11 @@ const AnnouncementsView: React.FC = () => {
       if (found) {
         const timer = setTimeout(() => {
           setDetailItem(found);
-          markAsRead(found.id);
         }, 0);
         return () => clearTimeout(timer);
       }
     }
-  }, [targetId, dismissedTargetId, announcements, detailItem, markAsRead]);
+  }, [targetId, dismissedTargetId, announcements, detailItem]);
 
   const handleCloseDetail = () => {
     if (targetId) {
@@ -105,52 +103,27 @@ const AnnouncementsView: React.FC = () => {
     }
   };
 
-  const handlePostAnnouncement = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim() || !content.trim()) return;
-
-    const selectedSub = subjects.find((s) => s.id === subjectId);
-    const subName = selectedSub ? `${selectedSub.code} - ${selectedSub.name}` : undefined;
-
-    addAnnouncement({
-      title: title.trim(),
-      content: content.trim(),
-      authorName: currentUser?.name || "Faculty Instructor",
-      targetAudience,
-      priority,
-      subjectId: selectedSub ? selectedSub.id : undefined,
-      subjectName: subName,
-      tag: selectedSub ? selectedSub.code : priority === "high" ? "Urgent" : "Notice",
-    });
-
-    setTitle("");
-    setContent("");
-    setSubjectId("");
-    setShowPostModal(false);
+  const openEditAnnouncement = (ann: AnnouncementItem) => {
+    setEditingAnn(ann);
+    setShowPostModal(true);
   };
 
   const isTeacherOrAdmin = currentUser?.role === "teacher" || currentUser?.role === "admin";
+  // Only the author can edit/delete an announcement; teacher/admin cannot manage
+  // the other role's posts (enforced on both the client and the server).
+  const isAnnouncementAuthor = (ann: AnnouncementItem) =>
+    !!currentUser?.id && currentUser.id === ann.authorId;
 
   const filtered = announcements.filter((a) => {
-    if (filter === "unread" && a.isRead) return false;
     if (selectedSubjectFilter !== "all" && a.subjectId !== selectedSubjectFilter) return false;
     return true;
   });
 
   return (
     <div className="space-y-6">
-      <div className="bg-card border border-border p-6 rounded-2xl shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center space-x-3">
-          <div className="p-2.5 bg-primary/10 text-primary rounded-xl">
-            <Bell className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold tracking-tight">Announcements & Bulletins</h2>
-            <p className="text-xs text-muted-foreground">Stay updated with course announcements, academic notices, and exam dates</p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
+      {/* Toolbar */}
+      <div className="flex items-center justify-end gap-3 flex-wrap">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           {/* Subject Filter */}
           <select
             value={selectedSubjectFilter}
@@ -167,37 +140,22 @@ const AnnouncementsView: React.FC = () => {
 
           <div className="flex items-center space-x-1 p-1 bg-muted/50 rounded-xl border border-border text-xs">
             <button
-              onClick={() => setFilter("all")}
+              onClick={() => setSelectedSubjectFilter("all")}
               className={`px-3 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
-                filter === "all" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
+                selectedSubjectFilter === "all" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
               }`}
             >
               All ({announcements.length})
             </button>
-            <button
-              onClick={() => setFilter("unread")}
-              className={`px-3 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
-                filter === "unread" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Unread ({unreadCount})
-            </button>
           </div>
-
-          {unreadCount > 0 && (
-            <button
-              onClick={markAllAsRead}
-              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
-            >
-              <CheckCheck className="w-3.5 h-3.5" />
-              <span>Mark All Read</span>
-            </button>
-          )}
 
           {isTeacherOrAdmin && (
             <button
-              onClick={() => setShowPostModal(true)}
-              className="px-4 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer ml-auto"
+              onClick={() => {
+                setEditingAnn(null);
+                setShowPostModal(true);
+              }}
+              className="px-4 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Post Announcement</span>
@@ -212,9 +170,7 @@ const AnnouncementsView: React.FC = () => {
           <div className="p-8 text-center bg-card border border-border rounded-2xl">
             <Bell className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
             <p className="text-sm font-semibold text-foreground">No announcements found</p>
-            <p className="text-xs text-muted-foreground">
-              {filter === "unread" ? "All announcements have been marked as read!" : "No announcements posted yet."}
-            </p>
+            <p className="text-xs text-muted-foreground">No announcements posted yet.</p>
           </div>
         ) : (
           filtered.map((item) => {
@@ -225,13 +181,10 @@ const AnnouncementsView: React.FC = () => {
                 id={`announcement-${item.id}`}
                 onClick={() => {
                   setDetailItem(item);
-                  if (!item.isRead) markAsRead(item.id);
                 }}
                 className={`p-5 rounded-2xl border transition-all space-y-3 cursor-pointer group ${
                   isTargeted
                     ? "bg-blue-500/10 border-blue-500 ring-2 ring-blue-500/30 shadow-md"
-                    : !item.isRead
-                    ? "bg-blue-500/5 border-blue-500/30 hover:border-blue-500/50 shadow-xs"
                     : "bg-card border-border hover:border-primary/50 opacity-90 hover:opacity-100"
                 }`}
               >
@@ -258,52 +211,34 @@ const AnnouncementsView: React.FC = () => {
                         Selected
                       </span>
                     )}
-                    {!item.isRead && !isTargeted && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600 text-white uppercase tracking-wider">
-                        New
-                      </span>
-                    )}
                   </div>
 
                   <div className="flex items-center space-x-3 shrink-0 self-end sm:self-auto" onClick={(e) => e.stopPropagation()}>
-                    <span className="text-xs text-muted-foreground font-mono">{item.createdAt}</span>
-                    <button
-                      onClick={() => (item.isRead ? markAsUnread(item.id) : markAsRead(item.id))}
-                      className={`p-1.5 rounded-lg border transition-all flex items-center space-x-1 text-xs font-semibold cursor-pointer ${
-                        item.isRead
-                          ? "bg-muted/40 border-border text-muted-foreground hover:text-foreground"
-                          : "bg-blue-600/10 border-blue-500/30 text-blue-600 hover:bg-blue-600 hover:text-white"
-                      }`}
-                      title={item.isRead ? "Mark as unread" : "Mark as read"}
-                    >
-                      {item.isRead ? (
-                        <>
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                          <span className="hidden sm:inline">Read</span>
-                        </>
-                      ) : (
-                        <>
-                          <Circle className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Mark Read</span>
-                        </>
-                      )}
-                    </button>
-                    {isTeacherOrAdmin && (
-                      <button
-                        onClick={() => deleteAnnouncement(item.id)}
-                        className="p-1.5 text-rose-600 hover:bg-rose-500/10 rounded-lg cursor-pointer"
-                        title="Delete Announcement"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                    <RelativeTime iso={item.createdAt} className="text-xs text-muted-foreground" />
+                    {isAnnouncementAuthor(item) && (
+                      <>
+                        <button
+                          onClick={() => openEditAnnouncement(item)}
+                          className="p-1.5 text-amber-600 hover:bg-amber-500/10 rounded-lg cursor-pointer"
+                          title="Edit Announcement"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setAnnToDelete(item.id)}
+                          className="p-1.5 text-rose-600 hover:bg-rose-500/10 rounded-lg cursor-pointer"
+                          title="Delete Announcement"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
 
                 <div>
-                  <h3 className="text-base font-bold text-foreground group-hover:text-primary transition-colors flex items-center gap-2">
-                    <span>{item.title}</span>
-                    <Eye className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <h3 className="text-base font-bold text-foreground group-hover:text-primary transition-colors">
+                    {item.title}
                   </h3>
                   <p className="text-sm text-muted-foreground mt-1 leading-relaxed line-clamp-2">{item.content}</p>
                 </div>
@@ -318,121 +253,11 @@ const AnnouncementsView: React.FC = () => {
         )}
       </div>
 
-      {/* CREATE ANNOUNCEMENT MODAL */}
-      {showPostModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <form
-            onSubmit={handlePostAnnouncement}
-            className="bg-card border border-border p-6 rounded-2xl max-w-lg w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95"
-          >
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <div className="flex items-center space-x-2">
-                <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
-                  <Megaphone className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-foreground">Post Subject / Course Announcement</h3>
-                  <p className="text-xs text-muted-foreground">Broadcast updates to enrolled students and staff</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowPostModal(false)}
-                className="p-1 text-muted-foreground hover:text-foreground rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-foreground mb-1">Announcement Title</label>
-                <input
-                  type="text"
-                  required
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Midterm Coverage & Lab Submission Deadline"
-                  className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-foreground mb-1">Associated Course Subject</label>
-                <select
-                  value={subjectId}
-                  onChange={(e) => setSubjectId(e.target.value)}
-                  className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="">General Announcement (All Subjects)</option>
-                  {subjects.map((sub) => (
-                    <option key={sub.id} value={sub.id}>
-                      {sub.code} - {sub.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-foreground mb-1">Target Audience</label>
-                  <select
-                    value={targetAudience}
-                    onChange={(e) => setTargetAudience(e.target.value as "all" | "students" | "teachers")}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="all">Everyone (All Roles)</option>
-                    <option value="students">Enrolled Students Only</option>
-                    <option value="teachers">Faculty Instructors Only</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-foreground mb-1">Priority Level</label>
-                  <select
-                    value={priority}
-                    onChange={(e) => setPriority(e.target.value as "high" | "medium" | "low")}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="high">High (Urgent Notice)</option>
-                    <option value="medium">Medium (Standard)</option>
-                    <option value="low">Low (General Info)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-foreground mb-1">Full Announcement Message</label>
-                <textarea
-                  required
-                  rows={4}
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  placeholder="Provide complete details regarding the examination, lecture schedule, or project assignment..."
-                  className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-border">
-              <button
-                type="button"
-                onClick={() => setShowPostModal(false)}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1"
-              >
-                <Megaphone className="w-3.5 h-3.5" />
-                <span>Publish Announcement</span>
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      <AnnouncementComposer
+        open={showPostModal}
+        onClose={() => { setShowPostModal(false); setEditingAnn(null); }}
+        editingAnn={editingAnn}
+      />
 
       {/* ANNOUNCEMENT DETAIL VIEW MODAL */}
       {detailItem && (
@@ -483,7 +308,7 @@ const AnnouncementsView: React.FC = () => {
                   <p className="text-[10px] text-muted-foreground">Course Announcement Author</p>
                 </div>
               </div>
-              <span className="font-medium text-foreground">{detailItem.createdAt}</span>
+              <RelativeTime iso={detailItem.createdAt} className="font-medium text-foreground" />
             </div>
 
             {/* Content Body */}
@@ -494,26 +319,6 @@ const AnnouncementsView: React.FC = () => {
             {/* Actions */}
             <div className="flex items-center justify-between pt-2 border-t border-border">
               <button
-                onClick={() => {
-                  if (detailItem.isRead) {
-                    markAsUnread(detailItem.id);
-                    setDetailItem({ ...detailItem, isRead: false });
-                  } else {
-                    markAsRead(detailItem.id);
-                    setDetailItem({ ...detailItem, isRead: true });
-                  }
-                }}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer ${
-                  detailItem.isRead
-                    ? "bg-muted text-muted-foreground hover:text-foreground"
-                    : "bg-blue-600 text-white hover:bg-blue-700"
-                }`}
-              >
-                {detailItem.isRead ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : <Circle className="w-3.5 h-3.5" />}
-                <span>{detailItem.isRead ? "Marked as Read" : "Mark as Read"}</span>
-              </button>
-
-              <button
                 onClick={handleCloseDetail}
                 className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
@@ -523,6 +328,21 @@ const AnnouncementsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={annToDelete !== null}
+        title="Delete Announcement?"
+        message="This announcement will be permanently removed for everyone. This action cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (annToDelete) {
+            deleteAnnouncement(annToDelete);
+            showToast("Announcement deleted.");
+          }
+          setAnnToDelete(null);
+        }}
+        onCancel={() => setAnnToDelete(null)}
+      />
     </div>
   );
 };
@@ -533,6 +353,10 @@ const UserManagementView: React.FC = () => {
 
 const ActivityLogsView: React.FC = () => {
   return <AdminDashboard defaultTab="logs" hideTabs={true} />;
+};
+
+const SystemSettingsView: React.FC = () => {
+  return <AdminDashboard defaultTab="settings" hideTabs={true} />;
 };
 
 interface RoleGuardProps {
@@ -555,11 +379,105 @@ const RoleGuard: React.FC<RoleGuardProps> = ({ allowedRoles, userRole, children 
 };
 
 const MainAppContent: React.FC = () => {
-  const { currentUser, switchRole, logout } = useAuth();
+  const { currentUser, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [selectedMaterial, setSelectedMaterial] = useState<LearningMaterial | null>(null);
+  const [aiSeedTopic, setAiSeedTopic] = useState<string | null>(null);
   const prevUserIdRef = useRef<string | null>(null);
+
+  // Idle session timeout (web only). Reads sessionTimeoutMins from system
+  // settings, resets on user activity, and force-signs-out after the grace
+  // countdown. A JWT-expiry watchdog catches tokens that have already lapsed.
+  const [timeoutWarn, setTimeoutWarn] = useState(false);
+  const [timeoutSeconds, setTimeoutSeconds] = useState<number | null>(null);
+  const timeoutMinsRef = useRef(60);
+  const idleTimerRef = useRef<number | null>(null);
+  const countdownRef = useRef<number | null>(null);
+
+  const doForceLogout = useCallback(() => {
+    clearWorkspace(currentUser?.id || "");
+    logout();
+    navigate("/", { replace: true });
+  }, [currentUser?.id, logout, navigate]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    timeoutMinsRef.current = 60;
+    authFetch("/api/system/settings")
+      .then((r) => (r.ok ? r.json() : Promise.resolve(null)))
+      .then((s: { sessionTimeoutMins?: string | number } | null) => {
+        const v = Number(s?.sessionTimeoutMins);
+        if (v >= 5 && v <= 1440) timeoutMinsRef.current = v;
+      })
+      .catch(() => {});
+  }, [currentUser]);
+
+  const resetIdle = useCallback(() => {
+    if (!currentUser) return;
+    if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = null;
+    if (countdownRef.current) window.clearInterval(countdownRef.current);
+    countdownRef.current = null;
+    setTimeoutWarn(false);
+    setTimeoutSeconds(null);
+    const mins = Math.max(5, timeoutMinsRef.current);
+    idleTimerRef.current = window.setTimeout(() => {
+      setTimeoutWarn(true);
+      let remaining = 60;
+      setTimeoutSeconds(remaining);
+      countdownRef.current = window.setInterval(() => {
+        remaining -= 1;
+        setTimeoutSeconds(Math.max(remaining, 0));
+        if (remaining <= 0) {
+          if (countdownRef.current) window.clearInterval(countdownRef.current);
+          countdownRef.current = null;
+          setTimeoutWarn(false);
+          doForceLogout();
+        }
+      }, 1000);
+    }, mins * 60 * 1000);
+  }, [currentUser, doForceLogout]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    resetIdle();
+    const discrete: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "touchstart", "wheel", "scroll"];
+    const onDiscrete = () => resetIdle();
+    let lastMoveReset = 0;
+    const onMove = () => {
+      const now = Date.now();
+      if (now - lastMoveReset > 10000) {
+        lastMoveReset = now;
+        resetIdle();
+      }
+    };
+    discrete.forEach((e) => window.addEventListener(e, onDiscrete, { passive: true }));
+    window.addEventListener("pointermove", onMove, { passive: true });
+const jwtPoll = window.setInterval(() => {
+      const token = getStoredToken();
+      if (!token) return;
+      try {
+        const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+        const payload = JSON.parse(atob(b64));
+        if (typeof payload?.exp === "number" && payload.exp * 1000 <= Date.now()) {
+          // Belt-and-suspenders: token already expired → hard sign-out.
+          doForceLogout();
+        }
+      } catch {
+        // Malformed token — the API layer will still reject requests.
+      }
+    }, 30000);
+    return () => {
+      discrete.forEach((e) => window.removeEventListener(e, onDiscrete));
+      window.removeEventListener("pointermove", onMove);
+      window.clearInterval(jwtPoll);
+      if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+      if (countdownRef.current) window.clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    };
+  }, [currentUser, resetIdle, doForceLogout]);
 
   const getRoleDefaultPath = (r: "student" | "teacher" | "admin") => {
     if (r === "admin") return "/admin/dashboard";
@@ -571,6 +489,10 @@ const MainAppContent: React.FC = () => {
     if (currentUser?.id) {
       if (prevUserIdRef.current !== currentUser.id) {
         prevUserIdRef.current = currentUser.id;
+        // Role switches must not leak cross-role context (e.g. a student's
+        // weak-topic AI seed or material hand-off) into the next session view.
+        setAiSeedTopic(null);
+        setSelectedMaterial(null);
         const role = currentUser.role || "student";
         navigate(getRoleDefaultPath(role), { replace: true });
       }
@@ -594,11 +516,13 @@ const MainAppContent: React.FC = () => {
 
   const studentMenuItems: MenuItem[] = [
     { icon: LayoutDashboard, label: "Dashboard", path: "/student/dashboard" },
+    { icon: FolderKanban, label: "My Subjects", path: "/subjects" },
     { icon: BookOpen, label: "Learning Materials", path: "/materials" },
-    { icon: Sparkles, label: "AI Study Generator", path: "/ai-assistant", badge: "AI" },
-    { icon: CheckSquare, label: "Take Quizzes & Tests", path: "/assessments" },
+    { icon: Sparkles, label: "AI Study Assistant", path: "/ai-assistant" },
+    { icon: CheckSquare, label: "Quizzes & Tests", path: "/assessments" },
     { icon: Layers, label: "Flashcards", path: "/flashcards" },
     { icon: TrendingUp, label: "Adaptive Progress", path: "/analytics" },
+    { icon: FileText, label: "My Report", path: "/reports" },
     { icon: Bell, label: "Announcements", path: "/announcements" },
   ];
 
@@ -606,9 +530,11 @@ const MainAppContent: React.FC = () => {
     { icon: LayoutDashboard, label: "Teacher Dashboard", path: "/teacher/dashboard" },
     { icon: FolderKanban, label: "Manage Subjects", path: "/subjects" },
     { icon: BookOpen, label: "Upload & Manage Materials", path: "/materials" },
-    { icon: Sparkles, label: "AI Resource Creator", path: "/ai-assistant", badge: "AI" },
+    { icon: Layers, label: "Resource Creator", path: "/ai-assistant" },
     { icon: BookCheck, label: "Assessment Management", path: "/assessments" },
+    { icon: Layers, label: "Flashcards", path: "/flashcards" },
     { icon: TrendingUp, label: "Student Progress Monitoring", path: "/analytics" },
+    { icon: FileText, label: "Reports & Analytics", path: "/reports" },
     { icon: Bell, label: "Class Announcements", path: "/announcements" },
   ];
 
@@ -616,10 +542,10 @@ const MainAppContent: React.FC = () => {
     { icon: LayoutDashboard, label: "Admin Dashboard", path: "/admin/dashboard" },
     { icon: Users, label: "User Management", path: "/users" },
     { icon: FolderKanban, label: "Subject Catalog", path: "/subjects" },
+    { icon: FileText, label: "Reports & Analytics", path: "/reports" },
     { icon: Bell, label: "System Announcements", path: "/announcements" },
     { icon: Activity, label: "Audit Activity Logs", path: "/activity-logs" },
-    { icon: Cloud, label: "Remote Deployment", path: "/remote" },
-    { icon: Server, label: "Self-Hosted Setup", path: "/self-hosted" },
+    { icon: Settings, label: "System Settings", path: "/admin/settings" },
   ];
 
   const menuItems =
@@ -640,6 +566,7 @@ const MainAppContent: React.FC = () => {
       profile: "/profile",
       subjects: "/subjects",
       announcements: "/announcements",
+      reports: "/reports",
       users: role === "admin" ? "/users" : getRoleDefaultPath(role),
       "activity-logs": role === "admin" ? "/activity-logs" : getRoleDefaultPath(role),
     };
@@ -652,17 +579,19 @@ const MainAppContent: React.FC = () => {
     navigate("/ai-assistant");
   };
 
+  const handleOpenWeakTopic = (topic: string) => {
+    setAiSeedTopic(topic);
+    navigate("/ai-assistant");
+  };
+
   return (
     <DashboardLayout
       menuItems={menuItems}
       userRole={userRoleDisplay}
       userName={currentUser.name}
       activePath={location.pathname}
-      onRoleSwitch={(r) => {
-        switchRole(r);
-        navigate(getRoleDefaultPath(r));
-      }}
       onLogout={() => {
+        clearWorkspace(currentUser.id);
         logout();
         navigate("/", { replace: true });
       }}
@@ -675,7 +604,7 @@ const MainAppContent: React.FC = () => {
           path="/student/dashboard"
           element={
             <RoleGuard allowedRoles={["student"]} userRole={role}>
-              <StudentDashboard onNavigate={handleTabNavigate} />
+              <StudentDashboard onNavigate={handleTabNavigate} onOpenWeakTopic={handleOpenWeakTopic} />
             </RoleGuard>
           }
         />
@@ -714,18 +643,10 @@ const MainAppContent: React.FC = () => {
           }
         />
         <Route
-          path="/remote"
+          path="/admin/settings"
           element={
             <RoleGuard allowedRoles={["admin"]} userRole={role}>
-              <RemotePage />
-            </RoleGuard>
-          }
-        />
-        <Route
-          path="/self-hosted"
-          element={
-            <RoleGuard allowedRoles={["admin"]} userRole={role}>
-              <SelfHostedPage />
+              <SystemSettingsView />
             </RoleGuard>
           }
         />
@@ -734,7 +655,7 @@ const MainAppContent: React.FC = () => {
         <Route
           path="/subjects"
           element={
-            <RoleGuard allowedRoles={["teacher", "admin"]} userRole={role}>
+            <RoleGuard allowedRoles={["student", "teacher", "admin"]} userRole={role}>
               <SubjectsPage />
             </RoleGuard>
           }
@@ -742,7 +663,7 @@ const MainAppContent: React.FC = () => {
         <Route
           path="/subjects/:subjectId"
           element={
-            <RoleGuard allowedRoles={["teacher", "admin"]} userRole={role}>
+            <RoleGuard allowedRoles={["student", "teacher", "admin"]} userRole={role}>
               <SubjectDetailPage />
             </RoleGuard>
           }
@@ -750,16 +671,67 @@ const MainAppContent: React.FC = () => {
 
         {/* General Authorized Routes */}
         <Route path="/materials" element={<LearningMaterialsPage onGenerateResource={handleGenerateFromMaterial} onNavigate={handleTabNavigate} />} />
-        <Route path="/ai-assistant" element={<AIStudyAssistantPage initialMaterial={selectedMaterial} />} />
+        <Route path="/ai-assistant" element={<AIStudyAssistantPage initialMaterial={selectedMaterial} initialTopic={aiSeedTopic} onSeedConsumed={() => setAiSeedTopic(null)} />} />
         <Route path="/assessments" element={<AssessmentPage onNavigate={handleTabNavigate} />} />
         <Route path="/flashcards" element={<FlashcardsPage />} />
-        <Route path="/analytics" element={<ProgressAnalyticsPage />} />
+        <Route
+          path="/analytics"
+          element={
+            role === "teacher" ? (
+              <TeacherAnalyticsPage />
+            ) : role === "admin" ? (
+              <Navigate to="/reports" replace />
+            ) : (
+              <ProgressAnalyticsPage />
+            )
+          }
+        />
+        <Route
+          path="/reports"
+          element={
+            <RoleGuard allowedRoles={["teacher", "admin", "student"]} userRole={role}>
+              <ReportsPage />
+            </RoleGuard>
+          }
+        />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/announcements" element={<AnnouncementsView />} />
 
         {/* Catch-all redirect */}
         <Route path="*" element={<Navigate to={getRoleDefaultPath(role)} replace />} />
       </Routes>
+
+      {timeoutWarn && (
+        <div className="fixed inset-0 z-[100] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 cursor-pointer">
+          <div
+            className="bg-card border border-border p-6 rounded-2xl max-w-sm w-full shadow-2xl space-y-4 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mx-auto w-14 h-14 rounded-full bg-amber-500/10 text-amber-500 flex items-center justify-center animate-in zoom-in-95 fade-in">
+              <Layers className="w-7 h-7" />
+            </div>
+            <h2 className="text-lg font-bold text-foreground">Your session is about to end</h2>
+            <p className="text-sm text-muted-foreground">
+              You've been inactive. Your session will expire in{" "}
+              <strong className="text-foreground">{timeoutSeconds}</strong> seconds.
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={() => resetIdle()}
+                className="flex-1 px-4 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Stay Signed In
+              </button>
+              <button
+                onClick={doForceLogout}
+                className="flex-1 px-4 py-2.5 bg-muted text-foreground hover:bg-muted/70 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 };
@@ -768,9 +740,11 @@ export function App() {
   return (
     <AuthProvider>
       <AnnouncementsProvider>
-        <BrowserRouter>
-          <MainAppContent />
-        </BrowserRouter>
+        <ToastProvider>
+          <BrowserRouter>
+            <MainAppContent />
+          </BrowserRouter>
+        </ToastProvider>
       </AnnouncementsProvider>
     </AuthProvider>
   );

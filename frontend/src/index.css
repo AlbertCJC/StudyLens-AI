@@ -23,7 +23,7 @@
     --border: #e2e8f0;
     --input: #e2e8f0;
     --ring: #6366f1;
-    --radius: 0.75rem;
+    --radius: 0.5rem;
   }
 
   .dark {
@@ -70,6 +70,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
 }
 
 body {
@@ -92,5 +93,28 @@ body {
 }
 .rotate-y-180 {
   transform: rotateY(180deg);
+}
+
+/* Hide Microsoft Edge's native password-reveal/clear buttons (prevents double eye icon) */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none;
+}
+
+/* Force native <select> option lists to match the active theme. The open
+   <option> popup is rendered by the browser and follows `color-scheme`, which
+   some engines don't propagate from :root — setting it on the <select> element
+   itself keeps the popup legible (no white-on-white) in dark mode. */
+select {
+  color-scheme: light;
+}
+.dark select {
+  color-scheme: dark;
+  background-color: var(--card);
+  color: var(--foreground);
+}
+.dark select option {
+  background-color: var(--card);
+  color: var(--foreground);
 }
 

@@ -2,6 +2,7 @@
   "name": "studylens-ai",
   "private": true,
   "version": "0.0.0",
+  "type": "module",
   "description": "StudyLens AI monorepo orchestrator (backend/ Flask + frontend/ React web + mobile/ React Native)",
   "scripts": {
     "dev": "node scripts/dev.js",

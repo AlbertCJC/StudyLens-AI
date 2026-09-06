@@ -7,22 +7,89 @@ import {
   XCircle,
   ArrowRight,
   Trash2,
-  Trophy,
   RotateCcw,
   Play,
   RotateCw,
   Plus,
-  UserCheck,
   User,
   GraduationCap,
   X,
   Pencil,
   Check,
+  BookOpen,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
-import { ConfettiEffect } from "../../components/ConfettiEffect";
+import { useToast } from "../../context/ToastContext";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { authFetch } from "../../utils/authFetch";
-import type { Quiz, QuizQuestion, QuizAttempt, Subject } from "../../types";
+import type { Quiz, QuizQuestion, QuizAttempt, Subject, QuizFeedbackItem, QuestionType } from "../../types";
+import { Pagination, slicePage } from "../../components/Pagination";
+
+const AI_DEFAULT_QUIZ_DESCRIPTION = "Automated Bloom's Taxonomy Quiz generated via Groq Inference (GPT-OSS-120B).";
+
+// Fixed assessment parameters (not editable by users).
+const FIXED_PASS_PERCENTAGE = 75;
+const FIXED_DIFFICULTY = "medium";
+
+// ISO timestamp -> value usable by <input type="datetime-local"> in local time.
+function toLocalInputValue(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export function isQuizOverdue(quiz: Pick<Quiz, "deadline">): boolean {
+  if (!quiz.deadline) return false;
+  const d = new Date(quiz.deadline);
+  return !isNaN(d.getTime()) && d.getTime() < Date.now();
+}
+
+function feedbackCorrectText(fb: QuizFeedbackItem): string | null {
+  const correct = fb.correctAnswer;
+  if (correct === undefined || correct === null) return null;
+  const options = fb.options || [];
+  const resolve = (v: string | number): string => {
+    if (typeof v === "number" && options[v] !== undefined) return String(options[v]);
+    if (typeof v === "string") {
+      const direct = options.indexOf(v);
+      if (direct >= 0) return v;
+      const letterIdx = "ABCD".indexOf(v.toUpperCase());
+      if (letterIdx >= 0 && options[letterIdx] !== undefined) return String(options[letterIdx]);
+      return v;
+    }
+    return String(v);
+  };
+  return Array.isArray(correct) ? correct.map(resolve).join(", ") : resolve(correct);
+}
+
+function feedbackUserAnswerText(fb: QuizFeedbackItem, question?: QuizQuestion): string {
+  const value = fb.userAnswer;
+  if (value === undefined || value === null) return "No answer";
+  if (typeof value === "string" && value.trim() === "") return "No answer";
+  const options =
+    fb.options && fb.options.length > 0
+      ? fb.options
+      : ((question?.options as (string | number)[] | undefined) || []);
+  const resolve = (v: string | number): string => {
+    if (typeof v === "number" && options[v] !== undefined) return String(options[v]);
+    if (typeof v === "string") {
+      const direct = options.indexOf(v);
+      if (direct >= 0) return v;
+      const letterIdx = "ABCD".indexOf(v.toUpperCase());
+      if (letterIdx >= 0 && options[letterIdx] !== undefined) return String(options[letterIdx]);
+      return v;
+    }
+    return String(v);
+  };
+  const parts = Array.isArray(value) ? value.map(resolve).filter(Boolean) : [resolve(value)];
+  return parts.length > 0 ? parts.join(", ") : "No answer";
+}
+
+function cleanQuizDescription(desc: string): string {
+  return desc.replace(AI_DEFAULT_QUIZ_DESCRIPTION, "").trim();
+}
 
 interface AssessmentPageProps {
   onNavigate: (tab: string) => void;
@@ -43,13 +110,23 @@ export interface SavedQuizProgress {
 
 export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) => {
   const { currentUser } = useAuth();
+  const canManageCourseQuizzes = currentUser?.role === "teacher";
+  const { showToast } = useToast();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const initialQuizId = searchParams.get("quizId");
+  const returnTo = searchParams.get("returnTo");
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
 
   // Filter Tab & Subject State
-  const [activeQuizTab, setActiveQuizTab] = useState<"all" | "teacher" | "student">("all");
   const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>("all");
+  const [quizPage, setQuizPage] = useState(1);
+
+  useEffect(() => {
+    setQuizPage(1);
+  }, [selectedSubjectFilter]);
 
   // Create Quiz Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -58,8 +135,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   const [newQuizTopic, setNewQuizTopic] = useState("");
   const [newQuizType, setNewQuizType] = useState<"teacher" | "student">("teacher");
   const [newQuizTimeLimit, setNewQuizTimeLimit] = useState<number>(15);
-  const [newQuizPassPercentage, setNewQuizPassPercentage] = useState<number>(70);
-  const [newQuizDifficulty, setNewQuizDifficulty] = useState<"easy" | "medium" | "hard">("medium");
+  const [newQuizLimitAttempts, setNewQuizLimitAttempts] = useState(false);
+  const [newQuizAttempts, setNewQuizAttempts] = useState<number>(3);
+  const [newQuizRevealAnswers, setNewQuizRevealAnswers] = useState(true);
+  const [newQuizDeadline, setNewQuizDeadline] = useState<string>("");
   const [newQuizQuestions, setNewQuizQuestions] = useState<QuizQuestion[]>([]);
   const [isCreatingQuiz, setIsCreatingQuiz] = useState(false);
 
@@ -71,11 +150,22 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   const [manualQOpt2, setManualQOpt2] = useState("");
   const [manualQOpt3, setManualQOpt3] = useState("");
   const [manualQCorrect, setManualQCorrect] = useState<number>(0);
+  const [manualQMulti, setManualQMulti] = useState(false);
+  const [manualQMultiCorrect, setManualQMultiCorrect] = useState<number[]>([]);
   const [manualQIdentAnswer, setManualQIdentAnswer] = useState("");
   const [manualQExplanation, setManualQExplanation] = useState("");
 
   // Quiz Deletion Modal
   const [quizToDelete, setQuizToDelete] = useState<Quiz | null>(null);
+
+  // Quiz Preview Modal (read-only view of a quiz's contents)
+  const [previewQuiz, setPreviewQuiz] = useState<Quiz | null>(null);
+
+  // Assign Subject Modal State (teacher quizzes, mirroring Upload & Manage Materials)
+  const [assignQuiz, setAssignQuiz] = useState<Quiz | null>(null);
+  const [assignQuizSubjectId, setAssignQuizSubjectId] = useState("");
+  const [isAssigningQuizSubject, setIsAssigningQuizSubject] = useState(false);
+  const [assignQuizMsg, setAssignQuizMsg] = useState<string | null>(null);
 
   // Edit Quiz Modal
   const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
@@ -84,8 +174,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   const [editSubjectId, setEditSubjectId] = useState("");
   const [editQuizType, setEditQuizType] = useState<"teacher" | "student">("teacher");
   const [editTimeLimit, setEditTimeLimit] = useState<number>(15);
-  const [editPassPercentage, setEditPassPercentage] = useState<number>(70);
-  const [editDifficulty, setEditDifficulty] = useState<"easy" | "medium" | "hard">("medium");
+  const [editLimitAttempts, setEditLimitAttempts] = useState(false);
+  const [editAttempts, setEditAttempts] = useState<number>(3);
+  const [editRevealAnswers, setEditRevealAnswers] = useState(true);
+  const [editDeadline, setEditDeadline] = useState<string>("");
   const [editQuestions, setEditQuestions] = useState<QuizQuestion[]>([]);
 
   // Active Quiz Taking State
@@ -121,7 +213,6 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   // Completed Attempt State
   const [completedAttempt, setCompletedAttempt] = useState<QuizAttempt | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showConfetti, setShowConfetti] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Fetch Quizzes and Subjects
@@ -130,12 +221,20 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     const fetchCatalogData = async () => {
       try {
         const [qRes, sRes] = await Promise.all([
-          authFetch(`/api/quizzes?studentId=${currentUser?.id || ""}`),
+          authFetch(`/api/quizzes?studentId=${currentUser?.id || ""}&userRole=${currentUser?.role || ""}`),
           authFetch("/api/subjects"),
         ]);
         if (qRes.ok && isSubscribed) {
           const qData = await qRes.json();
           setQuizzes(qData);
+          if (initialQuizId) {
+            const target = qData.find((q: Quiz) => q.id === initialQuizId);
+            if (target) {
+              // Route through the same entry path as a manual open so the real
+              // time limit applies and the countdown actually starts.
+              handleStartQuiz(target);
+            }
+          }
         }
         if (sRes.ok && isSubscribed) {
           const sData = await sRes.json();
@@ -151,7 +250,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     return () => {
       isSubscribed = false;
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.role, initialQuizId]);
 
   // Submit Quiz Handler
   const handleSubmitQuiz = useCallback(async () => {
@@ -180,6 +279,15 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
         setSubmitError(
           `Could not submit your assessment. ${data?.error || `Server returned status ${res.status}`}`
         );
+        if (res.status === 409) {
+          setQuizzes((prev) =>
+            prev.map((q) =>
+              q.id === activeQuiz.id
+                ? { ...q, attemptsUsed: data?.attemptsUsed ?? q.attemptsUsed, attemptsAllowed: data?.attemptsAllowed ?? q.attemptsAllowed }
+                : q
+            )
+          );
+        }
         return;
       }
 
@@ -196,7 +304,19 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
       });
 
       setCompletedAttempt(data.attempt);
-      setShowConfetti(true);
+      setQuizzes((prev) =>
+        prev.map((q) =>
+          q.id === activeQuiz.id
+            ? {
+                ...q,
+                attemptsUsed: (q.attemptsUsed || 0) + 1,
+                lastScoreRaw: data.attempt?.score ?? q.lastScoreRaw,
+                lastMaxScore: data.attempt?.maxScore ?? data.attempt?.totalPoints ?? q.lastMaxScore,
+                lastScore: data.attempt?.percentage ?? q.lastScore,
+              }
+            : q
+        )
+      );
     } catch (err) {
       console.error("Submit quiz error:", err);
       setSubmitError(`Could not submit your assessment. ${err instanceof Error ? err.message : String(err)}`);
@@ -205,9 +325,8 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     }
   }, [activeQuiz, currentUser, userAnswers]);
 
-  // CONTINUOUS REAL-TIME TIMER EFFECT
-  // The timer calculates remaining seconds against targetEndTime (absolute timestamp).
-  // It continues ticking continuously and cannot be paused or stopped.
+  // Timer effect: remaining seconds are computed against targetEndTime so the
+  // countdown keeps running even if the component re-renders.
   useEffect(() => {
     if (!activeQuiz || completedAttempt || !targetEndTime) return;
 
@@ -249,6 +368,19 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   }, [activeQuiz, currentQIndex, userAnswers, timeLeft, targetEndTime, completedAttempt, currentUser?.id]);
 
   const handleStartQuiz = (quiz: Quiz, resume = false) => {
+    if (!resume && currentUser?.role !== "teacher" && currentUser?.role !== "admin" && quiz.isPublished === false) {
+      showToast("This quiz has not been published yet and is not available to students.", "info");
+      return;
+    }
+    const quizAttemptsAllowed = quiz.attemptsAllowed || 0;
+    if (quiz.quizType !== "student" && quizAttemptsAllowed > 0 && (quiz.attemptsUsed || 0) >= quizAttemptsAllowed) {
+      showToast("You have reached the maximum number of attempts allowed for this quiz.", "error");
+      return;
+    }
+    if (currentUser?.role === "student" && isQuizOverdue(quiz)) {
+      showToast("The deadline for this quiz has passed. It has been recorded as Missing.", "error");
+      return;
+    }
     const userId = currentUser?.id || "guest";
     const storageKey = `studylens_quiz_progress_${userId}_${quiz.id}`;
     const saved = savedProgresses[quiz.id];
@@ -268,7 +400,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
       setTimeLeft(remaining);
 
       if (remaining <= 0) {
-        alert("The time limit for this quiz has expired while away! Automatically calculating your score now...");
+        showToast("The time limit for this quiz has expired while away! Automatically calculating your score now...", "info");
       }
     } else {
       // Starting fresh - clear previous saved progress for this quiz
@@ -291,7 +423,6 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
     setCompletedAttempt(null);
     setHint(null);
-    setShowConfetti(false);
     setSubmitError(null);
   };
 
@@ -346,7 +477,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
         correctAnswer: manualQIdentAnswer.trim(),
         explanation: manualQExplanation.trim() || `Correct key term: "${manualQIdentAnswer.trim()}"`,
         bloomsLevel: "Remembering",
-        difficulty: newQuizDifficulty,
+        difficulty: FIXED_DIFFICULTY,
         topicTag: newQuizTopic || "Identification",
       };
     } else if (manualQType === "true_false") {
@@ -358,7 +489,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
         correctAnswer: manualQCorrect,
         explanation: manualQExplanation.trim() || "Standard answer explanation.",
         bloomsLevel: "Understanding",
-        difficulty: newQuizDifficulty,
+        difficulty: FIXED_DIFFICULTY,
         topicTag: newQuizTopic || "True/False",
       };
     } else {
@@ -372,10 +503,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           manualQOpt2 || "Option C",
           manualQOpt3 || "Option D",
         ],
-        correctAnswer: manualQCorrect,
+        correctAnswer: manualQMulti ? manualQMultiCorrect : manualQCorrect,
         explanation: manualQExplanation.trim() || "Standard answer explanation.",
         bloomsLevel: "Understanding",
-        difficulty: newQuizDifficulty,
+        difficulty: FIXED_DIFFICULTY,
         topicTag: newQuizTopic || "Core Concepts",
       };
     }
@@ -388,20 +519,34 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     setManualQOpt3("");
     setManualQIdentAnswer("");
     setManualQExplanation("");
+    setManualQMulti(false);
+    setManualQMultiCorrect([]);
   };
 
   const handleCreatePersonalQuiz = async () => {
     if (!newQuizTitle.trim()) return;
     setIsCreatingQuiz(true);
     try {
-      const selectedSubject = subjects.find((s) => s.id === newQuizSubjectId) || subjects[0];
-      const isTeacher = currentUser?.role === "teacher" || currentUser?.role === "admin";
+      const selectedSubject = newQuizSubjectId
+        ? subjects.find((s) => s.id === newQuizSubjectId)
+        : undefined;
+      const isTeacher = currentUser?.role === "teacher";
       
       const shuffleMcOptions = (q: QuizQuestion): QuizQuestion => {
         if (q.type !== "multiple_choice" || !q.options || q.options.length < 2) return q;
+        const shuffled = [...q.options].sort(() => Math.random() - 0.5);
+        if (Array.isArray(q.correctAnswer)) {
+          const correctTexts = q.correctAnswer
+            .map((i) => q.options![Number(i)])
+            .filter((t): t is string => typeof t === "string");
+          return {
+            ...q,
+            options: shuffled,
+            correctAnswer: correctTexts.map((t) => shuffled.indexOf(t)).filter((i) => i >= 0),
+          };
+        }
         const correctIndex = Number(q.correctAnswer) || 0;
         const correctText = q.options[correctIndex];
-        const shuffled = [...q.options].sort(() => Math.random() - 0.5);
         return { ...q, options: shuffled, correctAnswer: shuffled.indexOf(correctText) };
       };
 
@@ -414,7 +559,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           correctAnswer: 0,
           explanation: "Divide and conquer divides large problems into smaller independent subproblems.",
           bloomsLevel: "Understanding",
-          difficulty: newQuizDifficulty,
+          difficulty: FIXED_DIFFICULTY,
           topicTag: newQuizTopic || "Core Concepts",
         },
         {
@@ -425,7 +570,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           correctAnswer: 0,
           explanation: "True. Auxiliary space measures memory required by the algorithm excluding input size.",
           bloomsLevel: "Remembering",
-          difficulty: newQuizDifficulty,
+          difficulty: FIXED_DIFFICULTY,
           topicTag: newQuizTopic || "Core Concepts",
         },
         {
@@ -436,7 +581,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           correctAnswer: 0,
           explanation: "Modularizing material allows focused mastery of individual concept blocks.",
           bloomsLevel: "Analyzing",
-          difficulty: newQuizDifficulty,
+          difficulty: FIXED_DIFFICULTY,
           topicTag: newQuizTopic || "Core Concepts",
         },
       ].map(shuffleMcOptions);
@@ -451,16 +596,19 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           description: isTeacher
             ? `Official Course Assessment on ${newQuizTopic || newQuizTitle}`
             : `Self-study practice quiz on ${newQuizTopic || newQuizTitle}`,
-          subjectId: selectedSubject ? selectedSubject.id : "sub-101",
+          subjectId: selectedSubject ? selectedSubject.id : (isTeacher ? "" : "personal"),
           questions: finalQuestions,
-          createdById: currentUser?.id || (isTeacher ? "usr-teacher-1" : "usr-student-1"),
+          createdById: currentUser?.id || (isTeacher ? "usr-teacher-1" : ""),
           createdByName: currentUser?.name || (isTeacher ? "Faculty Instructor" : "Student User"),
           quizType: newQuizType,
           uploaderRole: currentUser?.role || "student",
-          isPublished: true,
+          isPublished: newQuizType === "teacher" ? !!selectedSubject : true,
           timeLimitMinutes: newQuizTimeLimit,
-          passPercentage: newQuizPassPercentage,
-          difficulty: newQuizDifficulty,
+          passPercentage: FIXED_PASS_PERCENTAGE,
+          difficulty: FIXED_DIFFICULTY,
+          attemptsAllowed: newQuizLimitAttempts ? newQuizAttempts : 0,
+          revealAnswers: newQuizRevealAnswers,
+          deadline: newQuizDeadline ? new Date(newQuizDeadline).toISOString() : null,
         }),
       });
 
@@ -471,6 +619,11 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
         setNewQuizTitle("");
         setNewQuizTopic("");
         setNewQuizQuestions([]);
+        setNewQuizLimitAttempts(false);
+        setNewQuizAttempts(3);
+      } else {
+        const body = await quizRes.json().catch(() => null);
+        showToast(typeof body?.error === "string" ? body.error : "Could not create the quiz. Please try again.", "error");
       }
     } catch (err) {
       console.error("Create quiz error:", err);
@@ -483,17 +636,23 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     setEditingQuiz(quiz);
     setEditTitle(quiz.title);
     setEditDescription(quiz.description || "");
-    setEditSubjectId(quiz.subjectId || (subjects[0] ? subjects[0].id : "sub-101"));
+    // Personal practice drills stay subjectless: never silently assign one.
+    setEditSubjectId(quiz.quizType === "student" ? quiz.subjectId || "" : quiz.subjectId || (subjects[0] ? subjects[0].id : "sub-101"));
     setEditQuizType(quiz.quizType || "teacher");
     setEditTimeLimit(quiz.timeLimitMinutes || 15);
-    setEditPassPercentage(quiz.passPercentage || 70);
-    setEditDifficulty(quiz.difficulty || "medium");
+    setEditLimitAttempts((quiz.attemptsAllowed || 0) > 0);
+    setEditAttempts(quiz.attemptsAllowed || 3);
+    setEditRevealAnswers(quiz.revealAnswers !== false);
+    setEditDeadline(toLocalInputValue(quiz.deadline));
     setEditQuestions(quiz.questions || []);
   };
 
   const handleSaveEditQuiz = async () => {
     if (!editingQuiz) return;
     try {
+      // Practice drills cannot move subjects or change scope: omit those keys
+      // entirely so the backend ownership guard accepts the update.
+      const isPractice = editingQuiz.quizType === "student";
       const selectedSubject = subjects.find((s) => s.id === editSubjectId);
       const res = await authFetch(`/api/quizzes/${editingQuiz.id}`, {
         method: "PUT",
@@ -501,12 +660,19 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
         body: JSON.stringify({
           title: editTitle,
           description: editDescription,
-          subjectId: editSubjectId,
-          subjectName: selectedSubject ? `${selectedSubject.code} - ${selectedSubject.name}` : editingQuiz.subjectName,
-          quizType: editQuizType,
+          ...(isPractice
+            ? {}
+            : {
+                subjectId: editSubjectId,
+                subjectName: selectedSubject ? `${selectedSubject.code} - ${selectedSubject.name}` : editingQuiz.subjectName,
+                quizType: editQuizType,
+              }),
           timeLimitMinutes: editTimeLimit,
-          passPercentage: editPassPercentage,
-          difficulty: editDifficulty,
+          passPercentage: FIXED_PASS_PERCENTAGE,
+          difficulty: FIXED_DIFFICULTY,
+          attemptsAllowed: editLimitAttempts ? editAttempts : 0,
+          revealAnswers: editRevealAnswers,
+          deadline: editDeadline ? new Date(editDeadline).toISOString() : null,
           questions: editQuestions,
         }),
       });
@@ -515,26 +681,77 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
         const updated = await res.json();
         setQuizzes((prev) => prev.map((q) => (q.id === editingQuiz.id ? updated : q)));
         setEditingQuiz(null);
+      } else {
+        const body = await res.json().catch(() => null);
+        showToast(typeof body?.error === "string" ? body.error : "Could not save the quiz changes. Please try again.", "error");
       }
     } catch (err) {
       console.error("Save edit quiz error:", err);
     }
   };
 
-  const handleTogglePublish = async (quizId: string, currentPub: boolean) => {
+  const handleTogglePublish = async (quiz: Quiz) => {
+    const publish = !quiz.isPublished;
+    if (publish && !quiz.subjectId) {
+      openAssignQuizSubject(quiz, "Assign this quiz to a subject before publishing it.");
+      return;
+    }
     try {
-      const res = await authFetch(`/api/quizzes/${quizId}`, {
+      const res = await authFetch(`/api/quizzes/${quiz.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isPublished: !currentPub }),
+        body: JSON.stringify({ isPublished: publish }),
       });
       if (res.ok) {
         setQuizzes((prev) =>
-          prev.map((q) => (q.id === quizId ? { ...q, isPublished: !currentPub } : q))
+          prev.map((q) => (q.id === quiz.id ? { ...q, isPublished: publish } : q))
         );
+        showToast(publish ? "Quiz published." : "Quiz unpublished.");
+      } else {
+        const body = await res.json().catch(() => null);
+        showToast(typeof body?.error === "string" ? body.error : "Could not update the quiz.", "error");
       }
     } catch (err) {
       console.error("Toggle publish error:", err);
+    }
+  };
+
+  const openAssignQuizSubject = (quiz: Quiz, msg?: string | null) => {
+    setAssignQuiz(quiz);
+    setAssignQuizSubjectId(quiz.subjectId && quiz.subjectId !== "" && quiz.subjectId !== "personal" ? quiz.subjectId : "");
+    setAssignQuizMsg(msg ?? null);
+  };
+
+  const handleAssignQuizSubject = async () => {
+    if (!assignQuiz || !assignQuizSubjectId) {
+      setAssignQuizMsg("Please select an assigned subject.");
+      return;
+    }
+    setIsAssigningQuizSubject(true);
+    setAssignQuizMsg(null);
+    try {
+      const selectedSubject = subjects.find((s) => s.id === assignQuizSubjectId);
+      const res = await authFetch(`/api/quizzes/${assignQuiz.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subjectId: assignQuizSubjectId,
+          subjectName: selectedSubject ? `${selectedSubject.code} - ${selectedSubject.name}` : assignQuiz.subjectName,
+        }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setQuizzes((prev) => prev.map((q) => (q.id === assignQuiz.id ? updated : q)));
+        setAssignQuiz(null);
+        showToast("Subject assigned to quiz.");
+      } else {
+        const body = await res.json().catch(() => ({}));
+        showToast(typeof body?.error === "string" ? body.error : "Could not assign the subject. Please try again.", "error");
+      }
+    } catch {
+      showToast("Could not assign the subject. Please try again.", "error");
+    } finally {
+      setIsAssigningQuizSubject(false);
     }
   };
 
@@ -551,6 +768,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           delete copy[quizToDelete.id];
           return copy;
         });
+        showToast("Quiz deleted.");
       }
     } catch (err) {
       console.error("Delete quiz error:", err);
@@ -565,50 +783,37 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
-  // Filter Quizzes according to Privacy Rule, Tab selection, and Subject selection
+  // Filter Quizzes according to Privacy Rule and Subject selection
   const visibleQuizzes = quizzes.filter((q) => {
-    const type = q.quizType || (q.createdById?.startsWith("usr-teacher") ? "teacher" : "student");
-    if (activeQuizTab === "teacher" && type !== "teacher") return false;
-    if (activeQuizTab === "student" && (type !== "student" || q.createdById !== currentUser?.id)) return false;
+    // Unpublished quizzes are hidden from students entirely (staff still see them).
+    if (q.isPublished === false && currentUser?.role !== "teacher" && currentUser?.role !== "admin") return false;
     if (selectedSubjectFilter !== "all" && q.subjectId !== selectedSubjectFilter) return false;
     return true;
   });
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <ConfettiEffect trigger={showConfetti} />
 
       {/* 1. ACTIVE QUIZ TAKING INTERFACE */}
       {activeQuiz && !completedAttempt && (() => {
         const isTeacherQuiz = (activeQuiz.quizType || (activeQuiz.createdById?.startsWith("usr-teacher") ? "teacher" : "student")) === "teacher";
 
         return (
-          <div className="bg-card rounded-2xl border border-border shadow-xl overflow-hidden space-y-0">
+          <div className="bg-card rounded-2xl border border-border shadow-xs overflow-hidden space-y-0">
             {/* Top Header Bar */}
-            <div className="bg-slate-900 text-white p-5 flex flex-wrap items-center justify-between gap-3">
+            <div className="bg-card border-b border-border p-5 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="flex items-center space-x-2">
-                  <span className="px-2.5 py-0.5 bg-blue-600 rounded-md text-[10px] font-bold uppercase tracking-wider">
+                  <span className="px-2.5 py-0.5 bg-blue-600 text-white rounded-md text-[10px] font-bold uppercase tracking-wider">
                     {activeQuiz.subjectName}
                   </span>
-                  {isTeacherQuiz ? (
-                    <span className="px-2.5 py-0.5 bg-blue-500/20 text-blue-300 border border-blue-400/30 font-bold text-[10px] rounded-md flex items-center space-x-1">
-                      <UserCheck className="w-3 h-3 text-blue-400" />
-                      <span>Official Professor Exam</span>
-                    </span>
-                  ) : (
-                    <span className="px-2.5 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-400/30 font-bold text-[10px] rounded-md flex items-center space-x-1">
-                      <User className="w-3 h-3 text-purple-400" />
-                      <span>Student Practice Drill</span>
-                    </span>
-                  )}
                 </div>
-                <h2 className="text-lg font-bold mt-1">{activeQuiz.title}</h2>
+                <h2 className="text-lg font-bold mt-1 text-foreground">{activeQuiz.title}</h2>
               </div>
 
               <div className="flex items-center space-x-3">
-                <div className="flex items-center space-x-2 px-3.5 py-1.5 bg-amber-500/10 text-amber-400 rounded-xl font-mono text-base font-black border border-amber-500/30 shadow-inner">
-                  <Clock className="w-4 h-4 text-amber-400 animate-pulse" />
+                <div className="flex items-center space-x-2 px-3.5 py-1.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-xl font-mono text-base font-bold border border-amber-500/30">
+                  <Clock className="w-4 h-4 text-amber-500" />
                   <span>{formatTime(timeLeft)}</span>
                 </div>
               </div>
@@ -632,9 +837,6 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     <span className="font-bold text-foreground">
                       Question {currentQIndex + 1} of {activeQuiz.questions.length}
                     </span>
-                    <span className="px-2.5 py-1 bg-primary/10 text-primary rounded-md font-bold text-[11px]">
-                      Bloom's Level: {activeQuiz.questions[currentQIndex].bloomsLevel}
-                    </span>
                   </div>
 
                   <h3 className="text-base font-bold text-foreground">
@@ -642,18 +844,38 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   </h3>
 
                   {/* Question Options */}
+                  {Array.isArray(activeQuiz.questions[currentQIndex].correctAnswer) && (
+                    <p className="text-[11px] font-bold text-purple-600 dark:text-purple-400 flex items-center space-x-1.5">
+                      <CheckSquare className="w-3.5 h-3.5" />
+                      <span>Select all correct answers that apply.</span>
+                    </p>
+                  )}
                   {activeQuiz.questions[currentQIndex].options &&
                   activeQuiz.questions[currentQIndex].options!.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                       {activeQuiz.questions[currentQIndex].options!.map((opt, oIdx) => {
-                        const isSelected =
-                          userAnswers[activeQuiz.questions[currentQIndex].id] === oIdx;
+                        const q = activeQuiz.questions[currentQIndex];
+                        const isMulti = Array.isArray(q.correctAnswer);
+                        const saved = userAnswers[q.id];
+                        const isSelected = isMulti
+                          ? Array.isArray(saved) && (saved as number[]).includes(oIdx)
+                          : saved === oIdx;
                         return (
                           <button
                             key={oIdx}
-                            onClick={() =>
-                              handleSelectAnswer(activeQuiz.questions[currentQIndex].id, oIdx)
-                            }
+                            onClick={() => {
+                              if (isMulti) {
+                                const current = Array.isArray(saved) ? (saved as number[]) : [];
+                                setUserAnswers({
+                                  ...userAnswers,
+                                  [q.id]: current.includes(oIdx)
+                                    ? current.filter((i) => i !== oIdx)
+                                    : [...current, oIdx],
+                                });
+                              } else {
+                                handleSelectAnswer(q.id, oIdx);
+                              }
+                            }}
                             className={`p-3.5 rounded-xl border text-left text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
                               isSelected
                                 ? "bg-primary/10 border-primary text-primary shadow-xs ring-1 ring-primary"
@@ -664,7 +886,12 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                               <span className="font-bold mr-2">{String.fromCharCode(65 + oIdx)}.</span>
                               {opt}
                             </span>
-                            {isSelected && <CheckCircle2 className="w-4 h-4 text-primary" />}
+                            {isSelected &&
+                              (isMulti ? (
+                                <CheckSquare className="w-4 h-4 text-primary" />
+                              ) : (
+                                <CheckCircle2 className="w-4 h-4 text-primary" />
+                              ))}
                           </button>
                         );
                       })}
@@ -683,33 +910,24 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     </div>
                   )}
 
-                  {/* AI Hint Section - DISABLED FOR PROFESSOR EXAMS */}
+                  {/* Study Hint Section - DISABLED FOR TEACHER QUIZZES */}
                   <div className="pt-2">
-                    {isTeacherQuiz ? (
-                      <div className="p-3 bg-muted/40 border border-border rounded-xl text-xs text-muted-foreground flex items-center space-x-2">
-                        <XCircle className="w-4 h-4 text-slate-400" />
-                        <span className="font-medium">
-                          Hints & AI suggestions are disabled for Official Professor Examinations.
-                        </span>
-                      </div>
-                    ) : hint ? (
+                    {!isTeacherQuiz && hint ? (
                       <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-800 dark:text-amber-200 space-y-1">
                         <span className="font-bold flex items-center space-x-1 text-amber-600 dark:text-amber-400">
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>AI Socratic Hint</span>
+                          <span>Study Hint</span>
                         </span>
                         <p className="leading-relaxed">{hint}</p>
                       </div>
-                    ) : (
+                    ) : !isTeacherQuiz ? (
                       <button
                         onClick={() => handleFetchHint(activeQuiz.questions[currentQIndex])}
                         disabled={loadingHint}
                         className="px-3 py-1.5 bg-muted hover:bg-amber-500/10 text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400 rounded-lg text-xs font-semibold transition-all flex items-center space-x-1.5 cursor-pointer"
                       >
-                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                        <span>{loadingHint ? "Asking Gemini..." : "Need Socratic Hint?"}</span>
+                        <span>{loadingHint ? "Fetching hint..." : "Get a hint"}</span>
                       </button>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               )}
@@ -754,19 +972,18 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
       {/* 2. COMPLETED ATTEMPT RESULTS VIEW */}
       {completedAttempt && (
-        <div className="bg-card p-6 rounded-2xl border border-border shadow-xl space-y-6">
+        <div className="bg-card p-6 rounded-2xl border border-border shadow-xs space-y-6">
           <div className="text-center space-y-2 border-b border-border pb-4">
-            <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-bold uppercase">
-              <Trophy className="w-3.5 h-3.5" />
-              <span>Assessment Completed!</span>
-            </span>
             <h2 className="text-2xl font-black text-foreground">
+              Assessment Completed
+            </h2>
+            <p className="text-base font-bold text-primary">
               Your Score: {completedAttempt.score} / {completedAttempt.totalPoints} (
               {completedAttempt.percentage}%)
-            </h2>
+            </p>
             <p className="text-xs text-muted-foreground">
               Submitted on {new Date(completedAttempt.submittedAt).toLocaleString()}
-            </p>
+</p>
           </div>
 
           <div className="space-y-4">
@@ -793,9 +1010,23 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   )}
                 </div>
                 <p className="font-semibold text-foreground">{fb.question}</p>
-                <p className="text-muted-foreground">
-                  <strong className="text-foreground">Explanation:</strong> {fb.explanation}
-                </p>
+                {fb.userAnswer !== undefined && fb.userAnswer !== null && (
+                  <p className="text-muted-foreground">
+                    <strong className="text-foreground">Your answer:</strong>{" "}
+                    {feedbackUserAnswerText(fb, activeQuiz.questions[idx])}
+                  </p>
+                )}
+                {feedbackCorrectText(fb) && (
+                  <p className="text-muted-foreground">
+                    <strong className="text-foreground">Correct answer:</strong>{" "}
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">{feedbackCorrectText(fb)}</span>
+                  </p>
+                )}
+                {fb.explanation && (
+                  <p className="text-muted-foreground">
+                    <strong className="text-foreground">Explanation:</strong> {fb.explanation}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -803,13 +1034,17 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           <div className="flex justify-end pt-2">
             <button
               onClick={() => {
+                if (returnTo) {
+                  navigate(decodeURIComponent(returnTo));
+                  return;
+                }
                 setActiveQuiz(null);
                 setCompletedAttempt(null);
                 setSubmitError(null);
               }}
               className="px-5 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground font-bold rounded-xl text-xs shadow-md cursor-pointer"
             >
-              Back to Assessments Catalog
+              {returnTo ? "Back to Subject Quizzes" : "Back to Assessments Catalog"}
             </button>
           </div>
         </div>
@@ -818,26 +1053,21 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
       {/* 3. CATALOG OF QUIZZES & ASSESSMENT TYPES */}
       {!activeQuiz && (
         <div className="space-y-6">
-          {/* Top Banner */}
-          <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-100 border border-blue-200/80 text-slate-900 dark:from-slate-950 dark:via-indigo-950 dark:to-blue-900 dark:border-blue-900/30 dark:text-white rounded-2xl p-6 shadow-xs dark:shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors">
-            <div className="space-y-1">
-              <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200/80 dark:bg-blue-500/20 dark:text-blue-300 dark:border-blue-400/20 text-xs font-semibold">
-                <CheckSquare className="w-3.5 h-3.5 text-blue-600 dark:text-blue-300" />
-                <span>Blooms Taxonomy Assessment Portal</span>
-              </div>
-              <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Assessments & Quizzes Catalog</h1>
-              <p className="text-slate-600 dark:text-slate-300 text-xs max-w-xl leading-relaxed">
-                Choose between Official Teacher Subject Quizzes and Personal Student Practice Drills.
-              </p>
-            </div>
-
-            <div className="flex items-center space-x-2 self-start sm:self-center">
+          {/* Slim toolbar */}
+          <div className="flex items-center justify-end gap-3 flex-wrap">
+            <div className="flex items-center space-x-2 shrink-0">
               <button
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => {
+                    if (!canManageCourseQuizzes) {
+                      setNewQuizType("student");
+                    }
+                    setNewQuizDeadline("");
+                    setShowCreateModal(true);
+                  }}
                 className="px-3.5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
-                <span>Create Practice Quiz</span>
+                <span>Create Quiz</span>
               </button>
 
               <button
@@ -852,21 +1082,12 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
           {/* Unfinished Quiz Resume Alert Banner */}
           {Object.keys(savedProgresses).length > 0 && (
-            <div className="bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/15 border border-amber-500/30 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+            <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center space-x-3">
-                <div className="p-2.5 bg-amber-500 text-slate-950 rounded-xl font-black">
-                  <RotateCcw className="w-5 h-5 animate-spin-slow" />
+                <div className="p-2.5 bg-amber-500 text-slate-950 rounded-xl">
+                  <RotateCcw className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center space-x-2">
-                    <span className="px-2 py-0.5 bg-amber-500 text-slate-950 font-black text-[10px] rounded uppercase tracking-wider">
-                      Unfinished Quiz Saved
-                    </span>
-                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold text-[10px] rounded border border-amber-500/30 flex items-center space-x-1">
-                      <Clock className="w-3 h-3 text-amber-500" />
-                      <span>Active Practice Session</span>
-                    </span>
-                  </div>
                   <p className="text-sm font-bold text-foreground mt-0.5">
                     {Object.values(savedProgresses)[0].quizTitle} ({Object.values(savedProgresses)[0].subjectName})
                   </p>
@@ -901,40 +1122,11 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           {/* Quiz Type Tabs & Subject Filter */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => setActiveQuizTab("all")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  activeQuizTab === "all"
-                    ? "bg-primary text-primary-foreground shadow-xs"
-                    : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-                }`}
-              >
-                All Quizzes ({quizzes.length})
-              </button>
-
-              <button
-                onClick={() => setActiveQuizTab("teacher")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer ${
-                  activeQuizTab === "teacher"
-                    ? "bg-blue-600 text-white shadow-xs"
-                    : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-                }`}
-              >
-                <UserCheck className="w-3.5 h-3.5" />
-                <span>Teacher Subject Quizzes ({quizzes.filter(q => (q.quizType || "teacher") === "teacher").length})</span>
-              </button>
-
-              <button
-                onClick={() => setActiveQuizTab("student")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer ${
-                  activeQuizTab === "student"
-                    ? "bg-purple-600 text-white shadow-xs"
-                    : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-                }`}
-              >
-                <User className="w-3.5 h-3.5" />
-                <span>My Personal Practice Quizzes ({quizzes.filter(q => q.quizType === "student" && q.createdById === currentUser?.id).length})</span>
-              </button>
+              <div className="inline-flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border w-fit max-w-full overflow-x-auto shrink-0">
+                <span className="px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap bg-card text-foreground shadow-xs border border-border">
+                  All Quizzes ({quizzes.length})
+                </span>
+              </div>
 
               {/* Subject Filter Dropdown */}
               <div className="flex items-center space-x-1 pl-2 border-l border-border">
@@ -946,19 +1138,13 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                 >
                   <option value="all">All Subjects Filter</option>
                   {subjects.map((sub) => (
-                    <option key={sub.id} value={sub.id}>
-                      {sub.code} - {sub.name}
-                    </option>
-                  ))}
+                          <option key={sub.id} value={sub.id}>
+                            {sub.code} - {sub.name}
+                          </option>
+                        ))}
                 </select>
               </div>
             </div>
-
-            <p className="text-xs text-muted-foreground hidden lg:block">
-              {currentUser?.role === "teacher" || currentUser?.role === "admin"
-                ? "* Faculty instructors can create, view, edit, publish, and delete course quizzes."
-                : "* Student-created practice drills are recorded for your personal self-study."}
-            </p>
           </div>
 
           {/* Quizzes Grid */}
@@ -972,90 +1158,123 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                 </p>
               </div>
             ) : (
-              visibleQuizzes.map((quiz) => {
+              slicePage(visibleQuizzes, quizPage).map((quiz) => {
                 const saved = savedProgresses[quiz.id];
-                const isTeacherQuiz = (quiz.quizType || (quiz.createdById?.startsWith("usr-teacher") ? "teacher" : "student")) === "teacher";
-                const canManage = currentUser?.role === "teacher" || currentUser?.role === "admin" || quiz.createdById === currentUser?.id;
+                const canManage = currentUser?.role === "teacher" || (quiz.createdById === currentUser?.id && currentUser?.role !== "admin");
+                const canPublish = currentUser?.role === "teacher";
+                const quizAttemptsAllowed = quiz.attemptsAllowed || 0;
+                const cleanDesc = cleanQuizDescription(quiz.description || "");
 
                 return (
                   <div
                     key={quiz.id}
-                    className={`bg-card p-6 rounded-2xl border transition-all flex flex-col justify-between space-y-4 ${
+                    onClick={() => setPreviewQuiz(quiz)}
+                    className={`bg-card p-6 rounded-2xl border transition-all flex flex-col justify-between space-y-4 cursor-pointer ${
                       saved
                         ? "border-amber-500/50 shadow-md ring-1 ring-amber-500/20"
                         : "border-border shadow-xs hover:border-primary/50"
                     }`}
+                    title="Click to view this quiz"
                   >
                     <div className="space-y-3">
                       {/* Header Badges */}
                       <div className="flex items-center justify-between gap-2">
-                        <span className="px-2.5 py-1 bg-primary/10 text-primary font-mono text-[11px] font-bold rounded-lg uppercase truncate max-w-[200px]">
-                          {quiz.subjectName}
-                        </span>
-
-                        {saved ? (
-                          <span className="px-2.5 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-300 font-extrabold text-[11px] rounded-full flex items-center space-x-1 shrink-0">
-                            <RotateCcw className="w-3 h-3 text-amber-500 animate-pulse" />
-                            <span>Q{saved.currentQIndex + 1}/{quiz.questions.length} Saved</span>
+                        {quiz.subjectName ? (
+                          <span className="px-2.5 py-1 bg-primary/10 text-primary font-mono text-[11px] font-bold rounded-lg uppercase truncate max-w-[200px]">
+                            {quiz.subjectName}
                           </span>
                         ) : (
-                          <span className="text-xs font-semibold text-muted-foreground flex items-center space-x-1 shrink-0">
-                            <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-                            <span>{quiz.timeLimitMinutes || 15} mins</span>
+                          <span className="px-2.5 py-1 bg-amber-500/10 text-amber-600 font-mono text-[11px] font-bold rounded-lg uppercase tracking-wider truncate max-w-[200px] border border-amber-500/30">
+                            Unassigned
+                          </span>
+                        )}
+                        {(quiz.attemptsUsed ?? 0) > 0 && (
+                          <span className="text-base font-bold text-primary shrink-0 tabular-nums">
+                            {quiz.lastScoreRaw ?? 0}/{quiz.lastMaxScore ?? 0}
                           </span>
                         )}
                       </div>
 
-                      {/* Quiz Title & Type Badge */}
+                      {/* Quiz Title & Description */}
                       <div className="space-y-1.5">
-                        <div className="flex items-center space-x-1.5 flex-wrap gap-1">
-                          {isTeacherQuiz ? (
-                            <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-extrabold text-[10px] rounded-md border border-blue-500/20">
-                              Teacher Subject Quiz
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 bg-purple-500/10 text-purple-600 dark:text-purple-400 font-extrabold text-[10px] rounded-md border border-purple-500/20">
-                              Student Practice Drill
-                            </span>
-                          )}
-
-                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded-md ${
-                            quiz.isPublished ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600"
-                          }`}>
-                            {quiz.isPublished ? "Published" : "Draft/Unpublished"}
-                          </span>
-                        </div>
-
                         <h3 className="text-base font-bold text-foreground leading-snug">{quiz.title}</h3>
-                        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{quiz.description}</p>
+                        {cleanDesc && (
+                          <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{cleanDesc}</p>
+                        )}
                       </div>
                     </div>
 
                     <div className="pt-4 border-t border-border space-y-3">
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                         <span>{quiz.questions?.length || 0} Questions</span>
-                        <span className="font-medium text-foreground">
-                          by {quiz.createdByName || (isTeacherQuiz ? "Faculty Teacher" : "Self-Study")}
-                        </span>
+                        {quiz.quizType === "teacher" && (
+                          <span
+                            className={
+                              quizAttemptsAllowed > 0 && (quiz.attemptsUsed || 0) >= quizAttemptsAllowed
+                                ? "text-rose-600 font-semibold"
+                                : ""
+                            }
+                          >
+                            {quizAttemptsAllowed > 0
+                              ? `${quiz.attemptsUsed || 0}/${quizAttemptsAllowed} attempts`
+                              : "Unlimited attempts"}
+                          </span>
+                        )}
                       </div>
 
+                      {quiz.deadline && (
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <Clock className="w-3.5 h-3.5 shrink-0" />
+                          <span className={isQuizOverdue(quiz) && (quiz.attemptsUsed || 0) === 0 ? "text-rose-600 font-bold" : "text-muted-foreground"}>
+                            Due {new Date(quiz.deadline).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
+                            {isQuizOverdue(quiz) && (quiz.attemptsUsed || 0) === 0 && " · Missing"}
+                          </span>
+                        </div>
+                      )}
+
                       <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
+                        {canPublish && quiz.subjectId && quiz.subjectId !== "personal" && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTogglePublish(quiz);
+                            }}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                              quiz.isPublished
+                                ? "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                                : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                            }`}
+                            title={quiz.isPublished ? "Unpublish Quiz" : "Publish Quiz"}
+                          >
+                            {quiz.isPublished ? "Unpublish" : "Publish"}
+                          </button>
+                        )}
+
+                        {canPublish && quiz.quizType === "teacher" && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openAssignQuizSubject(quiz);
+                            }}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer ${
+                              quiz.subjectId
+                                ? "bg-indigo-500/10 text-indigo-600 hover:bg-indigo-500/20"
+                                : "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                            }`}
+                            title={quiz.subjectId ? "Change the assigned subject" : "Assign this quiz to an assigned subject"}
+                          >
+                            <BookOpen className="w-3 h-3" />
+                            <span>{quiz.subjectId ? "Change Subject" : "Assign Subject"}</span>
+                          </button>
+                        )}
+
                         {canManage && (
                           <div className="flex items-center space-x-1">
                             <button
-                              onClick={() => handleTogglePublish(quiz.id, quiz.isPublished)}
-                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
-                                quiz.isPublished
-                                  ? "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
-                                  : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
-                              }`}
-                              title={quiz.isPublished ? "Unpublish Quiz" : "Publish Quiz"}
-                            >
-                              {quiz.isPublished ? "Unpublish" : "Publish"}
-                            </button>
-
-                            <button
-                              onClick={() => handleOpenEditModal(quiz)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenEditModal(quiz);
+                              }}
                               className="p-1.5 text-blue-600 hover:bg-blue-500/10 rounded-lg cursor-pointer"
                               title="Edit Quiz details & questions"
                             >
@@ -1063,7 +1282,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                             </button>
 
                             <button
-                              onClick={() => setQuizToDelete(quiz)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setQuizToDelete(quiz);
+                              }}
                               className="p-1.5 text-rose-600 hover:bg-rose-500/10 rounded-lg cursor-pointer"
                               title="Delete Quiz"
                             >
@@ -1075,7 +1297,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                         {saved ? (
                           <div className="flex items-center space-x-1.5 ml-auto">
                             <button
-                              onClick={() => handleStartQuiz(quiz, false)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartQuiz(quiz, false);
+                              }}
                               className="px-2.5 py-1.5 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-semibold transition-all cursor-pointer"
                               title="Start quiz from Question 1"
                             >
@@ -1083,19 +1308,33 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                               <span>Restart</span>
                             </button>
                             <button
-                              onClick={() => handleStartQuiz(quiz, true)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartQuiz(quiz, true);
+                              }}
                               className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs shadow-xs transition-all flex items-center space-x-1 cursor-pointer"
                             >
                               <Play className="w-3.5 h-3.5 fill-current" />
                               <span>Resume</span>
                             </button>
                           </div>
+                        ) : (quiz.attemptsAllowed || 0) > 0 &&
+                          (quiz.attemptsUsed ?? 0) >= (quiz.attemptsAllowed || 0) ? (
+                          <span
+                            className="px-4 py-2 rounded-xl text-xs font-bold bg-muted text-muted-foreground ml-auto"
+                            title="Attempt limit reached for this quiz"
+                          >
+                            Attempts Exceeded
+                          </span>
                         ) : (
                           <button
-                            onClick={() => handleStartQuiz(quiz, false)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStartQuiz(quiz, false);
+                            }}
                             className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 ml-auto cursor-pointer"
                           >
-                            <span>Take Quiz</span>
+                            <span>{(quiz.attemptsUsed ?? 0) > 0 ? "Retake Quiz" : "Take Quiz"}</span>
                             <ArrowRight className="w-3.5 h-3.5" />
                           </button>
                         )}
@@ -1106,13 +1345,351 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
               })
             )}
           </div>
+          <Pagination
+            page={quizPage}
+            total={visibleQuizzes.length}
+            onPageChange={setQuizPage}
+          />
+        </div>
+      )}
+
+      {/* QUIZ PREVIEW MODAL (read-only view of a quiz's contents) */}
+      {previewQuiz && (() => {
+        const pq = previewQuiz;
+        const isTeacherQuiz = (pq.quizType || (pq.createdById?.startsWith("usr-teacher") ? "teacher" : "student")) === "teacher";
+        const pqCanManage = canManageCourseQuizzes || (pq.createdById === currentUser?.id && currentUser?.role !== "admin");
+        const pqSaved = savedProgresses[pq.id];
+        const pqAttemptsAllowed = pq.attemptsAllowed || 0;
+        const pqExhausted =
+          isTeacherQuiz && pqAttemptsAllowed > 0 && (pq.attemptsUsed || 0) >= pqAttemptsAllowed;
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setPreviewQuiz(null);
+            }}
+          >
+            <div className="bg-card border border-border rounded-2xl max-w-2xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] flex flex-col">
+              <div className="flex items-center justify-between pb-3 border-b border-border p-5 pb-3">
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
+                    <CheckSquare className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2 flex-wrap">
+                      {pq.subjectName ? (
+                        <span className="px-2.5 py-0.5 bg-primary/10 text-primary font-mono text-[10px] font-bold rounded-md uppercase tracking-wider">
+                          {pq.subjectName}
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-0.5 bg-amber-500/10 text-amber-600 font-mono text-[10px] font-bold rounded-md uppercase tracking-wider border border-amber-500/30">
+                          Unassigned
+                        </span>
+                      )}
+                      <span className="px-2 py-0.5 bg-muted text-muted-foreground font-mono text-[10px] font-bold rounded-md uppercase tracking-wider">
+                        {isTeacherQuiz ? "Course Quiz" : "Practice Quiz"}
+                      </span>
+                      {isQuizOverdue(pq) && (
+                        <span className="px-2 py-0.5 bg-rose-500/10 text-rose-600 font-mono text-[10px] font-bold rounded-md uppercase tracking-wider border border-rose-500/30">
+                          Deadline Passed
+                        </span>
+                      )}
+                      {(pq.attemptsUsed ?? 0) > 0 && (
+                        <span className="text-base font-bold text-primary ml-auto shrink-0 tabular-nums">
+                          {pq.lastScoreRaw ?? 0}/{pq.lastMaxScore ?? 0}
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="text-base font-bold text-foreground mt-1">{pq.title}</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {pq.questions?.length || 0} Questions · {pq.timeLimitMinutes || 15} min · Pass {pq.passPercentage || 70}% · {pq.difficulty || "medium"}
+                      {pq.deadline && ` · Due ${new Date(pq.deadline).toLocaleString()}`}
+                      {isTeacherQuiz && (
+                        <span className={pqExhausted ? " text-rose-600 font-semibold" : ""}>
+                          {" · "}
+                          {pqAttemptsAllowed > 0
+                            ? `${pq.attemptsUsed || 0}/${pqAttemptsAllowed} attempts`
+                            : "Unlimited attempts"}                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setPreviewQuiz(null)}
+                  className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {pq.description && cleanQuizDescription(pq.description) && (
+                <div className="px-5">
+                  <p className="text-xs text-muted-foreground leading-relaxed">{cleanQuizDescription(pq.description)}</p>
+                </div>
+              )}
+
+              <div className="px-5 overflow-y-auto space-y-3 pr-3 flex-1">
+                {pqCanManage && (
+                  pq.questions && pq.questions.length > 0 ? (
+                    pq.questions.map((q, idx) => (
+                    <div key={q.id || idx} className="p-3.5 bg-muted/30 border border-border rounded-xl space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-foreground text-xs">Question {idx + 1}</span>
+                        <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold rounded uppercase tracking-wider">
+                          {q.type === "multiple_choice"
+                            ? Array.isArray(q.correctAnswer)
+                              ? "Multiple Select"
+                              : "Multiple Choice"
+                            : q.type === "true_false"
+                              ? "True / False"
+                              : "Identification"}
+                        </span>
+                      </div>
+                      <p className="text-sm font-semibold text-foreground leading-snug">{q.question}</p>
+                      {q.type === "multiple_choice" && q.options && q.options.length > 0 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {q.options.map((opt, oIdx) => (
+                            <div key={oIdx} className="flex items-start space-x-1.5 text-xs text-muted-foreground">
+                              <span className="font-bold text-foreground">{String.fromCharCode(65 + oIdx)}.</span>
+                              <span>{opt}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {q.type === "true_false" && (
+                        <div className="text-xs text-muted-foreground flex items-center space-x-2">
+                          <span className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-bold">True</span>
+                          <span className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-bold">False</span>
+                        </div>
+                      )}
+                      {q.topicTag && (
+                        <div className="flex items-center space-x-1.5">
+                          <span className="px-1.5 py-0.5 bg-primary/10 text-primary rounded text-[10px] font-bold uppercase tracking-wider">{q.topicTag}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-10 text-center space-y-2">
+                    <CheckSquare className="w-8 h-8 text-muted-foreground mx-auto opacity-40" />
+                    <p className="text-sm font-semibold text-foreground">Questions hidden until you start</p>
+                    <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
+                      The questions and answer choices for this quiz are revealed only when you take it.
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-3 border-t border-border p-5 pt-3 flex-wrap">
+                <div className="flex items-center space-x-2 flex-wrap">
+                  {(canManageCourseQuizzes) && pq.subjectId && pq.subjectId !== "personal" && (
+                    <button
+                      onClick={() => {
+                        handleTogglePublish(pq);
+                        setPreviewQuiz(null);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                        pq.isPublished
+                          ? "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                          : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                      }`}
+                      title={pq.isPublished ? "Unpublish Quiz" : "Publish Quiz"}
+                    >
+                      {pq.isPublished ? "Unpublish" : "Publish"}
+                    </button>
+                  )}
+
+                  {(canManageCourseQuizzes) && isTeacherQuiz && (
+                    <button
+                      onClick={() => {
+                        openAssignQuizSubject(pq);
+                        setPreviewQuiz(null);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer ${
+                        pq.subjectId
+                          ? "bg-indigo-500/10 text-indigo-600 hover:bg-indigo-500/20"
+                          : "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                      }`}
+                      title={pq.subjectId ? "Change the assigned subject" : "Assign this quiz to an assigned subject"}
+                    >
+                      <BookOpen className="w-3 h-3" />
+                      <span>{pq.subjectId ? "Change Subject" : "Assign Subject"}</span>
+                    </button>
+                  )}
+
+                  {pqCanManage && (
+                    <>
+                      <button
+                        onClick={() => {
+                          handleOpenEditModal(pq);
+                          setPreviewQuiz(null);
+                        }}
+                        className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                        title="Edit Quiz details & questions"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        <span>Edit</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setQuizToDelete(pq);
+                          setPreviewQuiz(null);
+                        }}
+                        className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                        title="Delete Quiz"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Delete</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  {pqExhausted ? (
+                    <span className="px-4 py-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-bold cursor-not-allowed">
+                      Attempts exhausted
+                    </span>
+                  ) : pqSaved ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          setPreviewQuiz(null);
+                          handleStartQuiz(pq, false);
+                        }}
+                        className="px-3 py-1.5 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                        title="Start quiz from Question 1"
+                      >
+                        <RotateCw className="w-3.5 h-3.5 inline mr-1" />
+                        <span>Restart</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPreviewQuiz(null);
+                          handleStartQuiz(pq, true);
+                        }}
+                        className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs shadow-xs transition-all flex items-center space-x-1 cursor-pointer"
+                      >
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <span>Resume</span>
+                      </button>
+                    </>
+                  ) : (pqAttemptsAllowed || 0) > 0 &&
+                    (pq.attemptsUsed ?? 0) >= (pq.attemptsAllowed || 0) ? (
+                    <span
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-muted text-muted-foreground"
+                      title="Attempt limit reached for this quiz"
+                    >
+                      Attempts Exceeded
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setPreviewQuiz(null);
+                        handleStartQuiz(pq, false);
+                      }}
+                      className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 cursor-pointer"
+                    >
+                      <span>{(pq.attemptsUsed ?? 0) > 0 ? "Retake Quiz" : "Take Quiz"}</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ASSIGN SUBJECT MODAL */}
+      {assignQuiz && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setAssignQuiz(null);
+          }}
+        >
+          <div className="bg-card border border-border rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center space-x-2">
+                <div className="p-2 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                  <BookOpen className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">Assign Subject</h3>
+                  <p className="text-[11px] text-muted-foreground">Publish this quiz to students of the selected subject.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAssignQuiz(null)}
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-muted/40 border border-border rounded-xl space-y-0.5">
+              <p className="text-xs font-bold text-foreground">{assignQuiz.title}</p>
+              <p className="text-[11px] text-muted-foreground">{assignQuiz.questions?.length || 0} Questions</p>
+            </div>
+
+            {assignQuizMsg && (
+              <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-700 dark:text-rose-300 font-semibold">
+                {assignQuizMsg}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-foreground mb-1">Assigned Course Subject</label>
+              <select
+                value={assignQuizSubjectId}
+                onChange={(e) => setAssignQuizSubjectId(e.target.value)}
+                className="w-full px-3 py-2 border border-border bg-muted/40 rounded-xl text-xs font-bold text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">— Select a subject —</option>
+                {subjects
+                  .filter((sub) => currentUser?.role !== "teacher" || sub.teacherId === currentUser.id)
+                  .map((sub) => (
+                    <option key={sub.id} value={sub.id}>
+                      {sub.code} — {sub.name}
+                    </option>
+                  ))}
+              </select>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                The quiz is published to students of the selected subject.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-1">
+              <button
+                onClick={() => setAssignQuiz(null)}
+                className="px-3.5 py-2 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAssignQuizSubject}
+                disabled={isAssigningQuizSubject}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 cursor-pointer"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>{isAssigningQuizSubject ? "Assigning..." : "Assign Subject"}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
       {/* DELETE CONFIRMATION MODAL */}
       {quizToDelete && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-card border border-border p-6 rounded-2xl max-w-md w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setQuizToDelete(null);
+          }}
+        >
+          <div className="bg-card border border-border p-6 rounded-2xl max-w-md w-full shadow-xl space-y-4 animate-in fade-in zoom-in-95">
             <div className="flex items-center space-x-3">
               <div className="p-3 bg-rose-500/10 text-rose-600 rounded-xl">
                 <Trash2 className="w-6 h-6" />
@@ -1153,8 +1730,13 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
       {/* EDIT QUIZ MODAL */}
       {editingQuiz && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-card border border-border p-6 rounded-2xl max-w-2xl w-full shadow-2xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setEditingQuiz(null);
+          }}
+        >
+          <div className="bg-card border border-border p-6 rounded-2xl max-w-2xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center space-x-2">
                 <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
@@ -1177,6 +1759,11 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
               {/* Row 1: Quiz Scope */}
               <div>
                 <label className="block font-bold text-foreground mb-1">Quiz Scope</label>
+                {editingQuiz.quizType === "student" ? (
+                  <p className="p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-muted-foreground leading-relaxed">
+                    Personal Practice Drill (Private to Yourself) — scope and subject cannot change.
+                  </p>
+                ) : (
                 <select
                   value={editQuizType}
                   onChange={(e) => setEditQuizType(e.target.value as "teacher" | "student")}
@@ -1185,6 +1772,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   <option value="teacher">Course Subject Quiz (For Enrolled Class Students)</option>
                   <option value="student">Personal Practice Drill (Private to Yourself)</option>
                 </select>
+                )}
               </div>
 
               {/* Row 2: Title and (Conditional) Associated Course Subject */}
@@ -1207,11 +1795,13 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                       onChange={(e) => setEditSubjectId(e.target.value)}
                       className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     >
-                      {subjects.map((sub) => (
-                        <option key={sub.id} value={sub.id}>
-                          {sub.code} - {sub.name}
-                        </option>
-                      ))}
+                      {subjects
+                        .filter((sub) => currentUser?.role !== "teacher" || sub.teacherId === currentUser.id)
+                        .map((sub) => (
+                          <option key={sub.id} value={sub.id}>
+                            {sub.code} - {sub.name}
+                          </option>
+                        ))}
                     </select>
                   </div>
                 )}
@@ -1227,7 +1817,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-foreground mb-1">Time Limit (Mins)</label>
                   <input
@@ -1239,31 +1829,67 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   />
                 </div>
 
-                <div>
-                  <label className="block font-bold text-foreground mb-1">Pass Score (%)</label>
-                  <input
-                    type="number"
-                    min={10}
-                    max={100}
-                    value={editPassPercentage}
-                    onChange={(e) => setEditPassPercentage(Number(e.target.value))}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-foreground mb-1">Difficulty Level</label>
-                  <select
-                    value={editDifficulty}
-                    onChange={(e) => setEditDifficulty(e.target.value as "easy" | "medium" | "hard")}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="easy">Easy</option>
-                    <option value="medium">Medium</option>
-                    <option value="hard">Hard</option>
-                  </select>
+                <div className="sm:col-span-1">
+                  <label className="block font-bold text-foreground mb-1">Assessment Settings</label>
+                  <p className="p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-muted-foreground leading-relaxed">
+                    Passing score: {FIXED_PASS_PERCENTAGE}% · Difficulty: {FIXED_DIFFICULTY}
+                  </p>
                 </div>
               </div>
+
+              {editQuizType === "teacher" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="edit-limit-attempts"
+                    checked={editLimitAttempts}
+                    onChange={(e) => setEditLimitAttempts(e.target.checked)}
+                    className="w-4 h-4 accent-primary cursor-pointer"
+                  />
+                  <label htmlFor="edit-limit-attempts" className="font-bold text-foreground text-xs cursor-pointer">
+                    Limit attempts per student
+                  </label>
+                </div>
+                {editLimitAttempts && (
+                  <div className="animate-in fade-in zoom-in-95">
+                    <label className="block font-bold text-foreground mb-1">Max Attempts</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={editAttempts}
+                      onChange={(e) => setEditAttempts(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
+                      className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="edit-reveal-answers"
+                    checked={editRevealAnswers}
+                    onChange={(e) => setEditRevealAnswers(e.target.checked)}
+                    className="w-4 h-4 accent-primary cursor-pointer"
+                  />
+                  <label htmlFor="edit-reveal-answers" className="font-bold text-foreground text-xs cursor-pointer">
+                    Students can see correct answers after submitting
+                  </label>
+                </div>
+                <div>
+                  <label className="block font-bold text-foreground mb-1">Deadline (Optional)</label>
+                  <input
+                    type="datetime-local"
+                    value={editDeadline}
+                    onChange={(e) => setEditDeadline(e.target.value)}
+                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    After this date students can no longer submit. Unattempted quizzes are marked Missing (0%) in grades.
+                  </p>
+                </div>
+              </div>
+              )}
 
               {/* Questions List Editor */}
               <div className="space-y-3 pt-3 border-t border-border">
@@ -1310,7 +1936,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                                 ...updated[idx],
                                 type: newType,
                                 options: newType === "multiple_choice" ? (updated[idx].options?.length ? updated[idx].options : ["Option A", "Option B", "Option C", "Option D"]) : newType === "true_false" ? ["True", "False"] : [],
-                                correctAnswer: newType === "identification" ? String(updated[idx].correctAnswer || "") : 0,
+                                correctAnswer:
+                                  newType === "identification"
+                                    ? (typeof updated[idx].correctAnswer === "string" ? updated[idx].correctAnswer : "")
+                                    : 0,
                               };
                               setEditQuestions(updated);
                             }}
@@ -1374,33 +2003,72 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                           </select>
                         </div>
                       ) : (
-                        <div className="grid grid-cols-2 gap-2">
-                          {(q.options || ["Option 1", "Option 2", "Option 3", "Option 4"]).map((opt, optIdx) => (
-                            <div key={optIdx} className="flex items-center space-x-1.5">
-                              <input
-                                type="radio"
-                                name={`correct-${idx}`}
-                                checked={Number(q.correctAnswer) === optIdx}
-                                onChange={() => {
-                                  const updated = [...editQuestions];
-                                  updated[idx] = { ...updated[idx], correctAnswer: optIdx };
-                                  setEditQuestions(updated);
-                                }}
-                              />
-                              <input
-                                type="text"
-                                value={opt}
-                                onChange={(e) => {
-                                  const updated = [...editQuestions];
-                                  const opts = [...(updated[idx].options || [])];
-                                  opts[optIdx] = e.target.value;
-                                  updated[idx] = { ...updated[idx], options: opts };
-                                  setEditQuestions(updated);
-                                }}
-                                className="w-full p-1.5 bg-card border border-border rounded text-[11px]"
-                              />
-                            </div>
-                          ))}
+                        <div className="space-y-2">
+                          <label className="flex items-center space-x-2 text-[10px] font-bold text-muted-foreground cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Array.isArray(q.correctAnswer)}
+                              onChange={(e) => {
+                                const updated = [...editQuestions];
+                                updated[idx] = {
+                                  ...updated[idx],
+                                  correctAnswer: e.target.checked ? [0] : 0,
+                                };
+                                setEditQuestions(updated);
+                              }}
+                              className="accent-primary"
+                            />
+                            <span>Multiple correct answers (select all that apply)</span>
+                          </label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {(q.options || ["Option 1", "Option 2", "Option 3", "Option 4"]).map((opt, optIdx) => (
+                              <div key={optIdx} className="flex items-center space-x-1.5">
+                                {Array.isArray(q.correctAnswer) ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={(q.correctAnswer as number[]).includes(optIdx)}
+                                    onChange={() => {
+                                      const updated = [...editQuestions];
+                                      const cur = Array.isArray(updated[idx].correctAnswer)
+                                        ? (updated[idx].correctAnswer as number[])
+                                        : [];
+                                      updated[idx] = {
+                                        ...updated[idx],
+                                        correctAnswer: cur.includes(optIdx)
+                                          ? cur.filter((i) => i !== optIdx)
+                                          : [...cur, optIdx],
+                                      };
+                                      setEditQuestions(updated);
+                                    }}
+                                    className="accent-primary"
+                                  />
+                                ) : (
+                                  <input
+                                    type="radio"
+                                    name={`correct-${idx}`}
+                                    checked={Number(q.correctAnswer) === optIdx}
+                                    onChange={() => {
+                                      const updated = [...editQuestions];
+                                      updated[idx] = { ...updated[idx], correctAnswer: optIdx };
+                                      setEditQuestions(updated);
+                                    }}
+                                  />
+                                )}
+                                <input
+                                  type="text"
+                                  value={opt}
+                                  onChange={(e) => {
+                                    const updated = [...editQuestions];
+                                    const opts = [...(updated[idx].options || [])];
+                                    opts[optIdx] = e.target.value;
+                                    updated[idx] = { ...updated[idx], options: opts };
+                                    setEditQuestions(updated);
+                                  }}
+                                  className="w-full p-1.5 bg-card border border-border rounded text-[11px]"
+                                />
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1430,16 +2098,21 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
       {/* CREATE QUIZ MODAL */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-card border border-border p-6 rounded-2xl max-w-xl w-full shadow-2xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowCreateModal(false);
+          }}
+        >
+          <div className="bg-card border border-border p-6 rounded-2xl max-w-xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div className="flex items-center space-x-2">
                 <div className={`p-2 rounded-xl ${
-                  currentUser?.role === "teacher" || currentUser?.role === "admin"
+                  canManageCourseQuizzes
                     ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
                     : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
                 }`}>
-                  {currentUser?.role === "teacher" || currentUser?.role === "admin" ? (
+                  {canManageCourseQuizzes ? (
                     <GraduationCap className="w-5 h-5" />
                   ) : (
                     <User className="w-5 h-5" />
@@ -1447,12 +2120,12 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-foreground">
-                    {currentUser?.role === "teacher" || currentUser?.role === "admin"
+                    {canManageCourseQuizzes
                       ? "Create Course Quiz / Examination"
                       : "Create Student Practice Quiz"}
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    {currentUser?.role === "teacher" || currentUser?.role === "admin"
+                    {canManageCourseQuizzes
                       ? "Faculty Assessment Portal - Manual or Generated Questions"
                       : "Private self-study practice assessment"}
                   </p>
@@ -1467,18 +2140,25 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
             </div>
 
             <div className="space-y-4 text-xs">
-              {/* Row 1: Quiz Scope */}
-              <div>
-                <label className="block font-bold text-foreground mb-1">Quiz Scope</label>
-                <select
-                  value={newQuizType}
-                  onChange={(e) => setNewQuizType(e.target.value as "teacher" | "student")}
-                  className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary font-semibold"
-                >
-                  <option value="teacher">Course Subject Quiz (For Enrolled Class Students)</option>
-                  <option value="student">Personal Practice Drill (Private to Yourself)</option>
-                </select>
-              </div>
+              {/* Row 1: Quiz Scope (staff only — students always create personal drills) */}
+              {canManageCourseQuizzes ? (
+                <div>
+                  <label className="block font-bold text-foreground mb-1">Quiz Scope</label>
+                  <select
+                    value={newQuizType}
+                    onChange={(e) => setNewQuizType(e.target.value as "teacher" | "student")}
+                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary font-semibold"
+                  >
+                    <option value="teacher">Course Subject Quiz (For Enrolled Class Students)</option>
+                    <option value="student">Personal Practice Drill (Private to Yourself)</option>
+                  </select>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground bg-muted/30 border border-border rounded-xl p-3">
+                  This quiz will be saved as a <strong className="text-foreground">Personal Practice Drill</strong> that
+                  only you can see and take.
+                </p>
+              )}
 
               {/* Row 2: Title and (Conditional) Associated Subject */}
               <div className={`grid gap-3 ${newQuizType === "teacher" ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}>
@@ -1505,18 +2185,21 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                       onChange={(e) => setNewQuizSubjectId(e.target.value)}
                       className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     >
-                      {subjects.map((sub) => (
-                        <option key={sub.id} value={sub.id}>
-                          {sub.code} - {sub.name}
-                        </option>
-                      ))}
+                      <option value="">Select a subject (optional)</option>
+                      {subjects
+                        .filter((sub) => currentUser?.role !== "teacher" || sub.teacherId === currentUser.id)
+                        .map((sub) => (
+                          <option key={sub.id} value={sub.id}>
+                            {sub.code} - {sub.name}
+                          </option>
+                        ))}
                     </select>
                   </div>
                 )}
               </div>
 
               {/* Row 3: Parameters */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-foreground mb-1">Time (Mins)</label>
                   <input
@@ -1526,31 +2209,6 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     onChange={(e) => setNewQuizTimeLimit(Number(e.target.value))}
                     className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-foreground mb-1">Pass Score (%)</label>
-                  <input
-                    type="number"
-                    min={10}
-                    max={100}
-                    value={newQuizPassPercentage}
-                    onChange={(e) => setNewQuizPassPercentage(Number(e.target.value))}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-foreground mb-1">Difficulty</label>
-                  <select
-                    value={newQuizDifficulty}
-                    onChange={(e) => setNewQuizDifficulty(e.target.value as "easy" | "medium" | "hard")}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="easy">Easy</option>
-                    <option value="medium">Medium</option>
-                    <option value="hard">Hard</option>
-                  </select>
                 </div>
 
                 <div>
@@ -1564,6 +2222,61 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   />
                 </div>
               </div>
+
+              {/* Row 3b: Attempt Limit */}
+              {newQuizType === "teacher" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="create-limit-attempts"
+                    checked={newQuizLimitAttempts}
+                    onChange={(e) => setNewQuizLimitAttempts(e.target.checked)}
+                    className="w-4 h-4 accent-primary cursor-pointer"
+                  />
+                  <label htmlFor="create-limit-attempts" className="font-bold text-foreground text-xs cursor-pointer">
+                    Limit attempts per student
+                  </label>
+                </div>
+                {newQuizLimitAttempts && (
+                  <div className="animate-in fade-in zoom-in-95">
+                    <label className="block font-bold text-foreground mb-1">Max Attempts</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={newQuizAttempts}
+                      onChange={(e) => setNewQuizAttempts(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
+                      className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="create-reveal-answers"
+                    checked={newQuizRevealAnswers}
+                    onChange={(e) => setNewQuizRevealAnswers(e.target.checked)}
+                    className="w-4 h-4 accent-primary cursor-pointer"
+                  />
+                  <label htmlFor="create-reveal-answers" className="font-bold text-foreground text-xs cursor-pointer">
+                    Students can see correct answers after submitting
+                  </label>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block font-bold text-foreground mb-1">Deadline (Optional)</label>
+                  <input
+                    type="datetime-local"
+                    value={newQuizDeadline}
+                    onChange={(e) => setNewQuizDeadline(e.target.value)}
+                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    After this date students can no longer submit. Unattempted quizzes are marked Missing (0%) in grades.
+                  </p>
+                </div>
+              </div>
+              )}
 
               {/* Manual Question Builder */}
               <div className="p-4 bg-muted/20 border border-border rounded-2xl space-y-3">
@@ -1635,6 +2348,18 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     </div>
                   ) : (
                     <div className="space-y-2">
+                      <label className="flex items-center space-x-2 text-[11px] font-bold text-muted-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={manualQMulti}
+                          onChange={(e) => {
+                            setManualQMulti(e.target.checked);
+                            setManualQMultiCorrect(e.target.checked ? [0] : []);
+                          }}
+                          className="accent-purple-600"
+                        />
+                        <span>Multiple correct answers (students select all that apply)</span>
+                      </label>
                       <label className="block text-[11px] font-bold text-muted-foreground">Multiple Choice Options:</label>
                       <div className="grid grid-cols-2 gap-2">
                         <input
@@ -1666,19 +2391,58 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                           className="p-2 bg-card border border-border rounded-xl text-xs"
                         />
                       </div>
-                      <div>
-                        <label className="text-[11px] font-bold text-muted-foreground">Correct Answer Option:</label>
-                        <select
-                          value={manualQCorrect}
-                          onChange={(e) => setManualQCorrect(Number(e.target.value))}
-                          className="w-full p-2 bg-card border border-border rounded-xl text-xs mt-1"
-                        >
-                          <option value={0}>Option A ({manualQOpt0 || "Option A"})</option>
-                          <option value={1}>Option B ({manualQOpt1 || "Option B"})</option>
-                          <option value={2}>Option C ({manualQOpt2 || "Option C"})</option>
-                          <option value={3}>Option D ({manualQOpt3 || "Option D"})</option>
-                        </select>
-                      </div>
+                      {manualQMulti ? (
+                        <div>
+                          <label className="text-[11px] font-bold text-muted-foreground">Correct Answers (select all):</label>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-1">
+                            {[
+                              { label: "Option A", value: manualQOpt0, idx: 0 },
+                              { label: "Option B", value: manualQOpt1, idx: 1 },
+                              { label: "Option C", value: manualQOpt2, idx: 2 },
+                              { label: "Option D", value: manualQOpt3, idx: 3 },
+                            ].map((opt) => (
+                              <label
+                                key={opt.idx}
+                                className={`flex items-center space-x-2 p-2 rounded-xl border text-xs cursor-pointer transition-all ${
+                                  manualQMultiCorrect.includes(opt.idx)
+                                    ? "bg-purple-500/10 border-purple-500/40 text-foreground"
+                                    : "bg-card border-border text-muted-foreground"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={manualQMultiCorrect.includes(opt.idx)}
+                                  onChange={() =>
+                                    setManualQMultiCorrect((prev) =>
+                                      prev.includes(opt.idx)
+                                        ? prev.filter((i) => i !== opt.idx)
+                                        : [...prev, opt.idx]
+                                    )
+                                  }
+                                  className="accent-purple-600"
+                                />
+                                <span className="truncate">
+                                  {opt.label} ({opt.value || opt.label})
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="text-[11px] font-bold text-muted-foreground">Correct Answer Option:</label>
+                          <select
+                            value={manualQCorrect}
+                            onChange={(e) => setManualQCorrect(Number(e.target.value))}
+                            className="w-full p-2 bg-card border border-border rounded-xl text-xs mt-1"
+                          >
+                            <option value={0}>Option A ({manualQOpt0 || "Option A"})</option>
+                            <option value={1}>Option B ({manualQOpt1 || "Option B"})</option>
+                            <option value={2}>Option C ({manualQOpt2 || "Option C"})</option>
+                            <option value={3}>Option D ({manualQOpt3 || "Option D"})</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1703,7 +2467,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                         <div key={i} className="flex items-center justify-between p-2.5 bg-card border border-border rounded-xl text-xs">
                           <div className="flex items-center space-x-2 truncate pr-2">
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/10 text-primary uppercase">
-                              {q.type === "identification" ? "Identification" : q.type === "true_false" ? "True/False" : "MC"}
+                              {q.type === "identification" ? "Identification" : q.type === "true_false" ? "True/False" : Array.isArray(q.correctAnswer) ? "MC · Multi" : "MC"}
                             </span>
                             <span className="truncate font-medium">{i + 1}. {q.question}</span>
                           </div>

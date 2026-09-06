@@ -3,9 +3,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const STORAGE_KEYS = {
   theme: 'studylens_mobile_theme',
   session: 'studylens_mobile_session',
+  apiBaseUrl: 'studylens_api_base',
   downloadedMaterials: 'studylens_downloaded_materials',
   readNotifications: (userId: string) => `studylens_read_notifications_${userId}`,
   readAnnouncements: (userId: string) => `studylens_read_announcements_${userId}`,
+  adminUsers: 'studylens_admin_users',
   localAnnouncements: 'studylens_local_announcements',
   profileEdits: (userId: string) => `studylens_profile_edit_${userId}`,
   deckRatings: (userId: string) => `studylens_deck_ratings_${userId}`,

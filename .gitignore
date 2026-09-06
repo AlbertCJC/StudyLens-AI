@@ -41,3 +41,6 @@ backend/uploads/
 .env
 .env.*
 !.env.example
+
+# Internal DB align snapshots (may contain user data)
+backend/scripts/backup_erp_align_snapshots/

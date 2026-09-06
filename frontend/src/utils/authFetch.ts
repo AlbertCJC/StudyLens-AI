@@ -24,9 +24,24 @@ export const authHeaders = (extra?: Record<string, string>): Record<string, stri
   return headers;
 };
 
+let _loggedOut = false;
+
 export const authFetch = (url: string, options?: RequestInit): Promise<Response> => {
   const headers = new Headers(options?.headers);
   const token = getStoredToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(url, { ...options, headers });
+  return fetch(url, { ...options, headers }).then((response) => {
+    if (response.status === 401 && !_loggedOut) {
+      _loggedOut = true;
+      setStoredToken(null);
+      try {
+        localStorage.removeItem("studylens_user");
+      } catch {
+        // ignore
+      }
+      window.dispatchEvent(new CustomEvent("auth:session-expired"));
+      setTimeout(() => { _loggedOut = false; }, 5000);
+    }
+    return response;
+  });
 };

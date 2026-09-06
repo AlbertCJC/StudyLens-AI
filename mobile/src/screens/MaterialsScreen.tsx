@@ -6,18 +6,17 @@ import {
   ScrollView,
   TouchableOpacity,
   Platform,
-  Alert,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { BookOpen, FileText, Download, Eye, Sparkles, UploadCloud, CheckCircle2, X } from 'lucide-react-native';
-import { fetchMaterials, fetchSubjects, uploadMaterial, Material, Subject } from '../services/api';
+import { FileText, Download, UploadCloud, CheckCircle2, X } from 'lucide-react-native';
+import { fetchMaterials, fetchSubjects, uploadMaterial, updateMaterialSubject, convertToPdf, Material, Subject } from '../services/api';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import {
   Card,
-  Badge,
   LoadingView,
   EmptyState,
   Modal,
@@ -25,6 +24,7 @@ import {
   PrimaryButton,
   OutlineButton,
   SectionHeader,
+  Badge,
 } from '../components/ui';
 import { STORAGE_KEYS, getStringSet, addToStringSet } from '../utils/storage';
 
@@ -37,18 +37,23 @@ const ACCEPTED_TYPES = [
   'text/plain',
 ];
 
-export default function MaterialsScreen({ onNavigate }: { onNavigate: (tab: string) => void }) {
+export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavigate: (tab: string) => void; onCreateNotes?: (material: Material) => void }) {
   const { colors } = useTheme();
   const { currentUser } = useAuth();
+  const { showToast } = useToast();
   const isTeacher = currentUser?.role === 'teacher';
 
   const [materials, setMaterials] = useState<Material[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'course' | 'personal'>('all');
+  const [subjectFilter, setSubjectFilter] = useState('all');
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   const [previewMaterial, setPreviewMaterial] = useState<Material | null>(null);
+  const [visibleCount, setVisibleCount] = useState(20);
+
+  useEffect(() => { setVisibleCount(20); }, [subjectFilter]);
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -56,6 +61,10 @@ export default function MaterialsScreen({ onNavigate }: { onNavigate: (tab: stri
   const [pickedFile, setPickedFile] = useState<{ uri: string; name: string; type: string; size?: number } | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+
+  const [assignSubjectId, setAssignSubjectId] = useState('');
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([fetchMaterials(), fetchSubjects()]).then(([mats, subs]) => {
@@ -103,6 +112,7 @@ export default function MaterialsScreen({ onNavigate }: { onNavigate: (tab: stri
       });
       setMaterials((prev) => [mat, ...prev]);
       setUploadMessage('Material uploaded successfully and indexed for students!');
+      showToast('Material uploaded successfully.');
       setTitle('');
       setDescription('');
       setPickedFile(null);
@@ -114,10 +124,10 @@ export default function MaterialsScreen({ onNavigate }: { onNavigate: (tab: stri
   };
 
   const handleDownloadTxt = async (m: Material) => {
-    const text = m.extractedText || m.title;
+    const text = `================================================\n${m.title}\n================================================\n\n${m.extractedText || ''}`;
     try {
       if (Platform.OS === 'web') {
-        Alert.alert('Download', `${m.title}.txt`);
+        downloadBlobOnWeb(new Blob([text], { type: 'text/plain;charset=utf-8' }), `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.txt`);
       } else {
         const file = new File(Paths.cache, `${m.title.replace(/[^\w\s]/g, '').slice(0, 40)}.txt`);
         file.write(text);
@@ -132,15 +142,89 @@ export default function MaterialsScreen({ onNavigate }: { onNavigate: (tab: stri
         return next;
       });
     } catch {
-      Alert.alert('Error', 'Could not export the file.');
+      showToast('Could not export the file.', 'error');
     }
   };
 
-  const filtered = materials.filter((m) => {
-    if (sourceFilter === 'course') return m.materialType !== 'personal' && m.uploaderRole !== 'student';
-    if (sourceFilter === 'personal') return m.materialType === 'personal' || m.uploaderRole === 'student';
-    return true;
-  });
+  const handleDownloadPdf = async (m: Material) => {
+    if (Platform.OS === 'web') {
+      try {
+        const bytes = await convertToPdf({
+          title: m.title,
+          metaLine: `${m.subjectName || 'Unassigned'} · ${m.uploadedBy || ''}`.trim(),
+          content: m.extractedText || m.description || m.title,
+          items: [],
+        });
+        downloadBlobOnWeb(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' }), `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.pdf`);
+        await addToStringSet(STORAGE_KEYS.downloadedMaterials, m.id);
+        setDownloadedIds((prev) => {
+          const next = new Set(prev);
+          next.add(m.id);
+          return next;
+        });
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Could not export the PDF.', 'error');
+      }
+      return;
+    }
+    try {
+      const bytes = await convertToPdf({
+        title: m.title,
+        metaLine: `${m.subjectName || 'Unassigned'} · ${m.uploadedBy || ''}`.trim(),
+        content: m.extractedText || m.description || m.title,
+        items: [],
+      });
+      const file = new File(Paths.cache, `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.pdf`);
+      file.write(bytes);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(file.uri, { mimeType: 'application/pdf', dialogTitle: m.title });
+      } else {
+        showToast(`PDF saved: ${file.uri}`, 'success');
+      }
+      await addToStringSet(STORAGE_KEYS.downloadedMaterials, m.id);
+      setDownloadedIds((prev) => {
+        const next = new Set(prev);
+        next.add(m.id);
+        return next;
+      });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not export the PDF.', 'error');
+    }
+  };
+
+  const canAssignSubject = (m: Material) =>
+    (currentUser?.role === 'admin' || m.uploaderId === currentUser?.id) && m.uploaderRole !== 'student';
+
+  const filteredMaterials =
+    subjectFilter === 'all' ? materials : materials.filter((m) => m.subjectId === subjectFilter);
+
+  const filterOptions = (() => {
+    const seen = new Map<string, string>();
+    materials.forEach((m) => {
+      if (m.subjectId && !seen.has(m.subjectId)) seen.set(m.subjectId, m.subjectName || m.subjectId);
+    });
+    return Array.from(seen.entries());
+  })();
+
+  const handleAssignSubject = async () => {
+    if (!previewMaterial || !assignSubjectId) {
+      setAssignError('Please select an assigned subject.');
+      return;
+    }
+    setIsAssigning(true);
+    setAssignError(null);
+    try {
+      const updated = await updateMaterialSubject(previewMaterial.id, assignSubjectId);
+      setMaterials((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      setPreviewMaterial(null);
+      setAssignSubjectId('');
+      showToast('Material updated.');
+    } catch (err) {
+      setAssignError((err as Error).message || 'Could not assign the subject. Please try again.');
+    } finally {
+      setIsAssigning(false);
+    }
+  };
 
   if (loading) return <LoadingView label="Loading materials..." />;
 
@@ -149,25 +233,21 @@ export default function MaterialsScreen({ onNavigate }: { onNavigate: (tab: stri
       {/* Role header */}
       {isTeacher ? (
         <View style={[styles.banner, { backgroundColor: colors.surfaceAlt }]}>
-          <View style={[styles.bannerIcon, { backgroundColor: colors.primary }]}>
-            <UploadCloud size={18} color="#fff" />
-          </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Upload Course Lecture Material</Text>
-            <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Publish lecture files to your enrolled students.</Text>
+            <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Upload Course Material</Text>
+            <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Publish lecture files for your assigned students.</Text>
           </View>
         </View>
       ) : (
         <View style={[styles.banner, { backgroundColor: colors.surfaceAlt }]}>
-          <View style={[styles.bannerIcon, { backgroundColor: colors.primary }]}>
-            <BookOpen size={18} color="#fff" />
-          </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Learning & Lecture Materials</Text>
+            <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Learning Materials</Text>
             <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Course notes, reviewers, and self-study documents.</Text>
           </View>
         </View>
       )}
+
+      <PrimaryButton label="Create Notes in AI Study Assistant" onPress={() => onNavigate('ai-assistant')} />
 
       {/* Teacher upload form */}
       {isTeacher && (
@@ -227,103 +307,203 @@ export default function MaterialsScreen({ onNavigate }: { onNavigate: (tab: stri
 
       {/* Catalog */}
       <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border, gap: 12 }]}>
-        <SectionHeader title="Materials Catalog" subtitle={`${filtered.length} document(s)`} />
-        <View style={styles.filterRow}>
-          {([
-            { key: 'all', label: `All (${materials.length})` },
-            { key: 'course', label: 'Course Materials' },
-            { key: 'personal', label: 'Personal Notes' },
-          ] as const).map((f) => (
+        <SectionHeader title="Materials Catalog" subtitle={`${materials.length} document(s)`} />
+        {filterOptions.length > 1 && (
+          <View>
+            <Text style={styles.fieldLabel}>Filter by Subject</Text>
             <TouchableOpacity
-              key={f.key}
-              style={[styles.filterChip, sourceFilter === f.key ? { backgroundColor: colors.primary } : { backgroundColor: colors.surfaceAlt }]}
-              onPress={() => setSourceFilter(f.key)}
+              onPress={() => setShowFilterDropdown(true)}
+              style={[styles.dropdown, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
             >
-              <Text style={{ fontSize: 11, fontWeight: '700', color: sourceFilter === f.key ? '#fff' : colors.foreground }}>{f.label}</Text>
+              <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700', flex: 1 }}>
+                {subjectFilter === 'all' ? 'All Subjects' : filterOptions.find(([id]) => id === subjectFilter)?.[1] || 'All Subjects'}
+              </Text>
+              <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>▾</Text>
             </TouchableOpacity>
-          ))}
-        </View>
-        {filtered.length === 0 ? (
-          <EmptyState icon={<FileText size={36} color={colors.mutedForeground} />} title="No materials found" subtitle="Try a different filter, or ask your teacher to publish notes." />
+          </View>
+        )}
+        {filteredMaterials.length === 0 ? (
+          <EmptyState icon={<FileText size={36} color={colors.mutedForeground} />} title={materials.length === 0 ? 'No materials found' : 'No materials for this subject'} subtitle="Ask your teacher to publish notes, or generate resources in the AI Study Assistant." />
         ) : (
           <View style={{ gap: 12 }}>
-            {filtered.map((m) => (
-              <View key={m.id} style={[styles.matCard, { borderColor: colors.border }]}>
-                <View style={styles.matBadges}>
-                  <Badge text={m.materialType === 'personal' ? 'Personal Study Note' : 'Course Material'} color={m.materialType === 'personal' ? '#a855f7' : '#2563eb'} bg={m.materialType === 'personal' ? 'rgba(168,85,247,0.12)' : 'rgba(37,99,235,0.12)'} />
-                  {downloadedIds.has(m.id) && (
-                    <Badge text="Downloaded" color={colors.success} bg={colors.successSoft}>
-                      <CheckCircle2 size={11} color={colors.success} />
-                    </Badge>
+            {filteredMaterials.slice(0, visibleCount).map((m) => (
+              <TouchableOpacity
+                  key={m.id}
+                  onPress={() => setPreviewMaterial(m)}
+                  activeOpacity={0.7}
+                  style={[styles.matCard, { borderColor: colors.border }]}
+                >
+                  <Text style={[styles.matTitle, { color: colors.foreground }]} numberOfLines={1}>{m.title}</Text>
+                  {m.description && <Text style={{ color: colors.mutedForeground, fontSize: 12, lineHeight: 17 }} numberOfLines={2}>{m.description}</Text>}
+                  {m.subjectName ? (
+                    <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>{m.subjectName}</Text>
+                  ) : (
+                    <Text style={{ color: '#f59e0b', fontSize: 11, fontWeight: '700' }}>Unassigned</Text>
                   )}
-                  {m.fileSize && <Text style={{ color: colors.mutedForeground, fontSize: 10, fontFamily: 'monospace' }}>{m.fileSize}</Text>}
-                </View>
-                <Text style={[styles.matTitle, { color: colors.foreground }]} numberOfLines={1}>{m.title}</Text>
-                {m.description && <Text style={{ color: colors.mutedForeground, fontSize: 12, lineHeight: 17 }} numberOfLines={2}>{m.description}</Text>}
-                <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>{m.subjectName}</Text>
-                <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>
-                  Uploaded by {m.uploadedBy} - {new Date(m.createdAt).toLocaleDateString()}
-                </Text>
-                <View style={styles.matActions}>
-                  <TouchableOpacity onPress={() => setPreviewMaterial(m)} style={[styles.actionBtn, { backgroundColor: colors.indigoSoft }]}>
-                    <Eye size={15} color={colors.primary} />
-                    <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>View</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => handleDownloadTxt(m)} style={[styles.actionBtn, { backgroundColor: colors.surfaceAlt }]}>
-                    <Download size={15} color={colors.foreground} />
-                    <Text style={{ color: colors.foreground, fontSize: 11, fontWeight: '700' }}>Download</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => onNavigate('ai-assistant')} style={[styles.actionBtn, { backgroundColor: colors.successSoft }]}>
-                    <Sparkles size={15} color={colors.success} />
-                    <Text style={{ color: colors.success, fontSize: 11, fontWeight: '700' }}>AI Tools</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>
+                    {new Date(m.createdAt).toLocaleDateString()}
+                  </Text>
+                  <View style={styles.matActions}>
+                    <TouchableOpacity onPress={() => handleDownloadTxt(m)} style={[styles.actionBtn, styles.actionBtnFull, { backgroundColor: colors.surfaceAlt }]}>
+                      <Download size={15} color={colors.foreground} />
+                      <Text style={{ color: colors.foreground, fontSize: 11, fontWeight: '700' }}>Download</Text>
+                    </TouchableOpacity>
+                    {onCreateNotes && (
+                      <TouchableOpacity
+                        onPress={() => onCreateNotes(m)}
+                        style={[styles.actionBtn, styles.actionBtnFull, { backgroundColor: colors.primary, justifyContent: 'center' }]}
+                      >
+                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>Create Notes</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </TouchableOpacity>
             ))}
           </View>
+        )}
+        {visibleCount < filteredMaterials.length && (
+          <TouchableOpacity
+            onPress={() => setVisibleCount((c) => c + 20)}
+            style={{ paddingVertical: 12, alignItems: 'center' }}
+          >
+            <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '700' }}>
+              Load More ({filteredMaterials.length - visibleCount} remaining)
+            </Text>
+          </TouchableOpacity>
         )}
       </View>
 
       {/* Preview modal */}
-      <Modal visible={!!previewMaterial} onClose={() => setPreviewMaterial(null)} title={previewMaterial?.title} subtitle={`${previewMaterial?.fileType?.toUpperCase() || 'DOC'} Document - ${previewMaterial?.subjectName || ''}`}>
+      <Modal visible={!!previewMaterial} onClose={() => setPreviewMaterial(null)} title={previewMaterial?.title} subtitle={`${previewMaterial?.fileType?.toUpperCase() || 'DOC'} Document - ${previewMaterial?.subjectName || 'Unassigned'}`}>
         <ScrollView style={{ maxHeight: 400 }}>
           <View style={[styles.previewPaper, { backgroundColor: colors.surfaceAlt }]}>
-            <Text style={[styles.previewHeader, { color: colors.foreground }]}>StudyLens Course Material Document</Text>
-            <Text style={{ color: colors.mutedForeground, fontSize: 11, marginVertical: 6 }}>
-              Uploaded: {previewMaterial ? new Date(previewMaterial.createdAt).toLocaleString() : ''} by {previewMaterial?.uploadedBy}
-            </Text>
-            <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 21 }}>{previewMaterial?.extractedText || previewMaterial?.title}</Text>
+            {!isAiMaterial(previewMaterial) && (
+              <>
+                {/* Paper Header */}
+                <View style={styles.previewHeader}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Badge text={previewMaterial?.subjectName || 'Unassigned'} color={colors.primary} />
+                    <Badge text={previewMaterial?.fileType?.toUpperCase() || 'DOC'} color={colors.warning} />
+                  </View>
+                  <Text style={[styles.previewTitle, { color: colors.foreground }]}>{previewMaterial?.title}</Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>
+                    {previewMaterial ? new Date(previewMaterial.createdAt).toLocaleString() : ''} · {previewMaterial?.uploadedBy}
+                    {previewMaterial?.fileSize ? ` · ${previewMaterial.fileSize}` : ''}
+                  </Text>
+                </View>
+                <View style={[styles.previewDivider, { backgroundColor: colors.border }]} />
+              </>
+            )}
+            {isAiMaterial(previewMaterial) && (
+              <Text style={[styles.previewTitle, { color: colors.foreground }]}>{previewMaterial?.title}</Text>
+            )}
+            <Text style={{ color: colors.foreground, fontSize: 14, lineHeight: 22 }}>{previewMaterial?.extractedText || previewMaterial?.title}</Text>
           </View>
         </ScrollView>
+
+        {previewMaterial && canAssignSubject(previewMaterial) && (
+          <View style={{ gap: 8, marginTop: 12 }}>
+            <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>
+              {previewMaterial.subjectId ? 'Change Course Subject' : 'Assign Course Subject'}
+            </Text>
+            <Text style={{ color: colors.mutedForeground, fontSize: 10, lineHeight: 15 }}>
+              Students of the selected subject will see this material.
+            </Text>
+            <View style={styles.chipWrap}>
+              {subjects.map((s) => (
+                <TouchableOpacity
+                  key={s.id}
+                  onPress={() => setAssignSubjectId(s.id)}
+                  style={[styles.chip, assignSubjectId === s.id ? { backgroundColor: colors.primary } : { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: assignSubjectId === s.id ? '#fff' : colors.foreground }}>
+                    {s.code} - {s.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {assignError && <Text style={{ color: colors.danger, fontSize: 11, fontWeight: '600' }}>{assignError}</Text>}
+            <PrimaryButton
+              label={isAssigning ? 'Assigning...' : 'Assign Subject'}
+              onPress={handleAssignSubject}
+              loading={isAssigning}
+              disabled={isAssigning || !assignSubjectId}
+            />
+          </View>
+        )}
+
         <View style={styles.modalActions}>
-          <OutlineButton label="Download TXT" onPress={() => previewMaterial && handleDownloadTxt(previewMaterial)} />
-          <PrimaryButton label="Generate AI Study Tools" onPress={() => { setPreviewMaterial(null); onNavigate('ai-assistant'); }} />
+          <OutlineButton label="Download PDF" onPress={() => previewMaterial && handleDownloadPdf(previewMaterial)} style={{ flex: 1 }} />
+          <OutlineButton label="Download TXT" onPress={() => previewMaterial && handleDownloadTxt(previewMaterial)} style={{ flex: 1 }} />
+        </View>
+      </Modal>
+
+      <Modal visible={showFilterDropdown} onClose={() => setShowFilterDropdown(false)} title="Filter by Subject">
+        <View style={{ gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => {
+              setSubjectFilter('all');
+              setShowFilterDropdown(false);
+            }}
+            style={[styles.dropdownOption, { backgroundColor: subjectFilter === 'all' ? colors.primary : colors.surfaceAlt, borderColor: subjectFilter === 'all' ? colors.primary : colors.border }]}
+          >
+            <Text style={{ color: subjectFilter === 'all' ? '#fff' : colors.foreground, fontSize: 13, fontWeight: '700' }}>All Subjects</Text>
+          </TouchableOpacity>
+          {filterOptions.map(([id, name]) => (
+            <TouchableOpacity
+              key={id}
+              onPress={() => {
+                setSubjectFilter(id);
+                setShowFilterDropdown(false);
+              }}
+              style={[styles.dropdownOption, { backgroundColor: subjectFilter === id ? colors.primary : colors.surfaceAlt, borderColor: subjectFilter === id ? colors.primary : colors.border }]}
+            >
+              <Text style={{ color: subjectFilter === id ? '#fff' : colors.foreground, fontSize: 13, fontWeight: '700' }} numberOfLines={1}>{name}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
       </Modal>
     </ScrollView>
   );
 }
 
+function isAiMaterial(m: Material | null): boolean {
+  return !!m && (m.fileType || '').toLowerCase().startsWith('ai-');
+}
+
+function downloadBlobOnWeb(blob: Blob, filename: string) {
+  if (typeof document === 'undefined') return;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 32, gap: 14 },
   banner: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, padding: 16 },
-  bannerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   bannerTitle: { fontSize: 16, fontWeight: '800' },
   fieldLabel: { color: '#94a3b8', fontSize: 12, fontWeight: '700' },
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
   chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 99, borderWidth: 1 },
+  dropdown: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 12, marginTop: 6 },
+  dropdownOption: { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 12 },
   dropzone: { borderRadius: 14, borderWidth: 1.5, borderStyle: 'dashed', padding: 20, alignItems: 'center', gap: 6 },
   fileChip: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, borderWidth: 1, padding: 12 },
   uploadMsg: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, padding: 12 },
   panel: { borderRadius: 16, borderWidth: 1, padding: 16 },
-  filterRow: { flexDirection: 'row', gap: 8 },
-  filterChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 99 },
   matCard: { borderWidth: 1, borderRadius: 14, padding: 14, gap: 5 },
-  matBadges: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   matTitle: { fontSize: 14, fontWeight: '800' },
   matActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  actionBtnFull: { flex: 1, justifyContent: 'center' },
   previewPaper: { borderRadius: 12, padding: 14 },
-  previewHeader: { fontSize: 14, fontWeight: '800' },
+  previewHeader: { gap: 6, marginBottom: 10 },
+  previewTitle: { fontSize: 16, fontWeight: '800' },
+  previewDivider: { height: 1, marginBottom: 12 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
 });

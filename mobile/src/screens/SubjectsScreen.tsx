@@ -1,16 +1,19 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, ScrollView } from 'react-native';
-import { FolderKanban, Users, Layers, BookOpen } from 'lucide-react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { StyleSheet, Text, TextInput, View, ScrollView, TouchableOpacity } from 'react-native';
+import { FolderKanban, Layers, ChevronRight, Search } from 'lucide-react-native';
 import { fetchSubjects, Subject } from '../services/api';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { Card, Badge, LoadingView, EmptyState } from '../components/ui';
 
-export default function SubjectsScreen({ onNavigate }: { onNavigate: (tab: string) => void }) {
+export default function SubjectsScreen({ onNavigate, onOpenSubject }: { onNavigate: (tab: string) => void; onOpenSubject?: (subject: Subject) => void }) {
   const { colors } = useTheme();
   const { currentUser } = useAuth();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
+  const [semesterFilter, setSemesterFilter] = useState<string>('');
+  const [courseFilter, setCourseFilter] = useState<string>('');
 
   useEffect(() => {
     fetchSubjects().then((data) => {
@@ -21,16 +24,33 @@ export default function SubjectsScreen({ onNavigate }: { onNavigate: (tab: strin
 
   const isTeacher = currentUser?.role === 'teacher';
 
-  if (loading) return <LoadingView label="Loading subjects..." />;
+  const uniqueSemesters = useMemo(() => {
+    const sems = new Set<string>();
+    subjects.forEach((s) => { if (s.semester) sems.add(s.semester); });
+    return Array.from(sems).sort();
+  }, [subjects]);
 
-  const totalStudents = subjects.reduce((sum, s) => sum + (s.studentCount || 0), 0);
+  const uniqueCourses = useMemo(() => {
+    const cs = new Set<string>();
+    subjects.forEach((s) => { if (s.course) cs.add(s.course); });
+    return Array.from(cs).sort();
+  }, [subjects]);
+
+  const filteredSubjects = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return subjects.filter((s) => {
+      if (q && !s.name.toLowerCase().includes(q) && !s.code.toLowerCase().includes(q)) return false;
+      if (semesterFilter && s.semester !== semesterFilter) return false;
+      if (courseFilter && s.course !== courseFilter) return false;
+      return true;
+    });
+  }, [subjects, query, semesterFilter, courseFilter]);
+
+  if (loading) return <LoadingView label="Loading subjects..." />;
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={styles.content}>
       <View style={[styles.banner, { backgroundColor: colors.surfaceAlt }]}>
-        <View style={[styles.bannerIcon, { backgroundColor: colors.primary }]}>
-          <FolderKanban size={18} color="#fff" />
-        </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Subjects & Course Catalog</Text>
           <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>
@@ -39,29 +59,73 @@ export default function SubjectsScreen({ onNavigate }: { onNavigate: (tab: strin
         </View>
       </View>
 
-      <View style={styles.statsRow}>
-        <Card style={styles.statChip}>
-          <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Subjects</Text>
-          <Text style={[styles.statNum, { color: colors.foreground }]}>{subjects.length}</Text>
-        </Card>
-        <Card style={styles.statChip}>
-          <Users size={16} color={colors.primary} />
-          <Text style={[styles.statNum, { color: colors.foreground }]}>{totalStudents}</Text>
-          <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>Students</Text>
-        </Card>
+      {/* Search */}
+      <View style={[styles.searchBar, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+        <Search size={16} color={colors.mutedForeground} />
+        <TextInput
+          placeholder="Search subjects..."
+          placeholderTextColor={colors.mutedForeground}
+          value={query}
+          onChangeText={setQuery}
+          style={[styles.searchInput, { color: colors.foreground }]}
+        />
       </View>
 
-      {subjects.length === 0 ? (
-        <EmptyState icon={<FolderKanban size={36} color={colors.mutedForeground} />} title="No subjects found" subtitle="Subjects will appear here once published." />
+      {/* Semester Filters */}
+      {uniqueSemesters.length > 0 && (
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            onPress={() => setSemesterFilter('')}
+            style={[styles.filterChip, !semesterFilter && { backgroundColor: colors.primary }, semesterFilter && { backgroundColor: colors.surfaceAlt, borderColor: colors.border, borderWidth: 1 }]}
+          >
+            <Text style={{ fontSize: 10, fontWeight: '700', color: !semesterFilter ? '#fff' : colors.foreground }}>All Semesters</Text>
+          </TouchableOpacity>
+          {uniqueSemesters.map((s) => (
+            <TouchableOpacity
+              key={s}
+              onPress={() => setSemesterFilter(semesterFilter === s ? '' : s)}
+              style={[styles.filterChip, semesterFilter === s && { backgroundColor: colors.primary }, semesterFilter !== s && { backgroundColor: colors.surfaceAlt, borderColor: colors.border, borderWidth: 1 }]}
+            >
+              <Text style={{ fontSize: 10, fontWeight: '700', color: semesterFilter === s ? '#fff' : colors.foreground }}>{s}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {/* Course Filters */}
+      {uniqueCourses.length > 0 && (
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            onPress={() => setCourseFilter('')}
+            style={[styles.filterChip, !courseFilter && { backgroundColor: colors.primary }, courseFilter && { backgroundColor: colors.surfaceAlt, borderColor: colors.border, borderWidth: 1 }]}
+          >
+            <Text style={{ fontSize: 10, fontWeight: '700', color: !courseFilter ? '#fff' : colors.foreground }}>All Courses</Text>
+          </TouchableOpacity>
+          {uniqueCourses.map((c) => (
+            <TouchableOpacity
+              key={c}
+              onPress={() => setCourseFilter(courseFilter === c ? '' : c)}
+              style={[styles.filterChip, courseFilter === c && { backgroundColor: colors.primary }, courseFilter !== c && { backgroundColor: colors.surfaceAlt, borderColor: colors.border, borderWidth: 1 }]}
+            >
+              <Text style={{ fontSize: 10, fontWeight: '700', color: courseFilter === c ? '#fff' : colors.foreground }}>{c}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {filteredSubjects.length === 0 ? (
+        <EmptyState
+          icon={<FolderKanban size={36} color={colors.mutedForeground} />}
+          title={query || semesterFilter || courseFilter ? 'No subjects match your filters' : (isTeacher || currentUser?.role === 'admin' ? "You haven't created any subjects yet" : 'You are not enrolled in any subjects yet')}
+          subtitle={query || semesterFilter || courseFilter ? 'Try adjusting your search or filters.' : (isTeacher || currentUser?.role === 'admin' ? 'Create a subject to start publishing materials, quizzes, and announcements for your students.' : 'Subjects will appear here once your instructor adds you to a class roster.')}
+        />
       ) : (
         <View style={{ gap: 12 }}>
-          {subjects.map((s) => (
-            <Card key={s.id} style={{ gap: 10 }}>
+          {filteredSubjects.map((s) => (
+            <Card key={s.id} style={{ gap: 10 }} onPress={() => onOpenSubject && onOpenSubject(s)}>
               <View style={styles.subjectTop}>
                 <Badge text={s.code} mono color={colors.primary} />
-                <Badge text={`${s.studentCount} Students`} color={colors.success} bg={colors.successSoft}>
-                  <Users size={12} color={colors.success} />
-                </Badge>
+                <ChevronRight size={16} color={colors.mutedForeground} />
               </View>
               <Text style={[styles.subjectName, { color: colors.foreground }]}>{s.name}</Text>
               {s.description && (
@@ -82,16 +146,6 @@ export default function SubjectsScreen({ onNavigate }: { onNavigate: (tab: strin
           ))}
         </View>
       )}
-
-      <Card style={[styles.aiNote, { backgroundColor: colors.card }]} onPress={() => onNavigate('ai-assistant')}>
-        <View style={[styles.aiIcon, { backgroundColor: colors.indigoSoft }]}>
-          <BookOpen size={18} color={colors.primary} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>Generate AI Study Resources</Text>
-          <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Create quizzes, flashcards & summaries for any subject.</Text>
-        </View>
-      </Card>
     </ScrollView>
   );
 }
@@ -99,15 +153,13 @@ export default function SubjectsScreen({ onNavigate }: { onNavigate: (tab: strin
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 32, gap: 14 },
   banner: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, padding: 16 },
-  bannerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   bannerTitle: { fontSize: 16, fontWeight: '800' },
-  statsRow: { flexDirection: 'row', gap: 12 },
-  statChip: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
-  statNum: { fontSize: 20, fontWeight: '900' },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10 },
+  searchInput: { flex: 1, fontSize: 13, fontWeight: '600' },
+  filterRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
+  filterChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
   subjectTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   subjectName: { fontSize: 15, fontWeight: '800' },
   subjectFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, paddingTop: 10 },
   footerRight: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  aiNote: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 },
-  aiIcon: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
 });

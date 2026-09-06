@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { TrendingUp, Download, Award, Flame, Target, BookOpen, Sparkles, FileText } from 'lucide-react-native';
+import { Download, Award, Flame, Target, BookOpen, Sparkles, FileText, ChevronRight, CheckCircle2 } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { Card, Badge, StatCard, SectionHeader, ProgressBar, EmptyState } from '../components/ui';
+import { useToast } from '../context/ToastContext';
+import { Card, StatCard, SectionHeader, ProgressBar, EmptyState, Modal } from '../components/ui';
 import { ThemedBarChart, ThemedLineChart } from '../components/Charts';
 import { getAttempts, LocalAttempt } from '../utils/storage';
+import { formatRelative } from '../utils/time';
+import { getApiBaseUrl, getAuthToken } from '../services/api';
 
 interface TopicStat {
   topic: string;
@@ -16,63 +19,64 @@ interface TopicStat {
   accuracy: number;
 }
 
-const DEMO_ATTEMPTS: LocalAttempt[] = [
-  {
-    id: 'demo-1',
-    quizId: 'm-q1',
-    quizTitle: 'Quick Quiz: Data Structures & Groq AI',
-    subjectName: 'CS 301',
-    score: 3,
-    maxScore: 3,
-    percentage: 100,
-    passed: true,
-    weakTopics: [],
-    strongTopics: ['Graphs', 'AI Fundamentals'],
-    completedAt: new Date(Date.now() - 86400000 * 3).toISOString(),
-  },
-  {
-    id: 'demo-2',
-    quizId: 'm-q1',
-    quizTitle: 'Quiz: Database Normalization',
-    subjectName: 'DB 204',
-    score: 2,
-    maxScore: 3,
-    percentage: 67,
-    passed: false,
-    weakTopics: ['MySQL', 'Normalization'],
-    strongTopics: ['Graphs'],
-    completedAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-  },
-  {
-    id: 'demo-3',
-    quizId: 'm-q1',
-    quizTitle: 'Study Quiz: Graph Traversal',
-    subjectName: 'CS 301',
-    score: 4,
-    maxScore: 5,
-    percentage: 80,
-    passed: true,
-    weakTopics: ['Complexity'],
-    strongTopics: ['Graphs', 'AI Fundamentals'],
-    completedAt: new Date(Date.now() - 86400000).toISOString(),
-  },
-];
+interface ServerRecommendationStep {
+  step: number;
+  type: string;
+  title: string;
+  targetId: string | null;
+  difficultyTarget: string;
+}
 
-export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: string) => void }) {
+interface ServerRecommendation {
+  id: string;
+  weakTopic: string;
+  recommendationType: string;
+  title: string;
+  description: string;
+  targetId: string;
+  difficultyTarget: string;
+  accuracyPercentage?: number | null;
+  steps?: ServerRecommendationStep[];
+}
+
+export default function AnalyticsScreen({
+  onNavigate,
+  onOpenWeakTopic,
+}: {
+  onNavigate: (tab: string) => void;
+  onOpenWeakTopic?: (topic: string) => void;
+}) {
   const { colors } = useTheme();
   const { currentUser } = useAuth();
-  const userId = currentUser?.id || 'usr-student-1';
+  const { showToast } = useToast();
+  const userId = currentUser?.id || '';
 
   const [attempts, setAttempts] = useState<LocalAttempt[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [usingDemo, setUsingDemo] = useState(false);
+  const [serverRecs, setServerRecs] = useState<ServerRecommendation[] | null>(null);
+  const [detailCard, setDetailCard] = useState<'average' | 'assessments' | 'best' | 'weak' | null>(null);
 
   useEffect(() => {
     getAttempts(userId).then((data) => {
-      setAttempts(data.length > 0 ? data : DEMO_ATTEMPTS);
-      setUsingDemo(data.length === 0);
+      setAttempts(data);
       setLoaded(true);
     });
+  }, [userId]);
+
+  useEffect(() => {
+    if (!getAuthToken()) return;
+    let cancelled = false;
+    fetch(`${getApiBaseUrl()}/recommendations/${userId}`, {
+      headers: { Authorization: `Bearer ${getAuthToken()}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: ServerRecommendation[] | null) => {
+        if (!cancelled && Array.isArray(data) && data.length > 0) setServerRecs(data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [userId]);
 
   if (!loaded) return null;
@@ -101,7 +105,22 @@ export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: stri
   }));
   topicStats.sort((a, b) => a.accuracy - b.accuracy);
 
-  const weakTopics = topicStats.filter((t) => t.accuracy < 70).slice(0, 3);
+  // Latest status wins: a once-weak topic counts as mastered only if its most
+  // recent appearance was in a correct-answer ("strong") list.
+  const lastStatus = new Map<string, 'weak' | 'strong'>();
+  [...sorted].reverse().forEach((a) => {
+    (a.weakTopics || []).forEach((t) => {
+      if (!lastStatus.has(t)) lastStatus.set(t, 'weak');
+    });
+    (a.strongTopics || []).forEach((t) => {
+      if (!lastStatus.has(t)) lastStatus.set(t, 'strong');
+    });
+  });
+  const everWeak = new Set<string>();
+  attempts.forEach((a) => (a.weakTopics || []).forEach((t) => everWeak.add(t)));
+  const masteredTopics = Array.from(everWeak).filter((t) => lastStatus.get(t) === 'strong');
+
+  const weakTopics = topicStats.filter((t) => t.accuracy < 70 && !masteredTopics.includes(t.topic)).slice(0, 3);
   const chartTopics = topicStats.slice().sort((a, b) => b.correct + b.wrong - (a.correct + a.wrong)).slice(0, 5);
   const trend = sorted.slice(-8);
 
@@ -131,22 +150,19 @@ export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: stri
       const file = new File(Paths.cache, 'StudyLens-Progress-Report.txt');
       file.write(lines.join('\n'));
       if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: 'text/plain' });
-      else Alert.alert('Report ready', file.uri);
+      else showToast('Report ready.', 'success');
     } catch {
-      Alert.alert('Error', 'Could not export the report.');
+      showToast('Could not export the report.', 'error');
     }
   };
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={styles.content}>
       <View style={[styles.banner, { backgroundColor: colors.surfaceAlt }]}>
-        <View style={[styles.bannerIcon, { backgroundColor: colors.primary }]}>
-          <TrendingUp size={18} color="#fff" />
-        </View>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Adaptive Progress Analytics</Text>
+          <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Progress Analytics</Text>
           <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>
-            Aggregated from your locally-recorded quiz attempts (device-only).
+            Based on your recorded quiz attempts.
           </Text>
         </View>
         <TouchableOpacity onPress={exportReport} style={[styles.exportBtn, { backgroundColor: colors.primary }]}>
@@ -155,20 +171,164 @@ export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: stri
         </TouchableOpacity>
       </View>
 
-      {usingDemo && (
-        <View style={[styles.demoNote, { backgroundColor: colors.warningSoft }]}>
-          <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '700' }}>
-            Showing sample analytics. Take quizzes to build your real progress.
-          </Text>
-        </View>
-      )}
-
       <View style={styles.statsGrid}>
-        <StatCard label="Average Score" value={`${Math.round(avg)}%`} delta={`${best}% best`} icon={<Award size={18} color={colors.primary} />} />
-        <StatCard label="Assessments" value={String(sorted.length)} delta={`${passedCount} passed`} icon={<FileText size={18} color={colors.success} />} />
-        <StatCard label="Best Score" value={`${best}%`} delta="Keep it up!" icon={<Flame size={18} color={colors.warning} />} />
-        <StatCard label="Weak Topics" value={String(weakTopics.length)} delta="Review below" icon={<Target size={18} color={colors.danger} />} />
+        <StatCard label="Average Score" value={`${Math.round(avg)}%`} delta={`${best}% best`} icon={<Award size={18} color={colors.primary} />} onPress={() => setDetailCard('average')} />
+        <StatCard label="Assessments" value={String(sorted.length)} delta={`${passedCount} passed`} icon={<FileText size={18} color={colors.success} />} onPress={() => setDetailCard('assessments')} />
+        <StatCard label="Best Score" value={`${best}%`} icon={<Flame size={18} color={colors.warning} />} onPress={() => setDetailCard('best')} />
+        <StatCard label="Weak Topics" value={String(weakTopics.length)} delta="Review below" icon={<Target size={18} color={colors.danger} />} onPress={() => setDetailCard('weak')} />
       </View>
+
+      <Modal
+        visible={detailCard === 'average'}
+        onClose={() => setDetailCard(null)}
+        title="Average Score"
+        subtitle={`Overall average: ${Math.round(avg)}% (passing mark is 70%).`}
+      >
+        <View style={{ gap: 8 }}>
+          {sorted.length === 0 ? (
+            <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>Take a quiz to build your score history.</Text>
+          ) : (
+            sorted.map((a, idx) => (
+              <TouchableOpacity
+                key={idx}
+                style={[styles.detailRow, { borderColor: colors.border }]}
+                activeOpacity={0.7}
+                onPress={() => {
+                  setDetailCard(null);
+                  onNavigate('quiz');
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>
+                    {a.quizTitle}
+                  </Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>{a.subjectName}</Text>
+                </View>
+                <Text style={{ color: a.percentage >= 70 ? colors.success : colors.danger, fontSize: 12, fontWeight: '800' }}>
+                  {a.percentage}%
+                </Text>
+                <ChevronRight size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={detailCard === 'assessments'}
+        onClose={() => setDetailCard(null)}
+        title="Assessments Taken"
+        subtitle={`${sorted.length} assessment${sorted.length === 1 ? '' : 's'} completed, ${passedCount} passed.`}
+      >
+        <View style={{ gap: 8 }}>
+          {sorted.length === 0 ? (
+            <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No assessments recorded yet.</Text>
+          ) : (
+            sorted.map((a, idx) => (
+              <TouchableOpacity
+                key={idx}
+                style={[styles.detailRow, { borderColor: colors.border }]}
+                activeOpacity={0.7}
+                onPress={() => {
+                  setDetailCard(null);
+                  onNavigate('quiz');
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>
+                    {a.quizTitle}
+                  </Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>{formatRelative(a.completedAt)}</Text>
+                </View>
+                <Text
+                  style={{
+                    color: '#fff',
+                    fontSize: 10,
+                    fontWeight: '900',
+                    backgroundColor: a.passed ? colors.success : colors.danger,
+                    borderRadius: 6,
+                    paddingHorizontal: 7,
+                    paddingVertical: 3,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {a.passed ? 'PASS' : 'FAIL'}
+                </Text>
+                <ChevronRight size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={detailCard === 'best'}
+        onClose={() => setDetailCard(null)}
+        title="Best Score"
+        subtitle={`Your highest score so far is ${best}%.`}
+      >
+        <View style={{ gap: 8 }}>
+          {sorted.filter((a) => a.percentage === best).length === 0 ? (
+            <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No attempts recorded yet.</Text>
+          ) : (
+            sorted
+              .filter((a) => a.percentage === best)
+              .map((a, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[styles.detailRow, { borderColor: colors.border }]}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setDetailCard(null);
+                    onNavigate('quiz');
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>
+                      {a.quizTitle}
+                    </Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>{a.subjectName}</Text>
+                  </View>
+                  <Text style={{ color: colors.success, fontSize: 12, fontWeight: '800' }}>{a.percentage}%</Text>
+                  <ChevronRight size={16} color={colors.mutedForeground} />
+                </TouchableOpacity>
+              ))
+          )}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={detailCard === 'weak'}
+        onClose={() => setDetailCard(null)}
+        title="Weak Topics"
+        subtitle={`${weakTopics.length} topic${weakTopics.length === 1 ? '' : 's'} below the 70% accuracy mark.`}
+      >
+        <View style={{ gap: 8 }}>
+          {weakTopics.length === 0 ? (
+            <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No weak topics detected. Great job!</Text>
+          ) : (
+            weakTopics.map((t) => (
+              <TouchableOpacity
+                key={t.topic}
+                style={[styles.detailRow, { borderColor: colors.border }]}
+                activeOpacity={0.7}
+                onPress={() => {
+                  setDetailCard(null);
+                  if (onOpenWeakTopic) onOpenWeakTopic(t.topic);
+                  else onNavigate('ai-assistant');
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>{t.topic}</Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>Tap to study with AI</Text>
+                </View>
+                <Text style={{ color: colors.danger, fontSize: 12, fontWeight: '800' }}>{t.accuracy}%</Text>
+                <ChevronRight size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+      </Modal>
 
       {topicStats.length > 0 ? (
         <Card style={{ gap: 12 }}>
@@ -199,8 +359,44 @@ export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: stri
       )}
 
       <Card style={{ gap: 12 }}>
-        <SectionHeader title="Personalized Adaptive Recommendations" subtitle="Based on your weakest topics" />
-        {weakTopics.length === 0 ? (
+        <SectionHeader title="Recommendations" subtitle="Based on your weakest topics" />
+        {serverRecs && serverRecs.length > 0 ? (
+          serverRecs.map((rec) => (
+            <View key={rec.id} style={[styles.recoCard, { borderColor: colors.border, flexDirection: 'column', alignItems: 'flex-start' }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, width: '100%' }}>
+                <View style={[styles.recoIcon, { backgroundColor: colors.dangerSoft }]}>
+                  <Target size={16} color={colors.danger} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '800' }}>{rec.weakTopic}</Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 11, marginTop: 2 }}>
+                    {typeof rec.accuracyPercentage === 'number' ? `${rec.accuracyPercentage}% accuracy - ` : ''}
+                    {rec.title}
+                  </Text>
+                </View>
+              </View>
+              <Text style={{ color: colors.mutedForeground, fontSize: 11, lineHeight: 17 }}>{rec.description}</Text>
+              {rec.steps && rec.steps.length > 0 && (
+                <View style={{ gap: 6, width: '100%' }}>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    Suggested steps
+                  </Text>
+                  {rec.steps.map((s) => (
+                    <View key={`${rec.id}-${s.step}`} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+                      <View style={[styles.stepDot, { backgroundColor: colors.primary }]}>
+                        <Text style={{ color: '#fff', fontSize: 10, fontWeight: '900' }}>{s.step}</Text>
+                      </View>
+                      <Text style={{ color: colors.foreground, fontSize: 12, flex: 1 }}>
+                        <Text style={{ fontWeight: '800', textTransform: 'capitalize' }}>{s.type}: </Text>
+                        {s.title}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          ))
+        ) : weakTopics.length === 0 ? (
           <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No weak topics detected. Keep up the excellent work!</Text>
         ) : (
           weakTopics.map((t) => (
@@ -219,6 +415,29 @@ export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: stri
               </View>
             </View>
           ))
+        )}
+        {masteredTopics.length > 0 && (
+          <View style={{ gap: 8 }}>
+            <Text style={{ color: colors.success, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Overcome ({masteredTopics.length})
+            </Text>
+            {masteredTopics.slice(0, 4).map((topic) => {
+              const stat = topicStats.find((s) => s.topic === topic);
+              return (
+                <View key={topic} style={[styles.recoCard, { borderColor: colors.border }]}>
+                  <View style={[styles.recoIcon, { backgroundColor: colors.successSoft }]}>
+                    <CheckCircle2 size={16} color={colors.success} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '800' }}>{topic}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: 11, marginTop: 2 }}>
+                      Mastered · now at {stat ? `${stat.accuracy}%` : '70%+'} accuracy
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
         )}
         <View style={styles.recoActions}>
           <TouchableOpacity onPress={() => onNavigate('materials')} style={[styles.recoBtn, { backgroundColor: colors.indigoSoft }]}>
@@ -251,7 +470,6 @@ export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: stri
                 {new Date(a.completedAt).toLocaleDateString()} - {a.subjectName}
               </Text>
             </View>
-            <Badge text={a.passed ? 'PASS' : 'FAIL'} color={a.passed ? colors.success : colors.danger} bg={a.passed ? colors.successSoft : colors.dangerSoft} />
           </View>
         ))}
       </Card>
@@ -262,16 +480,16 @@ export default function AnalyticsScreen({ onNavigate }: { onNavigate: (tab: stri
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 32, gap: 14 },
   banner: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, padding: 16 },
-  bannerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   bannerTitle: { fontSize: 16, fontWeight: '800' },
   exportBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
-  demoNote: { borderRadius: 10, padding: 10 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   recoCard: { flexDirection: 'row', gap: 10, borderRadius: 12, borderWidth: 1, padding: 12, alignItems: 'center' },
   recoIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   recoBar: { marginTop: 6 },
+  stepDot: { width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   recoActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   recoBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
   attemptRow: { flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, paddingBottom: 10 },
   attemptBadge: { borderRadius: 99, paddingHorizontal: 10, paddingVertical: 4 },
+  detailRow: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 12, padding: 12 },
 });

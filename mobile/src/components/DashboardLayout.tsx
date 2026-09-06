@@ -1,5 +1,16 @@
 import React from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Modal, ScrollView, SafeAreaView } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  Modal,
+  ScrollView,
+  SafeAreaView,
+  Animated,
+  PanResponder,
+  Dimensions,
+} from 'react-native';
 import {
   Menu,
   X,
@@ -8,19 +19,14 @@ import {
   ChevronRight,
   Sun,
   Moon,
-  GraduationCap,
   BookOpen,
-  Sparkles,
-  CheckSquare,
-  Layers,
-  TrendingUp,
-  FolderKanban,
-  Users,
-  Activity,
 } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth, UserRole } from '../context/AuthContext';
 import { useAnnouncements } from '../context/AnnouncementsContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const DRAWER_WIDTH = Math.min(Dimensions.get('window').width * 0.82, 320);
 
 export interface MenuItem {
   key: string;
@@ -40,30 +46,65 @@ interface DashboardLayoutProps {
 
 export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQuickNavigate, title, children }: DashboardLayoutProps) {
   const { colors, isDark, toggleTheme } = useTheme();
-  const { currentUser, switchRole, logout } = useAuth();
-  const { unreadNotifications, unreadAnnouncements } = useAnnouncements();
-  const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const { currentUser, logout } = useAuth();
+  const { unreadCount } = useAnnouncements();
+  const insets = useSafeAreaInsets();
+  const [open, setOpen] = React.useState(false);
+  const translateX = React.useRef(new Animated.Value(-DRAWER_WIDTH)).current;
 
-  const role = (currentUser?.role === 'teacher' ? 'teacher' : 'student') as UserRole;
-  const unreadCount = unreadNotifications + unreadAnnouncements;
+  const role = (currentUser?.role === 'admin' ? 'admin' : currentUser?.role === 'teacher' ? 'teacher' : 'student') as UserRole;
+
+  React.useEffect(() => {
+    if (open) {
+      translateX.setValue(-DRAWER_WIDTH);
+      Animated.timing(translateX, { toValue: 0, duration: 230, useNativeDriver: true }).start();
+    }
+  }, [open, translateX]);
+
+  const openDrawer = React.useCallback(() => setOpen(true), []);
+
+  const closeDrawer = React.useCallback(() => {
+    Animated.timing(translateX, { toValue: -DRAWER_WIDTH, duration: 180, useNativeDriver: true }).start(() => setOpen(false));
+  }, [translateX]);
+
+  // Swipe right from the left edge to open the navigation drawer
+  const edgePan = React.useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => !open && g.dx > 12 && Math.abs(g.dx) > Math.abs(g.dy),
+      onPanResponderGrant: () => {
+        if (!open) openDrawer();
+      },
+    })
+  ).current;
+
+  // Drag the drawer to close it (swipe left), or release to snap back open
+  const drawerPan = React.useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy),
+      onPanResponderMove: (_, g) => {
+        translateX.setValue(Math.max(-DRAWER_WIDTH, Math.min(0, g.dx)));
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dx < -60 || g.vx < -0.5) {
+          Animated.timing(translateX, { toValue: -DRAWER_WIDTH, duration: 150, useNativeDriver: true }).start(() => setOpen(false));
+        } else {
+          Animated.timing(translateX, { toValue: 0, duration: 180, useNativeDriver: true }).start();
+        }
+      },
+    })
+  ).current;
 
   const handleNavigate = (key: string) => {
-    setDrawerOpen(false);
+    closeDrawer();
     onNavigate(key);
-  };
-
-  const handleRoleSwitch = (r: UserRole) => {
-    switchRole(r);
-    setDrawerOpen(false);
-    onNavigate('dashboard');
   };
 
   return (
     <View style={[styles.flex, { backgroundColor: colors.background }]}>
       {/* Topbar */}
-      <View style={[styles.topbar, { backgroundColor: colors.topbarBg, borderBottomColor: colors.border }]}>
+      <View style={[styles.topbar, { backgroundColor: colors.topbarBg, borderBottomColor: colors.border, paddingTop: insets.top, height: 56 + insets.top }]}>
         <View style={styles.topbarLeft}>
-          <TouchableOpacity onPress={() => setDrawerOpen(true)} style={styles.iconBtn}>
+          <TouchableOpacity onPress={openDrawer} style={styles.iconBtn}>
             <Menu size={22} color={colors.foreground} />
           </TouchableOpacity>
           <Text style={[styles.topbarTitle, { color: colors.foreground }]}>{title}</Text>
@@ -72,7 +113,7 @@ export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQu
           <TouchableOpacity onPress={toggleTheme} style={styles.iconBtn}>
             {isDark ? <Sun size={18} color={colors.warning} /> : <Moon size={18} color={colors.mutedForeground} />}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => { if (onQuickNavigate) onQuickNavigate('notifications'); else setDrawerOpen(true); }} style={styles.bellWrap}>
+          <TouchableOpacity onPress={() => { if (onQuickNavigate) onQuickNavigate('notifications'); else openDrawer(); }} style={styles.bellWrap}>
             <Bell size={20} color={colors.mutedForeground} />
             {unreadCount > 0 && (
               <View style={[styles.bellDot, { backgroundColor: colors.primary }]}>
@@ -80,7 +121,7 @@ export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQu
               </View>
             )}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => { if (onQuickNavigate) onQuickNavigate('profile'); else setDrawerOpen(true); }} style={[styles.avatar, { backgroundColor: colors.primary }]}>
+          <TouchableOpacity onPress={() => { if (onQuickNavigate) onQuickNavigate('profile'); else openDrawer(); }} style={[styles.avatar, { backgroundColor: colors.primary }]}>
             <Text style={styles.avatarText}>{currentUser?.name ? currentUser.name.slice(0, 2).toUpperCase() : 'SL'}</Text>
           </TouchableOpacity>
         </View>
@@ -89,95 +130,80 @@ export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQu
       {/* Content */}
       <View style={styles.flex}>{children}</View>
 
+      {/* Left-edge swipe zone to open the drawer */}
+      {!open && <View {...edgePan.panHandlers} style={styles.edgeStrip} />}
+
       {/* Drawer */}
-      <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
+      <Modal visible={open} transparent animationType="none" onRequestClose={closeDrawer}>
         <View style={[styles.drawerOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
-          <TouchableOpacity style={styles.flex} onPress={() => setDrawerOpen(false)} />
-          <SafeAreaView style={[styles.drawer, { backgroundColor: colors.navBg, borderRightColor: colors.border }]}>
-            {/* Brand */}
-            <View style={[styles.brandRow, { borderBottomColor: colors.border }]}>
-              <View style={[styles.brandLogo, { backgroundColor: colors.primary }]}>
-                <BookOpen size={20} color="#fff" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.brandTitle, { color: colors.foreground }]}>StudyLens AI</Text>
-                <Text style={{ color: colors.primary, fontSize: 10, fontWeight: '500', marginTop: 2 }}>Adaptive Learning Platform</Text>
-              </View>
-              <TouchableOpacity onPress={() => setDrawerOpen(false)} style={styles.iconBtn}>
-                <X size={20} color={colors.mutedForeground} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Role Switcher */}
-            <View style={[styles.roleBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
-              <View style={[styles.roleHeader, { borderColor: colors.border }]}>
-                <Text style={{ color: colors.mutedForeground, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  Active View Role
-                </Text>
-                <Text style={{ color: colors.primary, fontSize: 10, textTransform: 'uppercase', fontFamily: undefined }}>{role}</Text>
-              </View>
-              <View style={styles.roleRow}>
-                {(['student', 'teacher'] as UserRole[]).map((r) => (
-                  <TouchableOpacity
-                    key={r}
-                    onPress={() => handleRoleSwitch(r)}
-                    style={[styles.rolePill, role === r ? { backgroundColor: colors.primary } : { backgroundColor: 'transparent' }]}
-                  >
-                    <Text style={{ fontSize: 11, fontWeight: '500', textTransform: 'capitalize', color: role === r ? '#fff' : colors.mutedForeground }}>
-                      {r}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* Nav */}
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 4 }}>
-              <Text style={[styles.navLabel, { color: colors.mutedForeground }]}>{role} Navigation</Text>
-              {menuItems.map((item) => {
-                const isActive = activeKey === item.key;
-                const Icon = item.Icon;
-                return (
-                  <TouchableOpacity
-                    key={item.key}
-                    onPress={() => handleNavigate(item.key)}
-                    style={[styles.navItem, isActive ? { backgroundColor: colors.navActiveBg } : { backgroundColor: 'transparent' }]}
-                  >
-                    <Icon size={17} color={isActive ? '#fff' : colors.navText} />
-                    <Text style={[styles.navItemText, { color: isActive ? '#fff' : colors.navText }]} numberOfLines={1}>
-                      {item.label}
-                    </Text>
-                    {item.badge && (
-                      <View style={[styles.navBadge, { backgroundColor: isActive ? 'rgba(255,255,255,0.2)' : colors.primarySoft }]}>
-                        <Text style={{ color: isActive ? '#fff' : colors.primary, fontSize: 10, fontWeight: '700' }}>{item.badge}</Text>
-                      </View>
-                    )}
-                    <ChevronRight size={15} color={isActive ? '#fff' : 'rgba(148,163,184,0.5)'} />
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-
-            {/* User + Logout */}
-            <View style={[styles.userBox, { borderTopColor: colors.border }]}>
-              <View style={styles.userRow}>
-                <View style={[styles.avatarSm, { backgroundColor: colors.primary }]}>
-                  <Text style={styles.avatarText}>{currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : 'J'}</Text>
+          <Animated.View
+            {...drawerPan.panHandlers}
+            style={[styles.drawer, { backgroundColor: colors.navBg, borderRightColor: colors.border, transform: [{ translateX }] }]}
+          >
+            <SafeAreaView style={styles.flex}>
+              {/* Brand */}
+              <View style={[styles.brandRow, { borderBottomColor: colors.border }]}>
+                <View style={[styles.brandLogo, { backgroundColor: colors.primary }]}>
+                  <BookOpen size={20} color="#fff" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.userName, { color: colors.foreground }]} numberOfLines={1}>{currentUser?.name}</Text>
-                  <Text style={{ color: colors.mutedForeground, fontSize: 10 }} numberOfLines={1}>{currentUser?.email}</Text>
+                  <Text style={[styles.brandTitle, { color: colors.foreground }]}>StudyLens AI</Text>
+                  <Text style={{ color: colors.primary, fontSize: 10, fontWeight: '500', marginTop: 2 }}>Learning Platform</Text>
                 </View>
+                <TouchableOpacity onPress={closeDrawer} style={styles.iconBtn}>
+                  <X size={20} color={colors.mutedForeground} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                onPress={logout}
-                style={[styles.logoutBtn, { borderColor: colors.border }]}
-              >
-                <LogOut size={15} color={colors.mutedForeground} />
-                <Text style={{ color: colors.mutedForeground, fontSize: 12, fontWeight: '600' }}>Logout</Text>
-              </TouchableOpacity>
-            </View>
-          </SafeAreaView>
+
+              {/* Nav */}
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 4 }}>
+                <Text style={[styles.navLabel, { color: colors.mutedForeground }]}>{role} Navigation</Text>
+                {menuItems.map((item) => {
+                  const isActive = activeKey === item.key;
+                  const Icon = item.Icon;
+                  return (
+                    <TouchableOpacity
+                      key={item.key}
+                      onPress={() => handleNavigate(item.key)}
+                      style={[styles.navItem, isActive ? { backgroundColor: colors.navActiveBg } : { backgroundColor: 'transparent' }]}
+                    >
+                      <Icon size={17} color={isActive ? '#fff' : colors.navText} />
+                      <Text style={[styles.navItemText, { color: isActive ? '#fff' : colors.navText }]} numberOfLines={1}>
+                        {item.label}
+                      </Text>
+                      {item.badge && (
+                        <View style={[styles.navBadge, { backgroundColor: isActive ? 'rgba(255,255,255,0.2)' : colors.primarySoft }]}>
+                          <Text style={{ color: isActive ? '#fff' : colors.primary, fontSize: 10, fontWeight: '700' }}>{item.badge}</Text>
+                        </View>
+                      )}
+                      <ChevronRight size={15} color={isActive ? '#fff' : 'rgba(148,163,184,0.5)'} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              {/* User + Logout */}
+              <View style={[styles.userBox, { borderTopColor: colors.border }]}>
+                <View style={styles.userRow}>
+                  <View style={[styles.avatarSm, { backgroundColor: colors.primary }]}>
+                    <Text style={styles.avatarText}>{currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : 'J'}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.userName, { color: colors.foreground }]} numberOfLines={1}>{currentUser?.name}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: 10 }} numberOfLines={1}>{currentUser?.email}</Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  onPress={logout}
+                  style={[styles.logoutBtn, { borderColor: colors.border }]}
+                >
+                  <LogOut size={15} color={colors.mutedForeground} />
+                  <Text style={{ color: colors.mutedForeground, fontSize: 12, fontWeight: '600' }}>Logout</Text>
+                </TouchableOpacity>
+              </View>
+            </SafeAreaView>
+          </Animated.View>
+          <TouchableOpacity style={styles.flex} onPress={closeDrawer} />
         </View>
       </Modal>
     </View>
@@ -213,6 +239,7 @@ const styles = StyleSheet.create({
   bellDotText: { color: '#fff', fontSize: 9, fontWeight: '900' },
   avatar: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: '#fff', fontSize: 11, fontWeight: '800' },
+  edgeStrip: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 24, backgroundColor: 'transparent', zIndex: 5 },
   drawerOverlay: { flex: 1, flexDirection: 'row' },
   drawer: {
     width: '82%',

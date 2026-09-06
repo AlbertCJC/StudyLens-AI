@@ -1,15 +1,15 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
   Menu, X, Bell, LogOut, ChevronRight,
-  ShieldCheck, GraduationCap, UserCheck, ArrowLeftRight, User, CheckCheck
+  User
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Button } from "./ui/button";
 import { DarkModeToggle } from "./DarkModeToggle";
 import { useAnnouncements } from "../context/AnnouncementsContext";
 import { useAuth } from "../context/AuthContext";
-import { UserProfileModal } from "./UserProfileModal";
+import { RelativeTime } from "../utils/time";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,14 +32,7 @@ export interface DashboardLayoutProps {
   userRole: "Student" | "Teacher" | "Administrator";
   userName: string;
   activePath?: string;
-  onRoleSwitch?: (role: "student" | "teacher" | "admin") => void;
   onLogout?: () => void;
-}
-
-declare global {
-  interface Window {
-    __openProfileModal?: () => void;
-  }
 }
 
 export function DashboardLayout({
@@ -48,24 +41,41 @@ export function DashboardLayout({
   userRole,
   userName,
   activePath,
-  onRoleSwitch,
   onLogout,
 }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [showProfileModal, setShowProfileModal] = useState(false);
-  const { currentUser, updateUser } = useAuth();
+  const [viewAllOpen, setViewAllOpen] = useState(false);
+  const notifRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
-  React.useEffect(() => {
-    window.__openProfileModal = () => setShowProfileModal(true);
-    return () => {
-      delete window.__openProfileModal;
-    };
-  }, []);
+  const { currentUser } = useAuth();
+  const { notifications, unreadCount, markAllNotificationsRead, markNotificationRead, dbNotifications } = useAnnouncements();
 
-  const { announcements, unreadCount, markAsRead, markAllAsRead } = useAnnouncements();
+  // Close the bell dropdown on any outside pointer-down or Escape. A fixed
+  // backdrop cannot be used here: the header's backdrop-blur creates a
+  // containing block that would trap it inside the header box.
+  useEffect(() => {
+    if (!notifOpen) return;
+    const onPointerDown = (e: MouseEvent | TouchEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNotifOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("touchstart", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("touchstart", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [notifOpen]);
 
   const currentPath = activePath || location.pathname;
 
@@ -86,20 +96,12 @@ export function DashboardLayout({
     else if (currentPath.includes("announcements")) pageTitle = "Announcements";
     else if (currentPath.includes("users")) pageTitle = "User Management";
     else if (currentPath.includes("activity-logs")) pageTitle = "Audit Activity Logs";
-    else if (currentPath.includes("remote")) pageTitle = "Remote Deployment";
-    else if (currentPath.includes("self-hosted")) pageTitle = "Self-Hosted Setup";
+    else if (currentPath.includes("profile")) pageTitle = "My Profile";
     else if (currentPath.includes("student")) pageTitle = "Student Dashboard";
     else if (currentPath.includes("teacher")) pageTitle = "Teacher Dashboard";
     else if (currentPath.includes("admin")) pageTitle = "Admin Dashboard";
     else pageTitle = "Dashboard";
   }
-
-  const handleRoleSelect = (roleKey: "student" | "teacher" | "admin", path: string) => {
-    if (onRoleSwitch) {
-      onRoleSwitch(roleKey);
-    }
-    navigate(path);
-  };
 
   const handleLogoutClick = () => {
     if (onLogout) {
@@ -110,7 +112,7 @@ export function DashboardLayout({
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex">
+    <div className="h-screen bg-background text-foreground flex overflow-hidden">
       {/* Mobile Backdrop */}
       {sidebarOpen && (
         <div
@@ -121,20 +123,20 @@ export function DashboardLayout({
 
       {/* Sidebar Navigation */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border transform transition-transform duration-200 ease-in-out lg:translate-x-0 lg:static flex flex-col justify-between p-4 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 h-full bg-card border-r border-border transform transition-[transform,width] duration-200 ease-in-out lg:translate-x-0 lg:static flex flex-col justify-between p-4 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        } ${sidebarCollapsed ? "lg:w-[76px]" : "lg:w-64"}`}
       >
         <div className="flex flex-col h-full justify-between">
           <div>
-            <div className="flex items-center justify-between mb-6 px-2">
+            <div className={`flex items-center justify-between mb-6 px-2 ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}>
               <Link to="/" className="flex items-center gap-2.5 group">
                 <div className="h-9 w-9 rounded-xl bg-[#5b51d8] text-white flex items-center justify-center font-bold text-lg shadow-sm group-hover:scale-105 transition-transform">
                   S
                 </div>
-                <div>
-                  <h1 className="font-extrabold text-base leading-none tracking-tight text-foreground">
-                    StudyLens AI
+                <div className={sidebarCollapsed ? "lg:hidden" : ""}>
+                  <h1 className="font-bold text-base leading-none tracking-tight text-foreground">
+                    StudyLens
                   </h1>
                 </div>
               </Link>
@@ -160,17 +162,18 @@ export function DashboardLayout({
                     key={item.path}
                     to={item.path}
                     onClick={() => setSidebarOpen(false)}
+                    title={sidebarCollapsed ? item.label : undefined}
                     className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                       isActive
                         ? "bg-[#5b51d8] text-white font-bold shadow-xs"
                         : "text-slate-600 dark:text-slate-300 hover:bg-muted hover:text-foreground"
-                    }`}
+                    } ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}
                   >
                     <div className="flex items-center gap-3">
-                      <Icon className={`h-4 w-4 ${isActive ? "text-white" : "text-slate-500 dark:text-slate-400"}`} />
-                      <span>{item.label}</span>
+                      <Icon className={`h-4 w-4 shrink-0 ${isActive ? "text-white" : "text-slate-500 dark:text-slate-400"}`} />
+                      <span className={sidebarCollapsed ? "lg:hidden" : ""}>{item.label}</span>
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className={`flex items-center gap-1.5 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
                       {item.badge && (
                         <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded-md ${
                           isActive ? "bg-white/20 text-white" : "bg-[#5b51d8]/15 text-[#5b51d8]"
@@ -185,42 +188,57 @@ export function DashboardLayout({
               })}
             </nav>
           </div>
-
+          
           <div className="pt-4 border-t border-border space-y-3">
             <div
-              onClick={() => setShowProfileModal(true)}
-              className="flex items-center gap-3 px-2 cursor-pointer hover:bg-muted/50 p-1.5 rounded-xl transition-colors group"
+              onClick={() => navigate("/profile")}
+              className={`flex items-center gap-3 px-2 cursor-pointer hover:bg-muted/50 p-1.5 rounded-xl transition-colors group ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}
               title="Click to view full user profile"
             >
-              <div className="h-9 w-9 rounded-full bg-[#5b51d8] text-white flex items-center justify-center font-bold text-xs ring-2 ring-[#5b51d8]/20 shrink-0 group-hover:scale-105 transition-transform">
-                {userName ? userName.charAt(0).toUpperCase() : "J"}
-              </div>
-              <div className="flex-1 truncate">
+              {currentUser?.avatar ? (
+                <img
+                  src={currentUser.avatar}
+                  alt={userName}
+                  className="h-9 w-9 rounded-full object-cover ring-2 ring-[#5b51d8]/20 shrink-0 group-hover:scale-105 transition-transform"
+                />
+              ) : (
+                <div className="h-9 w-9 rounded-full bg-[#5b51d8] text-white flex items-center justify-center font-bold text-xs ring-2 ring-[#5b51d8]/20 shrink-0 group-hover:scale-105 transition-transform">
+                  {userName ? userName.charAt(0).toUpperCase() : "J"}
+                </div>
+              )}
+              <div className={`flex-1 truncate ${sidebarCollapsed ? "lg:hidden" : ""}`}>
                 <p className="text-xs font-bold truncate text-foreground group-hover:text-[#5b51d8] transition-colors">{userName}</p>
                 <p className="text-[11px] text-muted-foreground truncate">{userRole}</p>
               </div>
             </div>
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
-              className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground hover:bg-muted/80 rounded-xl text-xs font-semibold cursor-pointer"
+              className={`w-full justify-start gap-2 text-red-400 hover:text-red-500 hover:bg-transparent rounded-xl text-xs font-semibold cursor-pointer ${sidebarCollapsed ? "lg:w-10 lg:h-10 lg:justify-center lg:px-0 mx-auto" : ""}`}
               onClick={handleLogoutClick}
+              title={sidebarCollapsed ? "Logout" : undefined}
             >
-              <LogOut className="h-4 w-4" /> Logout
+              <LogOut className="h-4 w-4" /> <span className={sidebarCollapsed ? "lg:hidden" : ""}>Logout</span>
             </Button>
           </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 h-full">
         <header className="h-14 border-b border-border bg-card/80 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-40">
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
               size="icon"
               className="text-foreground"
-              onClick={() => setSidebarOpen(!sidebarOpen)}
+              onClick={() => {
+                if (window.matchMedia("(min-width: 1024px)").matches) {
+                  setSidebarCollapsed((c) => !c);
+                } else {
+                  setSidebarOpen((o) => !o);
+                }
+              }}
             >
               <Menu className="h-5 w-5" />
             </Button>
@@ -228,127 +246,89 @@ export function DashboardLayout({
           </div>
 
           <div className="flex items-center space-x-2.5 ml-auto">
-            {/* Role Switcher */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="hidden sm:flex gap-1.5 border-border bg-muted/30 text-xs font-semibold hover:bg-muted rounded-xl transition-colors"
-                >
-                  <ArrowLeftRight className="h-3.5 w-3.5 text-[#5b51d8]" />
-                  <span>{userRole}</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 rounded-xl">
-                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                  Switch Demo Portal
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => handleRoleSelect("student", "/student/dashboard")}
-                  className="gap-2 cursor-pointer"
-                >
-                  <GraduationCap className="h-4 w-4 text-blue-600 dark:text-blue-400" /> Student View
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => handleRoleSelect("teacher", "/teacher/dashboard")}
-                  className="gap-2 cursor-pointer"
-                >
-                  <UserCheck className="h-4 w-4 text-purple-600 dark:text-purple-400" /> Teacher View
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => handleRoleSelect("admin", "/admin/dashboard")}
-                  className="gap-2 cursor-pointer"
-                >
-                  <ShieldCheck className="h-4 w-4 text-red-600 dark:text-red-400" /> Admin View
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
             <DarkModeToggle />
 
             {/* Notification Popover Dropdown connected to Announcements */}
-            <div className="relative">
+            <div className="relative" ref={notifRef}>
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => setNotifOpen(!notifOpen)}
+                onClick={() => {
+                  const opening = !notifOpen;
+                  setNotifOpen(opening);
+                  if (opening) markAllNotificationsRead();
+                }}
                 className="relative text-muted-foreground hover:text-foreground rounded-xl cursor-pointer"
                 title="Notifications"
               >
                 <Bell className="h-5 w-5" />
                 {unreadCount > 0 && (
-                  <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full bg-blue-600 text-[9px] font-extrabold text-white flex items-center justify-center ring-2 ring-background">
-                    {unreadCount}
+                  <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-rose-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-background">
+                    {unreadCount > 9 ? "9+" : unreadCount}
                   </span>
                 )}
               </Button>
 
               {notifOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setNotifOpen(false)} />
-                  <div className="absolute right-0 mt-2 w-88 sm:w-96 bg-card border border-border rounded-2xl shadow-2xl p-4 z-50 space-y-3 animate-in fade-in zoom-in-95">
-                    <div className="flex items-center justify-between pb-3 border-b border-border">
-                      <div className="flex items-center space-x-2">
-                        <Bell className="w-4 h-4 text-primary" />
-                        <h3 className="text-sm font-bold text-foreground">Announcements & Notices</h3>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-[10px] font-bold px-2 py-0.5 bg-primary/10 text-primary rounded-full">
-                          {unreadCount} Unread
-                        </span>
-                        {unreadCount > 0 && (
-                          <button
-                            onClick={markAllAsRead}
-                            className="text-[10px] text-muted-foreground hover:text-foreground underline flex items-center gap-0.5 cursor-pointer"
-                          >
-                            <CheckCheck className="w-3 h-3 text-blue-500" /> Mark read
-                          </button>
-                        )}
-                      </div>
+                <div className="absolute right-0 mt-2 w-88 sm:w-96 bg-card border border-border rounded-2xl shadow-2xl p-4 z-50 space-y-3 animate-in fade-in zoom-in-95">
+                  <div className="flex items-center justify-between pb-3 border-b border-border">
+                    <div className="flex items-center space-x-2">
+                      <Bell className="w-4 h-4 text-primary" />
+                      <h3 className="text-sm font-bold text-foreground">Notifications</h3>
                     </div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+                      {notifications.length} New
+                    </span>
+                  </div>
 
-                    <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
-                      {announcements.length === 0 ? (
-                        <p className="text-xs text-muted-foreground text-center py-6">No announcements available.</p>
-                      ) : (
-                        announcements.map((a) => (
+                  <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                    {notifications.length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-6">No notifications yet.</p>
+                    ) : (
+                      notifications.map((a) => (
                           <div
                             key={a.id}
                             onClick={() => {
-                              markAsRead(a.id);
                               setNotifOpen(false);
-                              navigate(`/announcements?id=${a.id}`);
+                              if (a.kind === "notification") {
+                                const rawId = a.id.replace(/^notif-/, "");
+                                markNotificationRead(rawId);
+                                if (a.target && a.target.startsWith("quiz:")) {
+                                  navigate(`/assessments?quizId=${encodeURIComponent(a.target.slice(5))}`);
+                                } else {
+                                  navigate("/assessments");
+                                }
+                              } else {
+                                navigate(`/announcements?id=${a.announcementId || a.id}`);
+                              }
                             }}
-                            className={`p-3 rounded-xl border text-xs space-y-2 transition-all cursor-pointer group ${
-                              !a.isRead
-                                ? "bg-blue-500/10 border-blue-500/30 hover:bg-blue-500/20 shadow-xs"
-                                : "bg-muted/30 border-border/80 opacity-80 hover:opacity-100 hover:bg-muted/60"
-                            }`}
+                            className={`p-3 rounded-xl border text-xs space-y-2 transition-all cursor-pointer group bg-muted/30 border-border/80 opacity-80 hover:opacity-100 hover:bg-muted/60`}
                           >
                             <div className="flex items-center justify-between gap-2">
                               <span className="font-bold text-foreground truncate group-hover:text-primary transition-colors">
                                 {a.title}
                               </span>
                               <div className="flex items-center space-x-1 shrink-0">
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-bold uppercase">
-                                  {a.tag || a.priority}
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${a.kind === "notification" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400" : "bg-primary/10 text-primary"}`}>
+                                  {a.kind === "notification" ? "Notice" : a.tag || a.priority}
                                 </span>
-                                {!a.isRead && (
-                                  <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0"></span>
-                                )}
                               </div>
                             </div>
+
+                            {a.subjectName && (
+                              <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                                {a.subjectName}
+                              </span>
+                            )}
 
                             <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
                               {a.content}
                             </p>
 
                             <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/40">
-                              <span className="font-semibold text-foreground">{a.authorName}</span>
+                              <span className="font-semibold text-foreground">{a.authorName || (a.kind === "notification" ? "System" : "Administrator")}</span>
                               <div className="flex items-center space-x-1 text-primary font-semibold">
-                                <span>{a.createdAt}</span>
+                                <RelativeTime iso={a.createdAt} />
                                 <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
                               </div>
                             </div>
@@ -361,31 +341,34 @@ export function DashboardLayout({
                       <button
                         onClick={() => {
                           setNotifOpen(false);
-                          navigate("/announcements");
+                          setViewAllOpen(true);
                         }}
                         className="w-full py-2 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-xs font-bold text-center transition-colors cursor-pointer flex items-center justify-center space-x-1"
                       >
-                        <span>View All Announcements Page</span>
+                        <span>View All Notifications</span>
                         <ChevronRight className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
-                </>
               )}
             </div>
 
             {/* User Profile Menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform cursor-pointer">
-                  {userName ? userName.slice(0, 2).toUpperCase() : "SL"}
+                <button className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform cursor-pointer overflow-hidden">
+                  {currentUser?.avatar ? (
+                    <img src={currentUser.avatar} alt={userName} className="h-full w-full object-cover" />
+                  ) : (
+                    (userName ? userName.slice(0, 2).toUpperCase() : "SL")
+                  )}
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56 rounded-xl">
                 <DropdownMenuLabel className="font-bold text-xs">{userName}</DropdownMenuLabel>
                 <p className="text-[11px] text-muted-foreground px-2 pb-1">{userRole} Account</p>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setShowProfileModal(true)} className="gap-2 cursor-pointer text-xs">
+                <DropdownMenuItem onClick={() => navigate("/profile")} className="gap-2 cursor-pointer text-xs">
                   <User className="h-4 w-4" /> View My Profile
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleLogoutClick} className="gap-2 cursor-pointer text-xs text-destructive">
@@ -396,7 +379,7 @@ export function DashboardLayout({
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto space-y-6">
+        <main className="flex-1 p-4 sm:p-6 max-w-[1600px] w-full mx-auto space-y-6 overflow-y-auto min-h-0">
           <motion.div
             key={currentPath}
             initial={{ opacity: 0, y: 6 }}
@@ -408,13 +391,106 @@ export function DashboardLayout({
         </main>
       </div>
 
-      {/* Profile Dialog */}
-      <UserProfileModal
-        isOpen={showProfileModal}
-        onClose={() => setShowProfileModal(false)}
-        user={currentUser}
-        onUpdateUser={updateUser}
-      />
+      {/* View All Notifications modal */}
+      {viewAllOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => setViewAllOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg bg-card border border-border rounded-2xl shadow-2xl animate-in fade-in zoom-in-95 max-h-[85vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <div className="flex items-center space-x-2">
+                <Bell className="w-4 h-4 text-primary" />
+                <h3 className="text-sm font-bold text-foreground">All Notifications</h3>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => markAllNotificationsRead()}
+                  className="text-[11px] font-bold text-primary hover:text-primary/80 transition-colors cursor-pointer"
+                >
+                  Mark all read
+                </button>
+                <button
+                  onClick={() => setViewAllOpen(false)}
+                  className="h-7 w-7 rounded-lg bg-muted/50 hover:bg-muted/80 text-muted-foreground flex items-center justify-center transition-colors cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-3 space-y-2.5 overflow-y-auto flex-1">
+              {notifications.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-10">No notifications yet.</p>
+              ) : (
+                notifications.map((a) => (
+                  <div
+                    key={`all-${a.id}`}
+                    onClick={() => {
+                      if (a.kind === "notification") {
+                        markNotificationRead(a.id.replace(/^notif-/, ""));
+                        if (a.target && a.target.startsWith("quiz:")) {
+                          navigate(`/assessments?quizId=${encodeURIComponent(a.target.slice(5))}`);
+                        } else {
+                          navigate("/assessments");
+                        }
+                      } else {
+                        navigate(`/announcements?id=${a.announcementId || a.id}`);
+                      }
+                      setViewAllOpen(false);
+                    }}
+                    className="p-3 rounded-xl border text-xs space-y-2 transition-all cursor-pointer group bg-muted/30 border-border/80 hover:bg-muted/60"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-foreground truncate group-hover:text-primary transition-colors">
+                        {a.title}
+                      </span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase shrink-0 ${a.kind === "notification" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400" : "bg-primary/10 text-primary"}`}>
+                        {a.kind === "notification" ? "Notice" : a.tag || a.priority}
+                      </span>
+                    </div>
+                    {a.subjectName && (
+                      <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                        {a.subjectName}
+                      </span>
+                    )}
+                    <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">{a.content}</p>
+                    <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/40">
+                      <span className="font-semibold text-foreground">
+                        {a.authorName || (a.kind === "notification" ? "System" : "Administrator")}
+                      </span>
+                      <div className="flex items-center space-x-1 text-primary font-semibold">
+                        <RelativeTime iso={a.createdAt} />
+                        <ChevronRight className="w-3 h-3" />
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex items-center justify-between px-5 py-3 border-t border-border">
+              <span className="text-[11px] text-muted-foreground">
+                {dbNotifications.filter((n) => !n.isRead).length + notifications.filter((n) => n.kind === "announcement").length} unread
+              </span>
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setViewAllOpen(false);
+                  navigate("/announcements");
+                }}
+                className="text-[11px] font-bold text-primary hover:text-primary/80 transition-colors"
+              >
+                Go to Announcements
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

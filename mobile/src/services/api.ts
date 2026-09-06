@@ -1,9 +1,43 @@
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
+import { STORAGE_KEYS, getItem, setItem, getJSON as storageGetJSON, setJSON } from '../utils/storage';
 
-const DEV_HOST = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
-export const API_BASE_URL = `http://${DEV_HOST}:5000/api`;
+const DEFAULT_PORT = 5000;
 
-export type UserRole = 'student' | 'teacher';
+function devMachineIp(): string | null {
+  try {
+    const hostUri = Constants.expoConfig?.hostUri;
+    if (hostUri && !hostUri.startsWith('localhost')) {
+      return hostUri.split(':')[0];
+    }
+  } catch {
+    // fall through to platform default
+  }
+  return null;
+}
+
+export function defaultApiBaseUrl(): string {
+  const host = devMachineIp() || (Platform.OS === 'android' ? '10.0.2.2' : 'localhost');
+  return `http://${host}:${DEFAULT_PORT}/api`;
+}
+
+let apiBaseUrl: string | null = null;
+let baseUrlReady = false;
+
+export async function initApiBaseUrl(): Promise<void> {
+  const stored = await getItem(STORAGE_KEYS.apiBaseUrl);
+  apiBaseUrl = stored || defaultApiBaseUrl();
+  baseUrlReady = true;
+}
+
+export const setApiBaseUrl = (url: string | null) => {
+  apiBaseUrl = url && url.trim() ? url.trim().replace(/\/+$/, '') : defaultApiBaseUrl();
+  setItem(STORAGE_KEYS.apiBaseUrl, apiBaseUrl);
+};
+
+export const getApiBaseUrl = (): string => apiBaseUrl || defaultApiBaseUrl();
+
+export type UserRole = 'student' | 'teacher' | 'admin';
 export type AssessmentType = 'multiple_choice' | 'true_false' | 'identification' | 'short_answer';
 export type DifficultyLevel = 'easy' | 'medium' | 'hard';
 
@@ -15,6 +49,7 @@ export interface User {
   email: string;
   role: string;
   roleId?: number;
+  avatar?: string | null;
   department?: string;
   studentId?: string;
   status?: string;
@@ -59,7 +94,7 @@ export interface QuizQuestion {
   question: string;
   type: AssessmentType;
   options?: string[];
-  correctAnswer: number | string;
+  correctAnswer: number | string | number[];
   explanation?: string;
   bloomsLevel?: string;
   difficulty: DifficultyLevel;
@@ -81,6 +116,14 @@ export interface Quiz {
   timeLimitMinutes?: number;
   passPercentage: number;
   difficulty: DifficultyLevel;
+  attemptsAllowed?: number; // 0 = unlimited (default)
+  attemptsUsed?: number; // student requester only, from quiz list
+  lastScore?: number; // latest attempt percentage (student requester only)
+  bestScore?: number; // highest attempt percentage (student requester only)
+  lastScoreRaw?: number; // latest attempt raw score (student requester only)
+  lastMaxScore?: number; // latest attempt max score (student requester only)
+  revealAnswers?: boolean; // teacher toggle: students can see correct answers
+  deadline?: string | null; // ISO timestamp: submissions blocked after this
   createdAt: string;
 }
 
@@ -135,23 +178,17 @@ export interface Reviewer {
   createdAt: string;
 }
 
-export interface Notification {
-  id: string;
-  userId: string;
-  title: string;
-  message: string;
-  isRead: boolean;
-  createdAt: string;
-}
-
 export interface Announcement {
   id: string;
   title: string;
   content: string;
   authorName: string;
+  authorId?: string;
   targetAudience: string;
   priority: string;
   createdAt: string;
+  subjectId?: string;
+  subjectName?: string;
 }
 
 export interface ActivityLog {
@@ -176,9 +213,6 @@ export interface SystemInfo {
 }
 
 export interface SystemSettings {
-  aiModel: string;
-  maxTokens: number;
-  temperature: number;
   require2FA: boolean;
   maintenanceMode: boolean;
   sessionTimeoutMins: number;
@@ -205,52 +239,118 @@ function resolveFallback<T>(fallback: Fallback<T>): T {
   return typeof fallback === 'function' ? (fallback as () => T)() : fallback;
 }
 
-async function getJSON<T>(path: string, fallback: Fallback<T>): Promise<T> {
+// ----------------------------------------------------------------
+// OFFLINE CACHE — stale-while-revalidate
+// Screens render instantly from the last-known payload (memory first, device
+// storage on cold start) and stay usable fully offline. Any successful write
+// invalidates the memory layer so freshly-created data is never shadowed.
+// ----------------------------------------------------------------
+const CACHE_PREFIX = '@studylens_cache_';
+const apiMemoryCache = new Map<string, unknown>();
+
+const cacheKeyFor = (path: string): string => path.replace(/[^a-zA-Z0-9]+/g, '_');
+
+export function invalidateApiCache(): void {
+  apiMemoryCache.clear();
+}
+
+async function readDiskCache<T>(key: string): Promise<T | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}${path}`, { headers: buildHeaders() });
+    return await storageGetJSON<T>(CACHE_PREFIX + key);
+  } catch {
+    return null;
+  }
+}
+
+async function writeDiskCache(key: string, data: unknown): Promise<void> {
+  try {
+    await setJSON(CACHE_PREFIX + key, data);
+  } catch {
+    // storage full/unavailable — memory cache still works
+  }
+}
+
+async function revalidate(path: string, key: string): Promise<void> {
+  try {
+    const res = await fetch(`${getApiBaseUrl()}${path}`, { headers: buildHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (Array.isArray(data) && data.length === 0) return;
+    apiMemoryCache.set(key, data);
+    void writeDiskCache(key, data);
+  } catch {
+    // offline — keep serving the cached copy
+  }
+}
+
+async function getJSON<T>(path: string, fallback: Fallback<T>): Promise<T> {
+  const key = cacheKeyFor(path);
+
+  // Instant render: serve the in-memory copy from an earlier visit and
+  // quietly refresh it in the background.
+  if (apiMemoryCache.has(key)) {
+    const cached = apiMemoryCache.get(key) as T;
+    void revalidate(path, key);
+    return cached;
+  }
+
+  try {
+    const res = await fetch(`${getApiBaseUrl()}${path}`, { headers: buildHeaders() });
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data) && data.length === 0) return resolveFallback(fallback);
+      // Respect the server's answer as the source of truth: an empty list is a
+      // real (empty DB / no visits) result and must NOT be replaced with demo
+      // data. Demo fallback below is only for genuine network failure/offline.
+      apiMemoryCache.set(key, data);
+      void writeDiskCache(key, data);
       return data;
     }
   } catch (err) {
-    console.warn(`[Mobile] API offline at ${API_BASE_URL}${path}, using local demo data`);
+    console.warn(`[Mobile] API offline at ${getApiBaseUrl()}${path}, using local demo data`);
   }
+
+  // Offline / cold start: prefer the last-known payload over demo data.
+  const disk = await readDiskCache<T>(key);
+  if (disk !== null) return disk;
   return resolveFallback(fallback);
 }
 
-async function postJSON<T>(path: string, body: unknown, fallback: Fallback<T>): Promise<T> {
+async function postJSON<T>(path: string, body: unknown, fallback: Fallback<T>, signal?: AbortSignal): Promise<T> {
   try {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
+    const res = await fetch(`${getApiBaseUrl()}${path}`, {
       method: 'POST',
       headers: buildHeaders(),
       body: JSON.stringify(body),
+      signal,
     });
     if (res.ok) {
+      invalidateApiCache();
       const data = await res.json();
       if (data === null || data === undefined) return resolveFallback(fallback);
       return data;
     }
   } catch (err) {
-    console.warn(`[Mobile] API offline at ${API_BASE_URL}${path}, using local demo data`);
+    if ((err as Error)?.name === 'AbortError') throw err;
+    console.warn(`[Mobile] API offline at ${getApiBaseUrl()}${path}, using local demo data`);
   }
   return resolveFallback(fallback);
 }
 
 async function postForm<T>(path: string, form: FormData, fallback: Fallback<T>): Promise<T> {
   try {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
+    const res = await fetch(`${getApiBaseUrl()}${path}`, {
       method: 'POST',
       headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       body: form,
     });
     if (res.ok) {
+      invalidateApiCache();
       const data = await res.json();
       if (data === null || data === undefined) return resolveFallback(fallback);
       return data;
     }
   } catch (err) {
-    console.warn(`[Mobile] Upload API offline at ${API_BASE_URL}${path}, using local demo data`);
+    console.warn(`[Mobile] Upload API offline at ${getApiBaseUrl()}${path}, using local demo data`);
   }
   return resolveFallback(fallback);
 }
@@ -258,15 +358,45 @@ async function postForm<T>(path: string, form: FormData, fallback: Fallback<T>):
 // ----------------------------------------------------------------
 // AUTH
 // ----------------------------------------------------------------
-export async function apiLogin(email: string, role?: string, user?: Partial<User>): Promise<{ token: string; user: User }> {
-  const res = await fetch(`${API_BASE_URL}/auth/login`, {
+export interface EmailVerificationPending {
+  requiresEmailVerification: true;
+  userId: string;
+  email: string;
+  devCode?: string;
+  expiresInMinutes: number;
+}
+
+export type LoginResult =
+  | { token: string; user: User }
+  | { twoFactorRequired: true; userId: string; email: string; expiresInMinutes: number }
+  | EmailVerificationPending;
+
+export async function apiLogin(email: string, role?: string, user?: Partial<User>, password?: string): Promise<LoginResult> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, role, user }),
+    body: JSON.stringify({ email, role, user, password }),
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody.error || 'Login failed');
+  }
+  const data = await res.json();
+  if (data.twoFactorRequired) return data;
+  if (data.requiresEmailVerification) return data as EmailVerificationPending;
+  setAuthToken(data.token);
+  return data;
+}
+
+export async function apiVerifyTwoFactor(userId: string, code: string): Promise<{ token: string; user: User }> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/verify-2fa`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, code }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || 'Verification failed');
   }
   const data = await res.json();
   setAuthToken(data.token);
@@ -277,20 +407,96 @@ export async function apiRegister(
   name: string,
   email: string,
   role: UserRole,
-  department?: string
-): Promise<{ token: string; user: User }> {
-  const res = await fetch(`${API_BASE_URL}/auth/register`, {
+  department?: string,
+  password?: string
+): Promise<{ token: string; user: User } | EmailVerificationPending> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, email, role, department }),
+    body: JSON.stringify({ name, email, role, department, password }),
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody.error || 'Registration failed');
   }
   const data = await res.json();
+  if (data.requiresEmailVerification) return data as EmailVerificationPending;
   setAuthToken(data.token);
   return data;
+}
+
+export async function apiVerifyEmail(userId: string, code: string): Promise<{ token: string; user: User } | EmailVerificationPending> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/verify-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, code }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || 'Email verification failed');
+  }
+  const data = await res.json();
+  if (data.requiresEmailVerification) return data as EmailVerificationPending;
+  setAuthToken(data.token);
+  return data;
+}
+
+export async function apiResendEmailCode(userId: string): Promise<EmailVerificationPending> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/resend-email-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  const errBody = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(errBody.error || 'Could not resend the verification code.');
+  }
+  return {
+    requiresEmailVerification: true,
+    userId: errBody.userId || userId,
+    email: errBody.email,
+    devCode: errBody.devCode,
+    expiresInMinutes: errBody.expiresInMinutes,
+  };
+}
+
+export async function apiChangePassword(currentPassword: string, newPassword: string): Promise<{ token?: string; user?: User }> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/change-password`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || 'Could not update the password.');
+  }
+  const body = await res.json().catch(() => ({}));
+  return { token: body.token, user: body.user };
+}
+
+export async function apiRequestResetOtp(email: string): Promise<{ devCode?: string; expiresInMinutes?: number }> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/reset-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  const errBody = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(errBody.error || 'Could not issue a reset code.');
+  }
+  return { devCode: errBody.devCode, expiresInMinutes: errBody.expiresInMinutes };
+}
+
+export async function apiResetPassword(email: string, otp: string, newPassword: string): Promise<void> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, otp, newPassword }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || 'Could not reset the password.');
+  }
 }
 
 // ----------------------------------------------------------------
@@ -307,9 +513,6 @@ const FALLBACK_SYSTEM_INFO: SystemInfo = {
 };
 
 const FALLBACK_SETTINGS: SystemSettings = {
-  aiModel: 'gpt-oss-120b (Groq Inference)',
-  maxTokens: 4096,
-  temperature: 0.7,
   require2FA: false,
   maintenanceMode: false,
   sessionTimeoutMins: 60,
@@ -353,45 +556,173 @@ export const FALLBACK_SUBJECTS: Subject[] = [
     materialCount: 1,
     createdAt: '2024-01-12T08:00:00.000Z',
   },
-  {
-    id: 'sub-103',
-    code: 'DB 204',
-    name: 'Database Systems & Architecture',
-    description: 'Relational database design, MySQL querying, 1NF to 3NF normalization.',
-    teacherId: 'usr-teacher-1',
-    teacherName: 'Christian C. Barral, MIT',
-    semester: '1st Semester',
-    course: 'BSIT',
-    schoolYear: '2026-2027',
-    studentCount: 55,
-    materialCount: 1,
-    createdAt: '2024-01-14T08:00:00.000Z',
-  },
 ];
 
 export const fetchSubjects = (): Promise<Subject[]> => getJSON('/subjects', FALLBACK_SUBJECTS);
+
+export interface AtRiskStudent {
+  id: string;
+  name: string;
+  averageScore: number;
+}
+
+export interface TeacherSubjectAnalytics {
+  subjectId: string;
+  subjectCode: string;
+  subjectName: string;
+  teacherName?: string;
+  studentCount: number;
+  quizCount: number;
+  attempts: number;
+  averageScore: number;
+  passRate: number;
+  weakTopics: string[];
+  atRiskStudents: AtRiskStudent[];
+}
+
+export interface TeacherAnalytics {
+  teacherId: string;
+  subjects: TeacherSubjectAnalytics[];
+  totals: {
+    subjectCount: number;
+    studentCount: number;
+    attempts: number;
+    averageScore: number;
+    passRate: number;
+    atRiskCount: number;
+  };
+}
+
+const EMPTY_TEACHER_ANALYTICS = (teacherId: string): TeacherAnalytics => ({
+  teacherId,
+  subjects: [],
+  totals: { subjectCount: 0, studentCount: 0, attempts: 0, averageScore: 0, passRate: 0, atRiskCount: 0 },
+});
+
+export const fetchTeacherAnalytics = (teacherId: string): Promise<TeacherAnalytics> =>
+  getJSON(`/analytics/teacher?teacherId=${encodeURIComponent(teacherId)}`, EMPTY_TEACHER_ANALYTICS(teacherId));
+
+export interface SubjectStudent {
+  id: string;
+  name: string;
+  email: string;
+  studentId?: string;
+  dateEnrolled?: string;
+}
+
+export const fetchSubjectStudents = (subjectId: string): Promise<SubjectStudent[]> =>
+  getJSON(`/subjects/${encodeURIComponent(subjectId)}/students`, []);
+
+export const assignStudentsToSubject = (subjectId: string, studentIds: string[]): Promise<{ students: SubjectStudent[]; added: number }> =>
+  postJSON(`/subjects/${encodeURIComponent(subjectId)}/students`, { studentIds }, () => ({ students: [], added: 0 }));
+
+export const removeStudentsFromSubject = (subjectId: string, studentIds: string[]): Promise<{ students: SubjectStudent[]; removed: number }> =>
+  mutateJSON(`/subjects/${encodeURIComponent(subjectId)}/students`, 'DELETE', { studentIds });
+
+export interface SubjectInput {
+  code: string;
+  name: string;
+  description?: string;
+  teacherId?: string;
+  semester?: string;
+  course?: string;
+  schoolYear?: string;
+}
+
+export const createSubject = (input: SubjectInput): Promise<Subject> => mutateJSON('/subjects', 'POST', input);
+
+export const updateSubject = (subjectId: string, patch: Partial<SubjectInput>): Promise<Subject> =>
+  mutateJSON(`/subjects/${encodeURIComponent(subjectId)}`, 'PUT', patch);
+
+export const deleteSubject = (subjectId: string): Promise<{ success: boolean }> =>
+  mutateJSON(`/subjects/${encodeURIComponent(subjectId)}`, 'DELETE');
+
+export const resetUserPassword = (userId: string, password: string): Promise<User> =>
+  mutateJSON(`/users/${encodeURIComponent(userId)}`, 'PUT', { password });
+
+export interface QuizAttempt {
+  id: string;
+  quizId: string;
+  quizTitle: string;
+  studentId: string;
+  studentName: string;
+  subjectId: string;
+  subjectName: string;
+  score: number;
+  maxScore: number;
+  percentage: number;
+  passed: boolean;
+  answers: Array<Record<string, unknown>>;
+  weakTopics: string[];
+  strongTopics: string[];
+  completedAt: string;
+}
+
+export interface SubjectStudentGrade {
+  studentId: string;
+  studentName: string;
+  attemptCount: number;
+  averagePercentage: number;
+  attempts: QuizAttempt[];
+}
+
+export interface SubjectGrades {
+  subjectId: string;
+  subjectName: string;
+  studentId?: string;
+  studentName?: string;
+  attemptCount?: number;
+  averagePercentage?: number;
+  attempts?: QuizAttempt[];
+  students?: SubjectStudentGrade[];
+}
+
+export const fetchSubjectGrades = (subjectId: string): Promise<SubjectGrades> =>
+  getJSON(`/subjects/${encodeURIComponent(subjectId)}/grades`, () => ({
+    subjectId,
+    subjectName: '',
+    attemptCount: 0,
+    averagePercentage: 0,
+    attempts: [],
+  }));
+
+export const submitQuizAttempt = (
+  quizId: string,
+  input: { studentId: string; studentName: string; answers: { questionId: string; selectedAnswer: number | string | number[] }[]; timeTaken?: number }
+): Promise<QuizAttempt> =>
+  postJSON(`/quizzes/${encodeURIComponent(quizId)}/submit`, input, () => ({
+    id: `att-local-${Date.now()}`,
+    quizId,
+    quizTitle: '',
+    studentId: input.studentId,
+    studentName: input.studentName,
+    subjectId: '',
+    subjectName: '',
+    score: 0,
+    maxScore: input.answers.length,
+    percentage: 0,
+    passed: false,
+    answers: [],
+    weakTopics: [],
+    strongTopics: [],
+    completedAt: new Date().toISOString(),
+  }));
+
+// Resolve a material's file URL to an absolute URL the device can open.
+// Relative /uploads/... paths are prefixed with the backend base URL; cloud
+// URLs (Cloudinary/Firebase) are returned unchanged.
+export function resolveMaterialFileUrl(rawUrl: string | undefined): string | null {
+  if (!rawUrl) return null;
+  if (/^(https?:)?\/\//i.test(rawUrl)) return rawUrl;
+  const base = getApiBaseUrl().replace(/\/api\/?$/, '');
+  const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl.replace(/^\.?\//, '')}`;
+  return `${base}${path}`;
+}
 
 // ----------------------------------------------------------------
 // MATERIALS
 // ----------------------------------------------------------------
 export const FALLBACK_MATERIALS: Material[] = [
-  {
-    id: 'mat-1720',
-    title: 'Module 4: Relational Algebra & Normalization',
-    description: 'MySQL normalization techniques from 1NF to 3NF with ERD examples.',
-    subjectId: 'sub-103',
-    subjectName: 'DB 204 - Database Systems & Architecture',
-    fileType: 'pdf',
-    fileUrl: '/uploads/module4.pdf',
-    fileSize: '420 KB',
-    extractedText:
-      'Uploaded PDF document: Module 4: Relational Algebra & Normalization. Focus on graph algorithms and MySQL normalization. Normalization removes redundancy through 1NF, 2NF, 3NF decomposition.',
-    uploadedBy: 'Christian C. Barral, MIT',
-    uploaderRole: 'teacher',
-    uploaderId: 'usr-teacher-1',
-    materialType: 'course',
-    createdAt: '2024-02-06T09:30:00.000Z',
-  },
   {
     id: 'mat-1719',
     title: 'Graph Traversal Lecture: BFS & DFS',
@@ -425,7 +756,7 @@ export interface UploadMaterialPayload {
   uploaderId: string;
 }
 
-export async function uploadMaterial(payload: UploadMaterialPayload): Promise<Material> {
+export async function uploadMaterial(payload: UploadMaterialPayload, endpoint = '/materials/upload'): Promise<Material> {
   const fallbackMaterial: Material = {
     id: `mat-local-${Date.now()}`,
     title: payload.title || payload.name,
@@ -451,7 +782,7 @@ export async function uploadMaterial(payload: UploadMaterialPayload): Promise<Ma
     form.append('uploadedBy', payload.uploadedBy);
     form.append('uploaderRole', payload.uploaderRole);
     form.append('uploaderId', payload.uploaderId);
-    const res = await fetch(`${API_BASE_URL}/materials/upload`, {
+    const res = await fetch(`${getApiBaseUrl()}${endpoint}`, {
       method: 'POST',
       headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       body: form,
@@ -460,12 +791,16 @@ export async function uploadMaterial(payload: UploadMaterialPayload): Promise<Ma
       const data = await res.json();
       if (data) return data;
     }
-    return fallbackMaterial;
+    return endpoint === '/materials/extract' ? ({ text: '', fileName: payload.name } as unknown as Material) : fallbackMaterial;
   } catch (err) {
     console.warn('[Mobile] Material upload failed, using local material record');
-    return fallbackMaterial;
+    return endpoint === '/materials/extract' ? ({ text: '', fileName: payload.name } as unknown as Material) : fallbackMaterial;
   }
 }
+
+const offlineError = (path: string): never => {
+  throw new Error(`Couldn't reach the StudyLens server at ${getApiBaseUrl()}${path}. Make sure the backend is running (0.0.0.0:5000) and your phone is on the same network as the computer. You can also set a Server URL on the login screen.`);
+};
 
 // ----------------------------------------------------------------
 // QUIZZES
@@ -523,7 +858,42 @@ export const FALLBACK_QUIZZES: Quiz[] = [
   },
 ];
 
-export const fetchQuizzes = (): Promise<Quiz[]> => getJSON('/quizzes', FALLBACK_QUIZZES);
+/**
+ * Reorders the options of every multiple-choice question and re-points the
+ * correct answer to wherever the correct option moved. Removes the "all correct
+ * answers in position A" bias for both server responses and local demo data.
+ */
+export function shuffleQuizAnswers(quiz: Quiz): Quiz {
+  const questions = (quiz.questions || []).map((q) => {
+    if (q.type === 'multiple_choice' && Array.isArray(q.options) && q.options.length >= 2) {
+      const raw = q.correctAnswer;
+      const idx =
+        typeof raw === 'string' && /^[A-Da-d]$/.test(raw.trim())
+          ? 'ABCD'.indexOf(raw.trim().toUpperCase())
+          : Number(raw);
+      const valid = Number.isInteger(idx) && idx >= 0 && idx < q.options.length;
+      const correctText = q.options[valid ? idx : 0];
+      const shuffled = [...q.options];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return { ...q, options: shuffled, correctAnswer: shuffled.indexOf(correctText) };
+    }
+    return q;
+  });
+  return { ...quiz, questions };
+}
+
+export const fetchQuizzes = (userRole?: string, userId?: string): Promise<Quiz[]> => {
+  const params: string[] = [];
+  if (userRole) params.push(`userRole=${encodeURIComponent(userRole)}`);
+  if (userId) params.push(`userId=${encodeURIComponent(userId)}`);
+  // Offline fallback: non-admin accounts get no demo quizzes (real data comes
+  // from the API; fresh accounts must not see seeded sample assessments).
+  const offlineFallback = !userRole || userRole === 'admin' ? FALLBACK_QUIZZES : [];
+  return getJSON(`/quizzes${params.length ? `?${params.join('&')}` : ''}`, offlineFallback).then((list) => list.map((q) => shuffleQuizAnswers(q)));
+};
 
 export interface AiQuizInput {
   textContent: string;
@@ -540,7 +910,7 @@ export interface AiQuizInput {
 const buildQuizFallback = (input: AiQuizInput): Quiz => ({
   id: `quiz-local-${Date.now()}`,
   title: input.title || `AI Quiz: ${input.textContent.slice(0, 30)}...`,
-  description: 'Automated Bloom\'s Taxonomy Quiz generated via Groq Inference (GPT-OSS-120B).',
+  description: '',
   subjectId: input.subjectId,
   subjectName: input.subjectName || 'General Topic',
   materialId: input.materialId,
@@ -571,7 +941,7 @@ const buildQuizFallback = (input: AiQuizInput): Quiz => ({
 });
 
 export const generateQuiz = (input: AiQuizInput): Promise<Quiz> =>
-  postJSON('/quizzes/generate', input, () => buildQuizFallback(input));
+  postJSON('/quizzes/generate', input, () => offlineError('/quizzes/generate')).then(shuffleQuizAnswers);
 
 // ----------------------------------------------------------------
 // FLASHCARDS
@@ -594,7 +964,10 @@ export const FALLBACK_DECKS: FlashcardDeck[] = [
   },
 ];
 
-export const fetchFlashcards = (): Promise<FlashcardDeck[]> => getJSON('/flashcards', FALLBACK_DECKS);
+export const fetchFlashcards = (userId?: string): Promise<FlashcardDeck[]> => {
+  const qs = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+  return getJSON(`/flashcards${qs}`, FALLBACK_DECKS);
+};
 
 export interface AiDeckInput {
   textContent: string;
@@ -625,7 +998,7 @@ const buildDeckFallback = (input: AiDeckInput): FlashcardDeck => ({
 });
 
 export const generateFlashcards = (input: AiDeckInput): Promise<FlashcardDeck> =>
-  postJSON('/flashcards/generate', input, () => buildDeckFallback(input));
+  postJSON('/flashcards/generate', input, () => offlineError('/flashcards/generate'));
 
 // ----------------------------------------------------------------
 // SUMMARIES
@@ -687,7 +1060,76 @@ const buildSummaryFallback = (input: AiSummaryInput): StudySummary => ({
 });
 
 export const generateSummary = (input: AiSummaryInput): Promise<StudySummary> =>
-  postJSON('/summaries/generate', input, () => buildSummaryFallback(input));
+  postJSON('/summaries/generate', input, () => offlineError('/summaries/generate'));
+
+// ----------------------------------------------------------------
+// AI DRAFT GENERATION (preview first, Save/Discard later)
+// ----------------------------------------------------------------
+export type AiGenerationMode = 'quiz' | 'flashcards' | 'summary' | 'reviewer';
+
+export const aiGenerateDraft = (
+  mode: AiGenerationMode,
+  input: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> =>
+  postJSON('/ai/generate', { ...input, mode, save: false }, () => offlineError('/ai/generate'), signal);
+
+export const aiSaveDraft = (mode: AiGenerationMode, draft: Record<string, unknown>): Promise<Record<string, unknown>> =>
+  postJSON('/ai/save', { ...draft, mode }, () => offlineError('/ai/save'));
+
+export interface AiPdfInput {
+  mode: 'summary' | 'reviewer' | 'quiz' | 'flashcards';
+  title: string;
+  subjectName?: string;
+  data: Record<string, unknown>;
+}
+
+export const exportAiPdf = async (input: AiPdfInput): Promise<Uint8Array> => {
+  const res = await fetch(`${getApiBaseUrl()}/ai/export/pdf`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    let msg = 'PDF export failed.';
+    try {
+      const body = await res.json();
+      if (typeof body.error === 'string') msg = body.error;
+    } catch {
+      // keep default message
+    }
+    throw new Error(msg);
+  }
+  const buffer = await res.arrayBuffer();
+  return new Uint8Array(buffer);
+};
+
+export interface ConvertToPdfInput {
+  title: string;
+  metaLine?: string;
+  content?: string;
+  items?: Array<{ question?: string; answer?: string; topic?: string; overview?: string }>;
+}
+
+export const convertToPdf = async (input: ConvertToPdfInput): Promise<Uint8Array> => {
+  const res = await fetch(`${getApiBaseUrl()}/convert-to-pdf`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    let msg = 'PDF export failed.';
+    try {
+      const body = await res.json();
+      if (typeof body.error === 'string') msg = body.error;
+    } catch {
+      // keep default message
+    }
+    throw new Error(msg);
+  }
+  const buffer = await res.arrayBuffer();
+  return new Uint8Array(buffer);
+};
 
 // ----------------------------------------------------------------
 // REVIEWERS (read-only)
@@ -719,17 +1161,6 @@ const FALLBACK_REVIEWERS: Reviewer[] = [
 export const fetchReviewers = (): Promise<Reviewer[]> => getJSON('/reviewers', FALLBACK_REVIEWERS);
 
 // ----------------------------------------------------------------
-// NOTIFICATIONS
-// ----------------------------------------------------------------
-const FALLBACK_NOTIFICATIONS: Notification[] = [
-  { id: 'notif-1', userId: 'usr-student-1', title: 'New Quiz Assigned', message: 'Data Structures midterm quiz is now published.', isRead: false, createdAt: '2024-02-10T08:00:00.000Z' },
-  { id: 'notif-2', userId: 'usr-student-1', title: 'AI Reviewer Ready', message: 'Your Groq GPT-OSS-120B reviewer has been synthesized.', isRead: false, createdAt: '2024-02-12T08:00:00.000Z' },
-];
-
-export const fetchNotifications = (userId: string): Promise<Notification[]> =>
-  getJSON(`/notifications?userId=${userId}`, FALLBACK_NOTIFICATIONS);
-
-// ----------------------------------------------------------------
 // ANNOUNCEMENTS (read-only)
 // ----------------------------------------------------------------
 export const FALLBACK_ANNOUNCEMENTS: Announcement[] = [
@@ -753,30 +1184,85 @@ export const FALLBACK_ANNOUNCEMENTS: Announcement[] = [
   },
 ];
 
-export const fetchAnnouncements = (userId?: string): Promise<Announcement[]> =>
-  getJSON(`/announcements?userId=${encodeURIComponent(userId || '')}`, FALLBACK_ANNOUNCEMENTS);
+const mapAnnouncement = (a: any): Announcement => ({
+  ...a,
+  authorId: a?.authorId || a?.teacherId || undefined,
+});
 
-export const markAnnouncementRead = (announcementId: string, userId: string): Promise<{ success: boolean }> =>
-  postJSON(`/announcements/${announcementId}/read`, { userId }, { success: true });
+export const fetchAnnouncements = (userId?: string, userRole?: string): Promise<Announcement[]> => {
+  // Offline fallback: non-admin accounts get no demo announcements (real
+  // visibility is enforced by the API; fresh accounts must see an empty board).
+  const offlineFallback = !userRole || userRole === 'admin' ? FALLBACK_ANNOUNCEMENTS : [];
+  return getJSON(`/announcements?userId=${encodeURIComponent(userId || '')}&userRole=${encodeURIComponent(userRole || '')}`, offlineFallback)
+    .then((list) => (Array.isArray(list) ? list.map(mapAnnouncement) : []));
+};
 
-export const markAnnouncementUnread = (announcementId: string, userId: string): Promise<{ success: boolean }> =>
-  postJSON(`/announcements/${announcementId}/unread`, { userId }, { success: true });
+// ----------------------------------------------------------------
+// NOTIFICATIONS (DB-backed, shown in the header bell alongside announcements)
+// ----------------------------------------------------------------
+export interface Notification {
+  id: string;
+  userId: string;
+  title: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+  target?: string | null;
+}
+
+const mapNotification = (n: any): Notification => ({
+  id: n?.id || '',
+  userId: n?.userId || '',
+  title: n?.title || '',
+  message: n?.message || n?.content || '',
+  isRead: !!n?.isRead,
+  createdAt: n?.createdAt || '',
+  target: n?.target || null,
+});
+
+export const fetchNotifications = (): Promise<Notification[]> =>
+  getJSON('/notifications', []).then((list) => (Array.isArray(list) ? list.map(mapNotification) : []));
+
+export const markNotificationRead = (id: string): Promise<Notification> =>
+  mutateJSON(`/notifications/${encodeURIComponent(id)}/read`, 'PUT');
+
+export const markAllNotificationsRead = (): Promise<{ success: boolean }> =>
+  mutateJSON('/notifications/read-all', 'PUT');
+
+
+// ----------------------------------------------------------------
+// REPORTS & ANALYTICS
+// ----------------------------------------------------------------
+export type ReportType = 'Student Performance' | 'Quiz Analytics' | 'Subject Summary' | 'AI Usage';
+
+export interface GeneratedReport {
+  id: string;
+  generatedBy: string;
+  reportType: ReportType;
+  generatedAt: string;
+  title: string;
+  targetId?: string | null;
+  summary?: Record<string, unknown> | null;
+}
+
+export const FALLBACK_REPORTS: GeneratedReport[] = [];
+
+export const fetchReports = (): Promise<GeneratedReport[]> => getJSON('/reports', FALLBACK_REPORTS);
+
+export const generateReport = (input: {
+  reportType: ReportType;
+  title: string;
+  targetId?: string;
+  generatedBy?: string;
+}): Promise<GeneratedReport> => postJSON('/reports', input, { success: false } as unknown as GeneratedReport);
+
+export const deleteReport = (reportId: string): Promise<{ success: boolean }> =>
+  mutateJSON(`/reports/${encodeURIComponent(reportId)}`, 'DELETE');
 
 // ----------------------------------------------------------------
 // AUDIT LOGS
 // ----------------------------------------------------------------
-export const FALLBACK_LOGS: ActivityLog[] = [
-  {
-    id: 'log-1',
-    userId: 'usr-student-1',
-    userName: 'John Wendyl Sanchez',
-    userRole: 'student',
-    action: 'USER_LOGIN',
-    details: 'User logged in with JWT token',
-    ipAddress: '127.0.0.1',
-    timestamp: '2024-02-12T10:00:00.000Z',
-  },
-];
+export const FALLBACK_LOGS: ActivityLog[] = [];
 
 export const fetchLogs = (): Promise<ActivityLog[]> => getJSON('/logs', FALLBACK_LOGS);
 
@@ -796,9 +1282,148 @@ export const postLog = (input: LogInput): Promise<{ success: boolean }> =>
 // ----------------------------------------------------------------
 export const isOnline = async (): Promise<boolean> => {
   try {
-    const res = await fetch(`${API_BASE_URL}/system/info`, { headers: buildHeaders() });
+    const res = await fetch(`${getApiBaseUrl()}/system/info`, { headers: buildHeaders() });
     return res.ok;
   } catch {
     return false;
   }
 };
+
+// ----------------------------------------------------------------
+// ADMIN (user directory, announcements, audit logs)
+// ----------------------------------------------------------------
+async function mutateJSON<T>(path: string, method: 'POST' | 'PUT' | 'DELETE', body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${getApiBaseUrl()}${path}`, {
+      method,
+      headers: buildHeaders(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error(
+      `Couldn't reach the StudyLens server at ${getApiBaseUrl()}. Check that the backend is running and your phone is on the same network.`
+    );
+  }
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error((errBody as { error?: string }).error || `Request to ${path} failed (${res.status}).`);
+  }
+  invalidateApiCache();
+  return (res.status === 204 ? {} : await res.json()) as T;
+}
+
+export interface AdminUserInput {
+  name: string;
+  email: string;
+  role: UserRole | 'admin';
+  avatar?: string | null;
+  department?: string;
+  status?: string;
+}
+
+export const fetchAdminUsers = async (): Promise<User[]> => {
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/users`, { headers: buildHeaders() });
+    if (res.ok) {
+      const data = (await res.json()) as User[];
+      setJSON(STORAGE_KEYS.adminUsers, data);
+      return data;
+    }
+  } catch {
+    // fall back to cached directory below
+  }
+  return (await storageGetJSON<User[]>(STORAGE_KEYS.adminUsers)) || [];
+};
+
+export const createUser = (input: AdminUserInput): Promise<User> => mutateJSON('/users', 'POST', input);
+
+export const updateUser = (userId: string, patch: Partial<AdminUserInput>): Promise<User> =>
+  mutateJSON(`/users/${encodeURIComponent(userId)}`, 'PUT', patch);
+
+export const deleteUser = (userId: string): Promise<{ success: boolean }> =>
+  mutateJSON(`/users/${encodeURIComponent(userId)}`, 'DELETE');
+
+export async function uploadAvatar(userId: string, uri: string, name: string, mimeType: string): Promise<User> {
+  const form = new FormData();
+  form.append('file', { uri, name, type: mimeType } as any);
+  const res = await fetch(`${getApiBaseUrl()}/users/${encodeURIComponent(userId)}/avatar`, {
+    method: 'POST',
+    headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error((errBody as { error?: string }).error || 'Could not upload the profile photo.');
+  }
+  return (await res.json()) as User;
+}
+
+export const createAnnouncement = (ann: Omit<Announcement, 'id' | 'createdAt'> & { createdAt?: string }): Promise<Announcement> =>
+  mutateJSON('/announcements', 'POST', { ...ann, authorName: ann.authorName || 'Administrator' });
+
+export const deleteAnnouncement = (announcementId: string): Promise<{ success: boolean }> =>
+  mutateJSON(`/announcements/${encodeURIComponent(announcementId)}`, 'DELETE');
+
+export const updateAnnouncement = (announcementId: string, patch: Partial<Omit<Announcement, 'id' | 'createdAt'>>): Promise<Announcement> =>
+  mutateJSON(`/announcements/${encodeURIComponent(announcementId)}`, 'PUT', patch);
+
+// ----------------------------------------------------------------
+// SUBJECT MATERIAL / QUIZ MUTATIONS (staff)
+// ----------------------------------------------------------------
+export const updateMaterial = (materialId: string, patch: { title?: string; description?: string; textInput?: string }): Promise<Material> =>
+  mutateJSON(`/materials/${encodeURIComponent(materialId)}`, 'PUT', patch);
+
+export const deleteMaterial = (materialId: string): Promise<{ success: boolean }> =>
+  mutateJSON(`/materials/${encodeURIComponent(materialId)}`, 'DELETE');
+
+export const updateQuiz = (quizId: string, patch: Record<string, unknown>): Promise<Quiz> =>
+  mutateJSON(`/quizzes/${encodeURIComponent(quizId)}`, 'PUT', patch);
+
+export interface CreateQuizInput {
+  title: string;
+  description?: string;
+  subjectId: string;
+  subjectName?: string;
+  quizType: 'teacher' | 'student';
+  questions: QuizQuestion[];
+  isPublished?: boolean;
+  timeLimitMinutes?: number;
+  passPercentage?: number;
+  difficulty?: DifficultyLevel;
+  attemptsAllowed?: number;
+  revealAnswers?: boolean;
+  topicTag?: string;
+  deadline?: string | null;
+  userRole?: UserRole;
+  createdById?: string;
+  createdByName?: string;
+}
+
+export const createQuiz = async (input: CreateQuizInput): Promise<Quiz> => {
+  const created = (await postJSON('/quizzes', input, () => offlineError('/quizzes'))) as unknown as Quiz;
+  invalidateApiCache();
+  return created;
+};
+
+export const updateFlashcardDeck = (deckId: string, patch: Record<string, unknown>): Promise<FlashcardDeck> =>
+  mutateJSON(`/flashcards/${encodeURIComponent(deckId)}`, 'PUT', patch);
+
+export const updateSummary = (summaryId: string, patch: Record<string, unknown>): Promise<StudySummary> =>
+  mutateJSON(`/summaries/${encodeURIComponent(summaryId)}`, 'PUT', patch);
+
+export const updateReviewer = (reviewerId: string, patch: Record<string, unknown>): Promise<Reviewer> =>
+  mutateJSON(`/reviewers/${encodeURIComponent(reviewerId)}`, 'PUT', patch);
+
+export const deleteQuiz = (quizId: string): Promise<{ success: boolean }> =>
+  mutateJSON(`/quizzes/${encodeURIComponent(quizId)}`, 'DELETE');
+
+export const saveAiResourceAsMaterial = (payload: Record<string, unknown>): Promise<Material> =>
+  mutateJSON('/materials/from-ai', 'POST', payload);
+
+export const updateMaterialSubject = (materialId: string, subjectId: string): Promise<Material> =>
+  mutateJSON(`/materials/${encodeURIComponent(materialId)}`, 'PUT', { subjectId });
+
+export const clearLogs = (): Promise<{ success: boolean }> => mutateJSON('/logs', 'DELETE');
+
+export const fetchSystemBackup = (): Promise<any> => getJSON('/system/backup', {});

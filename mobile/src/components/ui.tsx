@@ -13,10 +13,11 @@ import { X } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
 
 // ---------------- Card ----------------
-export const Card: React.FC<{ style?: any; children: React.ReactNode; onPress?: () => void; outline?: boolean }> = ({
+export const Card: React.FC<{ style?: any; children: React.ReactNode; onPress?: () => void; onLayout?: any; outline?: boolean }> = ({
   style,
   children,
   onPress,
+  onLayout,
   outline,
 }) => {
   const { colors } = useTheme();
@@ -29,12 +30,12 @@ export const Card: React.FC<{ style?: any; children: React.ReactNode; onPress?: 
   ];
   if (onPress) {
     return (
-      <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={cardStyle}>
+      <TouchableOpacity activeOpacity={0.85} onPress={onPress} onLayout={onLayout} style={cardStyle}>
         {children}
       </TouchableOpacity>
     );
   }
-  return <View style={cardStyle}>{children}</View>;
+  return <View style={cardStyle} onLayout={onLayout}>{children}</View>;
 };
 
 // ---------------- Badge ----------------
@@ -82,17 +83,18 @@ export const SectionHeader: React.FC<{ title: string; subtitle?: string; actionL
 };
 
 // ---------------- StatCard ----------------
-export const StatCard: React.FC<{ label: string; value: string; delta?: string; deltaColor?: string; icon: React.ReactNode; iconBg?: string }> = ({
+export const StatCard: React.FC<{ label: string; value: string; delta?: string; deltaColor?: string; icon: React.ReactNode; iconBg?: string; onPress?: () => void }> = ({
   label,
   value,
   delta,
   deltaColor,
   icon,
   iconBg,
+  onPress,
 }) => {
   const { colors } = useTheme();
   return (
-    <Card style={styles.statCard}>
+    <Card style={styles.statCard} onPress={onPress}>
       <View style={{ flex: 1, gap: 4 }}>
         <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>{label}</Text>
         <Text style={[styles.statValue, { color: colors.foreground }]}>{value}</Text>
@@ -217,7 +219,9 @@ export const Field: React.FC<{
   multiline?: boolean;
   secureTextEntry?: boolean;
   keyboardType?: 'default' | 'email-address' | 'numeric';
-}> = ({ label, value, onChangeText, placeholder, multiline, secureTextEntry, keyboardType }) => {
+  onSubmitEditing?: () => void;
+  returnKeyType?: 'done' | 'go' | 'next' | 'search' | 'send';
+}> = ({ label, value, onChangeText, placeholder, multiline, secureTextEntry, keyboardType, onSubmitEditing, returnKeyType }) => {
   const { colors } = useTheme();
   return (
     <View style={{ gap: 5 }}>
@@ -230,6 +234,8 @@ export const Field: React.FC<{
         multiline={multiline}
         secureTextEntry={secureTextEntry}
         keyboardType={keyboardType}
+        onSubmitEditing={onSubmitEditing}
+        returnKeyType={returnKeyType}
         style={[
           styles.fieldInput,
           multiline && { minHeight: 80, textAlignVertical: 'top' },

@@ -1,6 +1,9 @@
-import React, { useState } from "react";
-import { Bell, Sparkles, Award, Globe, User } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { Bell, Sparkles, Award, Globe, User, Megaphone } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useAnnouncements } from "../context/AnnouncementsContext";
+import { formatRelativeTime } from "../utils/time";
 
 interface HeaderProps {
   activeTab: string;
@@ -8,7 +11,14 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ activeTab }) => {
   const { currentUser } = useAuth();
+  const { announcements, unreadCount, markAllNotificationsRead } = useAnnouncements();
+  const navigate = useNavigate();
   const [showNotif, setShowNotif] = useState(false);
+
+  const notifications = useMemo(
+    () => announcements.slice(0, 12),
+    [announcements]
+  );
 
   const getTitle = () => {
     switch (activeTab) {
@@ -63,39 +73,72 @@ export const Header: React.FC<HeaderProps> = ({ activeTab }) => {
         {/* Notification Bell */}
         <div className="relative">
           <button
-            onClick={() => setShowNotif(!showNotif)}
+            onClick={() => {
+              setShowNotif(!showNotif);
+              if (!showNotif && unreadCount > 0) markAllNotificationsRead();
+            }}
             className="p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg relative transition-colors"
             title="Notifications"
           >
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-blue-600 rounded-full ring-2 ring-background"></span>
+            {unreadCount > 0 && (
+              <span className="absolute top-1 right-1 w-2 h-2 bg-blue-600 rounded-full ring-2 ring-background" />
+            )}
           </button>
 
           {/* Notifications Dropdown */}
           {showNotif && (
-            <div className="absolute right-0 mt-2 w-80 bg-card rounded-xl shadow-xl border border-border p-4 z-50 text-xs">
+            <div className="absolute right-0 mt-2 w-80 bg-card rounded-xl shadow-xl border border-border p-4 z-50 text-xs max-h-[70vh] overflow-y-auto">
               <div className="flex items-center justify-between font-bold text-foreground pb-2 border-b border-border">
-                <span>System Notifications</span>
-                <span className="text-[10px] text-primary font-normal">2 New</span>
+                <span>Notifications</span>
+                {unreadCount > 0 && (
+                  <span className="text-[10px] text-primary font-normal">{unreadCount} New</span>
+                )}
               </div>
-              <div className="space-y-3 mt-3">
-                <div className="p-2 bg-muted/40 rounded-lg border border-border">
-                  <p className="font-semibold text-foreground">New Materials Uploaded</p>
-                  <p className="text-muted-foreground mt-0.5">Prof. Maria Santos uploaded lecture notes on Graph Algorithms.</p>
-                  <span className="text-[9px] text-muted-foreground mt-1 block">10 mins ago</span>
+              {notifications.length === 0 ? (
+                <p className="text-muted-foreground text-center py-6">No announcements yet.</p>
+              ) : (
+                <div className="space-y-2 mt-3">
+                  {notifications.map((ann) => (
+                    <button
+                      key={ann.id}
+                      onClick={() => {
+                        setShowNotif(false);
+                        navigate(`/announcements?id=${ann.id}`);
+                      }}
+                      className="w-full text-left p-2.5 bg-muted/40 rounded-lg border border-border hover:border-primary/50 hover:bg-muted/60 transition-all cursor-pointer"
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-0.5">
+                        <p className="font-semibold text-foreground truncate">{ann.title}</p>
+                        <span
+                          className={`px-1.5 py-0.5 text-[9px] font-bold rounded-full shrink-0 ${
+                            ann.priority === "high"
+                              ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                              : ann.priority === "medium"
+                              ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                              : "bg-slate-500/10 text-muted-foreground"
+                          }`}
+                        >
+                          {ann.priority}
+                        </span>
+                      </div>
+                      {ann.subjectName && (
+                        <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 mb-0.5">
+                          {ann.subjectName}
+                        </span>
+                      )}
+                      <p className="text-muted-foreground leading-relaxed line-clamp-1">{ann.content}</p>
+                      <span className="text-[9px] text-muted-foreground mt-1 block">{formatRelativeTime(ann.createdAt)}</span>
+                    </button>
+                  ))}
                 </div>
-                <div className="p-2 bg-muted/40 rounded-lg border border-border">
-                  <p className="font-semibold text-foreground">Adaptive Recommendation Ready</p>
-                  <p className="text-muted-foreground mt-0.5">Your score analysis recommends a 5-minute flashcard drill on BST.</p>
-                  <span className="text-[9px] text-muted-foreground mt-1 block">1 hour ago</span>
-                </div>
-              </div>
+              )}
             </div>
           )}
         </div>
 
         {/* AI Engine Status Pill */}
-        <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/20 text-primary text-xs font-medium">
+        <div className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/20 text-primary text-xs font-medium">
           <Sparkles className="w-3.5 h-3.5 text-primary animate-pulse" />
           <span>Groq AI Active</span>
         </div>

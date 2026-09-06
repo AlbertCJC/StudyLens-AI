@@ -1,14 +1,10 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
-import { Layers, ChevronLeft, ChevronRight, RotateCw, Sparkles, Shuffle, ThumbsUp, Zap, HardDrive } from 'lucide-react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Animated } from 'react-native';
+import { Layers, ChevronLeft, ChevronRight, RotateCw, Sparkles, Shuffle } from 'lucide-react-native';
 import { fetchFlashcards, FlashcardDeck } from '../services/api';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { Card, Badge, PrimaryButton, OutlineButton, LoadingView, EmptyState } from '../components/ui';
-import { STORAGE_KEYS, getJSON, setJSON } from '../utils/storage';
-
-type Rating = 'easy' | 'good' | 'hard';
-type RatingsMap = Record<string, Rating>;
+import { Card, Badge, PrimaryButton, LoadingView, EmptyState } from '../components/ui';
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -22,30 +18,42 @@ function shuffle<T>(arr: T[]): T[] {
 export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: string) => void }) {
   const { colors } = useTheme();
   const { currentUser } = useAuth();
-  const userId = currentUser?.id || 'usr-student-1';
 
   const [decks, setDecks] = useState<FlashcardDeck[]>([]);
   const [loading, setLoading] = useState(true);
-  const [ratings, setRatings] = useState<RatingsMap>({});
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [order, setOrder] = useState<string[]>([]);
   const [explain, setExplain] = useState<string | null>(null);
-  const [streak, setStreak] = useState(0);
+  const flipAnim = useRef(new Animated.Value(0)).current;
 
-  const loadRatings = useCallback(() => {
-    getJSON<RatingsMap>(STORAGE_KEYS.deckRatings(userId)).then((r) => setRatings(r || {}));
-  }, [userId]);
+  const flipCard = () => {
+    setIsFlipped((v) => {
+      const target = !v;
+      Animated.timing(flipAnim, {
+        toValue: target ? 1 : 0,
+        duration: 500,
+        useNativeDriver: false,
+      }).start();
+      return target;
+    });
+  };
+
+  const flipFront = {
+    transform: [{ perspective: 1000 }, { rotateY: flipAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }],
+  };
+  const flipBack = {
+    transform: [{ perspective: 1000 }, { rotateY: flipAnim.interpolate({ inputRange: [0, 1], outputRange: ['180deg', '360deg'] }) }],
+  };
 
   useEffect(() => {
-    fetchFlashcards().then((data) => {
+    fetchFlashcards(currentUser?.id).then((data) => {
       setDecks(data);
       setLoading(false);
     });
-    loadRatings();
-  }, [loadRatings]);
+  }, [currentUser?.id]);
 
   const selectedDeck = decks.find((d) => d.id === selectedDeckId) || null;
   const orderedCards = selectedDeck ? order.map((id) => selectedDeck.cards.find((c) => c.id === id)).filter((c): c is NonNullable<typeof c> => !!c) : [];
@@ -56,33 +64,22 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
     setOrder(shuffle(deck.cards.map((c) => c.id)));
     setCurrentIndex(0);
     setIsFlipped(false);
+    flipAnim.setValue(0);
     setExplain(null);
-    setStreak(0);
-  };
-
-  const updateRatings = async (deckId: string, cardId: string, rating: Rating) => {
-    const next = { ...ratings, [`${deckId}:${cardId}`]: rating };
-    setRatings(next);
-    await setJSON(STORAGE_KEYS.deckRatings(userId), next);
   };
 
   const goNext = (deckId: string) => {
     setIsFlipped(false);
+    flipAnim.setValue(0);
     setExplain(null);
     setCurrentIndex((i) => (i < orderedCards.length - 1 ? i + 1 : 0));
   };
 
   const goPrev = (deckId: string) => {
     setIsFlipped(false);
+    flipAnim.setValue(0);
     setExplain(null);
     setCurrentIndex((i) => (i > 0 ? i - 1 : orderedCards.length - 1));
-  };
-
-  const rateCard = (rating: Rating, deckId: string, cardId: string) => {
-    updateRatings(deckId, cardId, rating);
-    if (rating === 'easy' || rating === 'good') setStreak((s) => s + 1);
-    else setStreak(0);
-    goNext(deckId);
   };
 
   const showExplain = (question: string, answer: string) => {
@@ -95,6 +92,7 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
     setOrder(shuffle(deck.cards.map((c) => c.id)));
     setCurrentIndex(0);
     setIsFlipped(false);
+    flipAnim.setValue(0);
     setExplain(null);
   };
 
@@ -103,9 +101,6 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
   // ---------------- PLAYER ----------------
   if (selectedDeck && card) {
     const deckId = selectedDeck.id;
-    const currentRating = ratings[`${deckId}:${card.id}`];
-    const ratedCount = selectedDeck.cards.filter((c) => ratings[`${deckId}:${c.id}`]).length;
-    const easyCount = selectedDeck.cards.filter((c) => ratings[`${deckId}:${c.id}`] === 'easy').length;
 
     return (
       <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={styles.playerWrap}>
@@ -117,19 +112,15 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
             <Text numberOfLines={1} style={{ flex: 1, fontSize: 13, fontWeight: '700', color: colors.mutedForeground }}>
               {selectedDeck.title}
             </Text>
-          </View>
-          <View style={styles.playerMeta}>
             <Badge text={`Card ${currentIndex + 1} / ${orderedCards.length}`} color={colors.primary} />
-            <Badge text={`${ratedCount} Rated`} color={colors.success} bg={colors.successSoft} />
-            <Badge text={`Streak ${streak}`} color={colors.warning} bg={colors.warningSoft} />
           </View>
         </View>
 
         {/* Flip card */}
-        <TouchableOpacity activeOpacity={0.85} onPress={() => setIsFlipped((v) => !v)} style={styles.flipPress}>
-          <View style={styles.flipContainer}>
-            <View style={[styles.flipInner, { transform: [{ perspective: 1000 }, { rotateY: isFlipped ? '180deg' : '0deg' }] }]}>
-              <View style={[styles.cardFace, styles.cardFront, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <TouchableOpacity activeOpacity={0.9} onPress={flipCard} style={[styles.flipPress, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={StyleSheet.absoluteFill}>
+            <Animated.View style={[styles.flipFace, flipFront, isFlipped && styles.hiddenFace]}>
+              <View style={styles.faceWrap}>
                 <Text style={[styles.faceLabel, { color: colors.mutedForeground }]}>Question</Text>
                 <Text style={[styles.faceText, { color: colors.foreground }]}>{card.question}</Text>
                 {card.topicTag && <Badge text={card.topicTag} color={colors.primary} />}
@@ -138,7 +129,9 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
                   <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Tap card to flip</Text>
                 </View>
               </View>
-              <View style={[styles.cardFace, styles.cardBack, { backgroundColor: colors.primary }]}>
+            </Animated.View>
+            <Animated.View style={[styles.flipFace, { backgroundColor: colors.primary }, flipBack, !isFlipped && styles.hiddenFace]}>
+              <View style={styles.faceWrap}>
                 <Text style={[styles.faceLabel, { color: 'rgba(255,255,255,0.8)' }]}>Answer</Text>
                 <Text style={[styles.faceText, { color: '#fff' }]}>{card.answer}</Text>
                 <View style={styles.tapHint}>
@@ -146,7 +139,7 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
                   <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11 }}>Tap card to flip back</Text>
                 </View>
               </View>
-            </View>
+            </Animated.View>
           </View>
         </TouchableOpacity>
 
@@ -166,34 +159,6 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
             )
           )}
         </View>
-
-        {/* Rating controls */}
-        <View style={styles.rateRow}>
-          {(
-            [
-              { key: 'easy', label: 'Easy', icon: <ThumbsUp size={16} color={colors.success} /> },
-              { key: 'good', label: 'Good', icon: <Zap size={16} color={colors.warning} /> },
-              { key: 'hard', label: 'Hard', icon: <HardDrive size={16} color={colors.danger} /> },
-            ] as const
-          ).map((r) => (
-            <TouchableOpacity
-              key={r.key}
-              onPress={() => rateCard(r.key, deckId, card.id)}
-              style={[
-                styles.rateBtn,
-                { borderColor: colors.border, backgroundColor: currentRating === r.key ? (r.key === 'easy' ? colors.successSoft : r.key === 'good' ? colors.warningSoft : colors.dangerSoft) : colors.card },
-              ]}
-            >
-              {r.icon}
-              <Text style={{ color: r.key === 'easy' ? colors.success : r.key === 'good' ? colors.warning : colors.danger, fontSize: 12, fontWeight: '800' }}>
-                {r.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        <Text style={{ color: colors.mutedForeground, fontSize: 11, textAlign: 'center' }}>
-          Rate to auto-advance - {easyCount} easy so far - ratings saved on this device
-        </Text>
 
         {/* Nav */}
         <View style={styles.navRow}>
@@ -219,10 +184,7 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
           <Layers size={18} color="#fff" />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Flashcard Decks</Text>
-          <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>
-            Active recall study cards with 3D flip, shuffle, and self-rating.
-          </Text>
+          <Text style={styles.bannerTitle}>Flashcard Decks</Text>
         </View>
       </View>
 
@@ -231,8 +193,6 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
       ) : (
         <View style={{ gap: 12 }}>
           {decks.map((d) => {
-            const deckRated = d.cards.filter((c) => ratings[`${d.id}:${c.id}`]).length;
-            const pct = d.cards.length > 0 ? Math.round((deckRated / d.cards.length) * 100) : 0;
             return (
               <Card key={d.id} style={{ gap: 10 }}>
                 <View style={styles.deckTop}>
@@ -243,16 +203,14 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
                     <Text style={[styles.deckTitle, { color: colors.foreground }]} numberOfLines={1}>
                       {d.title}
                     </Text>
-                    <Text style={{ color: colors.primary, fontSize: 11 }}>{d.subjectName}</Text>
+                    {d.subjectName ? <Text style={{ color: colors.primary, fontSize: 11 }}>{d.subjectName}</Text> : null}
                   </View>
                 </View>
                 <View style={styles.deckMeta}>
                   <Badge text={`${d.cards.length} Cards`} color={colors.primary} />
-                  <Badge text={deckRated > 0 ? `${pct}% Studied` : 'New Deck'} color={deckRated > 0 ? colors.success : colors.warning} bg={deckRated > 0 ? colors.successSoft : colors.warningSoft} />
                 </View>
                 <View style={styles.deckActions}>
-                  <PrimaryButton label={deckRated > 0 ? 'Resume Deck' : 'Start Studying'} onPress={() => enterDeck(d)} style={{ flex: 1 }} />
-                  <OutlineButton label="AI Regenerate" onPress={() => onNavigate('ai-assistant')} />
+                  <PrimaryButton label="Start Studying" onPress={() => enterDeck(d)} style={{ flex: 1 }} />
                 </View>
               </Card>
             );
@@ -273,33 +231,20 @@ const styles = StyleSheet.create({
   deckTitle: { fontSize: 14, fontWeight: '800' },
   deckMeta: { flexDirection: 'row', gap: 6 },
   deckActions: { flexDirection: 'row', gap: 10 },
-  playerWrap: { padding: 16, paddingBottom: 40, gap: 18 },
+  playerWrap: { padding: 16, paddingBottom: 40, gap: 18, flexGrow: 1 },
   playerHead: { gap: 10 },
   playerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  playerMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   backBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  flipPress: { flex: 1, minHeight: 340 },
-  flipContainer: { flex: 1 },
-  flipInner: { flex: 1, position: 'relative' },
-  cardFace: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 28,
-    padding: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    backfaceVisibility: 'hidden',
-  },
-  cardFront: { borderWidth: 1, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 9 },
-  cardBack: { transform: [{ rotateY: '180deg' }], shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 9 },
+  flipPress: { flex: 1, minHeight: 320, borderWidth: 1, borderRadius: 28, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 9 },
+  flipFace: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  hiddenFace: { opacity: 0 },
+  faceWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 26, borderRadius: 28 },
   faceLabel: { position: 'absolute', top: 24, left: 26, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1 },
   faceText: { fontSize: 21, lineHeight: 29, fontWeight: '600', textAlign: 'center', maxWidth: '90%' },
   tapHint: { position: 'absolute', bottom: 20, flexDirection: 'row', alignItems: 'center', gap: 6 },
   explainZone: { minHeight: 40, justifyContent: 'center' },
   explainBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 10, borderWidth: 1, padding: 10 },
   explainBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'center' },
-  rateRow: { flexDirection: 'row', gap: 10 },
-  rateBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, borderWidth: 1, paddingVertical: 12 },
   navRow: { flexDirection: 'row', justifyContent: 'center', gap: 14 },
   navCircle: { width: 52, height: 52, borderRadius: 26, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });

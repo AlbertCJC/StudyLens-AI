@@ -1,15 +1,20 @@
 import React, { useState } from "react";
 import {
-  BookOpen, Sparkles, CheckCircle2, ArrowRight,
+  BookOpen, CheckCircle2, ArrowRight,
   Moon, Sun, User, Mail, Lock, Eye, EyeOff,
-  Star, Users, PieChart, ArrowLeft, Brain,
-  X, AlertCircle
+  Users, ArrowLeft,
+  X, Sparkles, Brain, PieChart, Star
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
+import MobileAppBanner from "../../components/MobileAppBanner";
+import { PasswordRequirements } from "../../components/PasswordRequirements";
+import { checkPasswordStrength } from "../../utils/password";
 import type { UserRole } from "../../types";
 
 export const LandingPage: React.FC = () => {
-  const { login, register } = useAuth();
+  const { login, register, verifyEmail, resendEmailCode, clearEmailVerification, pendingEmailVerification } = useAuth();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<"home" | "features" | "about" | "contact">("home");
   const [authModal, setAuthModal] = useState<"login" | "register" | null>(null);
   
@@ -38,8 +43,13 @@ export const LandingPage: React.FC = () => {
   // Auth Form State
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
-  const [middleInitial, setMiddleInitial] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => {
+    try {
+      return localStorage.getItem("studylens_remembered_email") || "";
+    } catch {
+      return "";
+    }
+  });
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -47,63 +57,76 @@ export const LandingPage: React.FC = () => {
   const [role, setRole] = useState<UserRole>("student");
   const [rememberMe, setRememberMe] = useState(false);
 
-  interface ToastNotice {
-    id: string;
-    type: "warning" | "error" | "info";
-    title: string;
-    message: string;
-    action?: {
-      label: string;
-      onClick: () => void;
-    };
-  }
-
-  const [toast, setToast] = useState<ToastNotice | null>(null);
+  // Forgot Password State
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotStep, setForgotStep] = useState<"request" | "verify">("request");
+  const [forgotOtp, setForgotOtp] = useState("");
+  const [forgotPassword, setForgotPassword] = useState("");
+  const [forgotConfirm, setForgotConfirm] = useState("");
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [forgotNotice, setForgotNotice] = useState("");
+  const [forgotDevCode, setForgotDevCode] = useState("");
 
   const openRegisterModal = () => {
     setAuthModal("register");
     if (role === "admin") setRole("student");
-    setToast(null);
   };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setToast(null);
 
     try {
       if (authModal === "register") {
         if (!firstName.trim()) {
-          setToast({ id: Date.now().toString(), type: "error", title: "Registration Notice", message: "Please enter your first name." });
+          showToast("Please enter your first name.", "error");
           return;
         }
         if (!lastName.trim()) {
-          setToast({ id: Date.now().toString(), type: "error", title: "Registration Notice", message: "Please enter your last name." });
+          showToast("Please enter your last name.", "error");
           return;
         }
         if (!email.trim()) {
-          setToast({ id: Date.now().toString(), type: "error", title: "Registration Notice", message: "Please enter a valid email address." });
+          showToast("Please enter a valid email address.", "error");
           return;
         }
         if (password && confirmPassword && password !== confirmPassword) {
-          setToast({ id: Date.now().toString(), type: "error", title: "Registration Notice", message: "Passwords do not match." });
+          showToast("Passwords do not match.", "error");
+          return;
+        }
+        if (!password) {
+          showToast("Please enter a password.", "error");
+          return;
+        }
+        const strengthErr = checkPasswordStrength(password);
+        if (strengthErr) {
+          showToast(strengthErr, "error");
           return;
         }
 
-        const cleanMI = middleInitial.trim().toUpperCase().replace(/\.$/, "");
-        const formattedMI = cleanMI ? `${cleanMI}. ` : "";
-        const computedFullName = `${firstName.trim()} ${formattedMI}${lastName.trim()}`.replace(/\s+/g, " ");
+        const computedFullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
 
         const dept = role === "student" ? "Computer Science" : role === "teacher" ? "Computer Science & IT" : "Academic Affairs";
-        await register(computedFullName, email.trim(), role, dept);
+        await register(computedFullName, email.trim(), role, dept, password);
       } else {
         if (!email.trim()) {
-          setToast({ id: Date.now().toString(), type: "error", title: "Login Notice", message: "Please enter your email address." });
+          showToast("Please enter your email address.", "error");
           return;
         }
         await login({
           email: email.trim(),
           role: role,
+          password: password,
         });
+        try {
+          if (rememberMe) {
+            localStorage.setItem("studylens_remembered_email", email.trim());
+          } else {
+            localStorage.removeItem("studylens_remembered_email");
+          }
+        } catch {
+          // storage unavailable - skip persisting the remember-me preference
+        }
       }
     } catch (err) {
       const errMsg = (err as Error).message || "Authentication failed. Please check your credentials.";
@@ -111,57 +134,150 @@ export const LandingPage: React.FC = () => {
         errMsg.toLowerCase().includes("already registered") ||
         errMsg.toLowerCase().includes("already exists")
       ) {
-        setToast({
-          id: Date.now().toString(),
-          type: "warning",
-          title: "Account Already Registered",
-          message: `This email (${email.trim()}) is already registered in our system. Would you like to log in instead?`,
-          action: {
-            label: `Log in with ${email.trim()} instead`,
-            onClick: () => {
-              setAuthModal("login");
-              setPassword("");
-              setConfirmPassword("");
-            },
-          },
-        });
+        showToast(
+          `This email (${email.trim()}) is already registered in our system. Would you like to log in instead?`,
+          "error"
+        );
       } else {
-        setToast({
-          id: Date.now().toString(),
-          type: "error",
-          title: "Authentication Error",
-          message: errMsg,
-        });
+        showToast(errMsg, "error");
       }
     }
   };
 
-  const handleQuickLogin = (demoRole: UserRole) => {
-    if (demoRole === "student") {
-      login({
-        id: "usr-student-1",
-        name: "Alex Johnson",
-        email: "alex.johnson@studylens.edu",
-        role: "student",
-        department: "Computer Science",
-      });
-    } else if (demoRole === "teacher") {
-      login({
-        id: "usr-teacher-1",
-        name: "Dr. Sarah Smith",
-        email: "sarah.smith@studylens.edu",
-        role: "teacher",
-        department: "Computer Science & IT",
-      });
-    } else if (demoRole === "admin") {
-      login({
-        id: "usr-admin-1",
-        name: "System Administrator",
-        email: "admin@studylens.edu",
-        role: "admin",
-        department: "Academic Affairs",
-      });
+  // Email Verification State
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifySubmitting, setVerifySubmitting] = useState(false);
+  const [verifyResending, setVerifyResending] = useState(false);
+  const [verifyError, setVerifyError] = useState("");
+  const [verifyNotice, setVerifyNotice] = useState("");
+
+  const handleVerifyEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVerifyError("");
+    if (!pendingEmailVerification) return;
+    if (!/^\d{6}$/.test(verifyCode.trim())) {
+      setVerifyError("Please enter the 6-digit code sent to your email.");
+      return;
     }
+    setVerifySubmitting(true);
+    try {
+      await verifyEmail(pendingEmailVerification.userId, verifyCode.trim());
+    } catch (err) {
+      setVerifyError((err as Error).message || "Could not verify the email. Please try again.");
+    } finally {
+      setVerifySubmitting(false);
+    }
+  };
+
+  const handleResendVerifyCode = async () => {
+    setVerifyError("");
+    if (!pendingEmailVerification) return;
+    setVerifyResending(true);
+    try {
+      await resendEmailCode(pendingEmailVerification.userId);
+      setVerifyNotice("A new verification code has been sent.");
+    } catch (err) {
+      setVerifyError((err as Error).message || "Could not resend the verification code.");
+    } finally {
+      setVerifyResending(false);
+    }
+  };
+
+  const handleFeatureCardClick = () => {
+    // Feature cards now open the login modal — no more 1-click demo sessions.
+    setRole("student");
+    setAuthModal("login");
+  };
+
+  const handleForgotSendCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim() || !forgotEmail.includes("@")) {
+      showToast("Please enter a valid email address.", "error");
+      return;
+    }
+    setForgotSubmitting(true);
+    setForgotNotice("");
+    setForgotDevCode("");
+    try {
+      const res = await fetch("/api/auth/reset-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.error || "Could not issue a reset code. Please try again.", "error");
+        return;
+      }
+      setForgotStep("verify");
+      setForgotNotice(data?.message || "A 6-digit verification code was sent to your email.");
+      setForgotDevCode(data?.devCode || "");
+      showToast(res.status === 200 ? "Verification code sent." : data?.message || "Code sent.");
+    } catch {
+      showToast("Could not reach the server. Please check your connection and try again.", "error");
+    } finally {
+      setForgotSubmitting(false);
+    }
+  };
+
+  const handleForgotResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotOtp.trim() || forgotOtp.trim().length !== 6) {
+      showToast("Please enter the 6-digit verification code.", "error");
+      return;
+    }
+    if (!forgotPassword) {
+      showToast("Please enter a new password.", "error");
+      return;
+    }
+    const forgotError = checkPasswordStrength(forgotPassword);
+    if (forgotError) {
+      showToast(forgotError, "error");
+      return;
+    }
+    if (forgotPassword !== forgotConfirm) {
+      showToast("Passwords do not match.", "error");
+      return;
+    }
+    setForgotSubmitting(true);
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail.trim(), otp: forgotOtp.trim(), newPassword: forgotPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.error || "Could not reset the password. Please try again.", "error");
+        return;
+      }
+      showToast("Password reset successfully! You can now sign in with your new password.");
+      setTimeout(() => {
+        setForgotOpen(false);
+        setForgotEmail("");
+        setForgotOtp("");
+        setForgotPassword("");
+        setForgotConfirm("");
+        setForgotStep("request");
+        setForgotNotice("");
+        setForgotDevCode("");
+      }, 2200);
+    } catch {
+      showToast("Could not reach the server. Please check your connection and try again.", "error");
+    } finally {
+      setForgotSubmitting(false);
+    }
+  };
+
+  const closeForgotModal = () => {
+    setForgotOpen(false);
+    setForgotStep("request");
+    setForgotEmail("");
+    setForgotOtp("");
+    setForgotPassword("");
+    setForgotConfirm("");
+    setForgotNotice("");
+    setForgotDevCode("");
   };
 
   const scrollToSection = (id: "home" | "features" | "about" | "contact") => {
@@ -175,44 +291,11 @@ export const LandingPage: React.FC = () => {
   // If Auth View is Active (Login or Register)
   if (authModal) {
     return (
+      <>
+      <MobileAppBanner darkMode={darkMode} />
       <div className={`min-h-screen font-sans flex flex-col items-center justify-center p-4 sm:p-6 ${
         darkMode ? "dark bg-[#0b132b] text-slate-100" : "bg-[#f5f6fc] text-slate-900"
       }`}>
-        {/* Floating Toast Notification */}
-        {toast && (
-          <div className="fixed top-6 right-6 z-[120] max-w-sm sm:max-w-md w-full animate-in slide-in-from-top-4 fade-in duration-300">
-            <div className="bg-slate-900/95 dark:bg-slate-800/95 text-white p-4 rounded-2xl shadow-2xl border border-slate-700/80 backdrop-blur-md flex items-start space-x-3.5">
-              <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${toast.type === "warning" ? "bg-amber-500/20 text-amber-400" : "bg-rose-500/20 text-rose-400"}`}>
-                <AlertCircle className="w-5 h-5" />
-              </div>
-              <div className="flex-1 space-y-2 text-xs sm:text-sm">
-                <h4 className="font-bold text-slate-100">{toast.title}</h4>
-                <p className="text-slate-300 text-xs leading-relaxed">{toast.message}</p>
-                {toast.action && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      toast.action?.onClick();
-                      setToast(null);
-                    }}
-                    className="w-full py-2 px-3 bg-[#5b51d8] hover:bg-[#4c42c9] text-white font-bold rounded-xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
-                  >
-                    <span>{toast.action.label}</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setToast(null)}
-                className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-slate-800/80 cursor-pointer shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Top Dark/Light Switch Floating Right */}
         <div className="absolute top-4 right-6">
           <button
@@ -226,7 +309,84 @@ export const LandingPage: React.FC = () => {
 
         <div className="w-full max-w-[420px] mx-auto py-8">
           {/* Centered White / Dark Card */}
-          <div className="bg-white dark:bg-[#131b30] border border-slate-100 dark:border-slate-800/80 rounded-[28px] p-8 sm:p-10 shadow-xl space-y-6">
+          <div className="bg-white dark:bg-[#131b30] border border-slate-100 dark:border-slate-800/80 rounded-2xl p-8 sm:p-10 shadow-sm space-y-6">
+            {pendingEmailVerification ? (
+              <>
+                {/* Verify Email Panel */}
+                <div className="h-12 w-12 rounded-2xl bg-[#5b51d8] text-white flex items-center justify-center mx-auto shadow-md">
+                  <Mail className="w-6 h-6 text-white" />
+                </div>
+                <div className="text-center space-y-1">
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                    Verify Your Email
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+                    We sent a 6-digit code to <span className="font-semibold text-slate-700 dark:text-slate-200">{pendingEmailVerification.email}</span>.
+                    Enter it below to activate your account.
+                  </p>
+                  {!!pendingEmailVerification.devCode && (
+                    <div className="mt-3 text-xs font-medium text-[#15803d] bg-[#16a34a]/5 border border-[#16a34a]/20 rounded-xl px-3 py-2.5">
+                      Dev mode: your code is <span className="font-mono font-bold text-sm tracking-[0.25em]">{pendingEmailVerification.devCode}</span>
+                    </div>
+                  )}
+                </div>
+                <form onSubmit={handleVerifyEmailSubmit} className="space-y-4 text-xs sm:text-sm">
+                  {verifyNotice && (
+                    <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
+                      {verifyNotice}
+                    </div>
+                  )}
+                  {verifyError && (
+                    <div className="text-xs font-medium text-rose-600 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-xl px-3 py-2.5">
+                      {verifyError}
+                    </div>
+                  )}
+                  <div className="space-y-1.5">
+                    <label className="block font-semibold text-slate-800 dark:text-slate-200">Verification Code</label>
+                    <div className="relative">
+                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={verifyCode}
+                        onChange={(e) => setVerifyCode(e.target.value.replace(/[^0-9]/g, ""))}
+                        placeholder="6-digit code"
+                        className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium tracking-[0.25em]"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={verifySubmitting}
+                    className="w-full py-3 bg-[#5b51d8] hover:bg-[#4c42c9] text-white font-semibold rounded-xl shadow-sm transition-all text-sm cursor-pointer mt-2 disabled:opacity-60"
+                  >
+                    {verifySubmitting ? "Verifying..." : "Verify & Sign In"}
+                  </button>
+                  <div className="text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400 pt-1">
+                    Didn't get a code?{" "}
+                    <button
+                      type="button"
+                      onClick={handleResendVerifyCode}
+                      disabled={verifyResending}
+                      className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline cursor-pointer disabled:opacity-60"
+                    >
+                      {verifyResending ? "Sending..." : "Resend code"}
+                    </button>
+                  </div>
+                  <div className="text-center">
+                    <button
+                      type="button"
+                      onClick={clearEmailVerification}
+                      className="text-xs text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-white font-medium cursor-pointer pt-1 underline"
+                    >
+                      Use a different account
+                    </button>
+                  </div>
+                </form>
+              </>
+            ) : (
+              <>
             {/* Logo Icon */}
             <div className="h-12 w-12 rounded-2xl bg-[#5b51d8] text-white flex items-center justify-center mx-auto shadow-md">
               <BookOpen className="w-6 h-6 text-white" />
@@ -240,7 +400,7 @@ export const LandingPage: React.FC = () => {
               <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
                 {authModal === "login"
                   ? "Sign in to continue your learning journey"
-                  : "Join StudyLens AI and start your learning journey"}
+                  : "Create your account to get started"}
               </p>
             </div>
 
@@ -248,7 +408,7 @@ export const LandingPage: React.FC = () => {
             <form onSubmit={handleAuthSubmit} className="space-y-4 text-xs sm:text-sm">
               {authModal === "register" && (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div className="space-y-3">
                     <div className="space-y-1.5">
                       <label className="block font-semibold text-slate-800 dark:text-slate-200">
                         First Name <span className="text-rose-500">*</span>
@@ -283,23 +443,6 @@ export const LandingPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
-
-                  <div className="space-y-1.5">
-                    <label className="block font-semibold text-slate-800 dark:text-slate-200">
-                      Middle Initial <span className="text-slate-400 font-normal text-[11px]">(Optional)</span>
-                    </label>
-                    <div className="relative">
-                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                      <input
-                        type="text"
-                        maxLength={5}
-                        value={middleInitial}
-                        onChange={(e) => setMiddleInitial(e.target.value)}
-                        placeholder="e.g. M."
-                        className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
-                      />
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -331,6 +474,7 @@ export const LandingPage: React.FC = () => {
                   <input
                     type={showPassword ? "text" : "password"}
                     required
+                    minLength={8}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={authModal === "login" ? "Enter your password" : "Create a password"}
@@ -344,6 +488,7 @@ export const LandingPage: React.FC = () => {
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                {authModal === "register" && <PasswordRequirements password={password} />}
               </div>
 
               {/* Confirm Password Field (Register Only) */}
@@ -387,7 +532,10 @@ export const LandingPage: React.FC = () => {
                   </label>
                   <button
                     type="button"
-                    onClick={() => alert("Password reset link sent to demo user!")}
+                    onClick={() => {
+                      setForgotEmail(email.trim());
+                      setForgotOpen(true);
+                    }}
                     className="text-[#5b51d8] dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
                   >
                     Forgot password?
@@ -428,31 +576,6 @@ export const LandingPage: React.FC = () => {
                       <span>Teacher</span>
                     </button>
                   </div>
-
-                  <div className="p-3 bg-slate-100 dark:bg-slate-800/60 rounded-xl text-slate-600 dark:text-slate-300 text-xs flex items-start space-x-2 border border-slate-200 dark:border-slate-700/60">
-                    <div className="p-1 rounded-md bg-[#5b51d8]/10 text-[#5b51d8] dark:text-indigo-400 mt-0.5 shrink-0">
-                      <User className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="space-y-1">
-                      <p className="font-semibold text-slate-800 dark:text-slate-200">Looking for Admin access?</p>
-                      <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-                        Admin role cannot be self-registered. Use the pre-registered Administrator account <strong className="text-slate-700 dark:text-slate-200 font-bold">admin@studylens.edu</strong>.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAuthModal("login");
-                          setEmail("admin@studylens.edu");
-                          setRole("admin");
-                          setToast(null);
-                        }}
-                        className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline text-[11px] cursor-pointer inline-flex items-center space-x-1 pt-0.5"
-                      >
-                        <span>Sign in with Admin account</span>
-                        <ArrowRight className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -463,36 +586,6 @@ export const LandingPage: React.FC = () => {
               >
                 {authModal === "login" ? "Sign In" : "Create Account"}
               </button>
-
-              {/* Quick 1-Click Demo Portals bar for testing */}
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80">
-                <p className="text-[10px] uppercase font-bold text-slate-400 text-center mb-2">
-                  Quick Demo 1-Click Entry
-                </p>
-                <div className="grid grid-cols-3 gap-1.5 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => handleQuickLogin("student")}
-                    className="py-1.5 px-2 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 text-[#5b51d8] dark:text-indigo-300 font-semibold rounded-lg text-center cursor-pointer truncate"
-                  >
-                    Student
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickLogin("teacher")}
-                    className="py-1.5 px-2 bg-purple-50 dark:bg-purple-950/50 hover:bg-purple-100 text-purple-600 dark:text-purple-300 font-semibold rounded-lg text-center cursor-pointer truncate"
-                  >
-                    Teacher
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickLogin("admin")}
-                    className="py-1.5 px-2 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 text-rose-600 dark:text-rose-300 font-semibold rounded-lg text-center cursor-pointer truncate"
-                  >
-                    Admin
-                  </button>
-                </div>
-              </div>
 
               {/* Toggle Login/Register Link */}
               <div className="text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400 pt-2">
@@ -531,6 +624,8 @@ export const LandingPage: React.FC = () => {
                 </p>
               )}
             </form>
+            </>
+            )}
           </div>
 
           {/* Bottom Back To Home Link */}
@@ -545,12 +640,132 @@ export const LandingPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Forgot Password Modal */}
+      {forgotOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={closeForgotModal}>
+          <div
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-[#0e1628] border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Reset Password</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {forgotStep === "request"
+                    ? "Enter your account email to receive a 6-digit verification code."
+                    : "Enter the code we sent and choose a new password."}
+                </p>
+              </div>
+              <button
+                onClick={closeForgotModal}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {forgotStep === "request" ? (
+              <form onSubmit={handleForgotSendCode} className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Email Address</label>
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+                    <Mail className="w-4 h-4 text-slate-400" />
+                    <input
+                      type="email"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      placeholder="you@studylens.edu"
+                      required
+                      className="w-full bg-transparent text-sm font-medium text-slate-900 dark:text-white outline-none"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={forgotSubmitting}
+                  className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a41c4] text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
+                >
+                  {forgotSubmitting ? "Sending Code..." : "Send Verification Code"}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleForgotResetSubmit} className="space-y-3">
+                {forgotNotice && (
+                  <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
+                    {forgotNotice}
+                  </div>
+                )}
+                {forgotDevCode && (
+                  <div className="text-xs font-medium text-[#15803d] bg-[#16a34a]/5 border border-[#16a34a]/20 rounded-xl px-3 py-2.5">
+                    Dev mode: your code is <span className="font-mono font-bold text-sm tracking-[0.25em]">{forgotDevCode}</span>
+                  </div>
+                )}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Verification Code</label>
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+                    <Mail className="w-4 h-4 text-slate-400" />
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={forgotOtp}
+                      onChange={(e) => setForgotOtp(e.target.value.replace(/[^0-9]/g, ""))}
+                      placeholder="6-digit code"
+                      required
+                      className="w-full bg-transparent text-sm font-medium text-slate-900 dark:text-white outline-none tracking-[0.25em]"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">New Password</label>
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+                    <Lock className="w-4 h-4 text-slate-400" />
+                    <input
+                      type="password"
+                      value={forgotPassword}
+                      onChange={(e) => setForgotPassword(e.target.value)}
+                      placeholder="At least 8 characters"
+                      required
+                      className="w-full bg-transparent text-sm font-medium text-slate-900 dark:text-white outline-none"
+                    />
+                  </div>
+                  <PasswordRequirements password={forgotPassword} />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Confirm New Password</label>
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+                    <Lock className="w-4 h-4 text-slate-400" />
+                    <input
+                      type="password"
+                      value={forgotConfirm}
+                      onChange={(e) => setForgotConfirm(e.target.value)}
+                      placeholder="Re-enter new password"
+                      required
+                      className="w-full bg-transparent text-sm font-medium text-slate-900 dark:text-white outline-none"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={forgotSubmitting}
+                  className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a41c4] text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
+                >
+                  {forgotSubmitting ? "Resetting..." : "Reset Password"}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+      </>
     );
   }
 
   // Main Landing Page View
   return (
     <div className={`min-h-screen font-sans ${darkMode ? "dark bg-[#0b132b] text-slate-100" : "bg-[#f5f6fc] text-slate-900"}`}>
+      <MobileAppBanner darkMode={darkMode} />
       {/* ----------------- HEADER NAV BAR ----------------- */}
       <header className="sticky top-0 z-50 bg-white dark:bg-[#0e1628] border-b border-slate-200/80 dark:border-slate-800/80 px-6 sm:px-12 py-3.5 flex items-center justify-between shadow-2xs transition-colors">
         {/* Logo */}
@@ -685,7 +900,7 @@ export const LandingPage: React.FC = () => {
               <div className="grid grid-cols-2 gap-4">
                 {/* 1. AI Quiz Card */}
                 <div
-                  onClick={() => handleQuickLogin("student")}
+                  onClick={handleFeatureCardClick}
                   className="bg-white dark:bg-[#182238] p-5 rounded-2xl shadow-xs border border-slate-100 dark:border-slate-800/80 hover:shadow-md transition-all space-y-3 cursor-pointer group"
                 >
                   <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950/50 rounded-xl w-fit text-[#5b51d8] dark:text-[#818cf8] group-hover:scale-105 transition-transform">
@@ -699,7 +914,7 @@ export const LandingPage: React.FC = () => {
 
                 {/* 2. Flashcards Card */}
                 <div
-                  onClick={() => handleQuickLogin("student")}
+                  onClick={handleFeatureCardClick}
                   className="bg-white dark:bg-[#182238] p-5 rounded-2xl shadow-xs border border-slate-100 dark:border-slate-800/80 hover:shadow-md transition-all space-y-3 cursor-pointer group"
                 >
                   <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950/50 rounded-xl w-fit text-[#5b51d8] dark:text-[#818cf8] group-hover:scale-105 transition-transform">
@@ -713,7 +928,7 @@ export const LandingPage: React.FC = () => {
 
                 {/* 3. Progress Card */}
                 <div
-                  onClick={() => handleQuickLogin("student")}
+                  onClick={handleFeatureCardClick}
                   className="bg-white dark:bg-[#182238] p-5 rounded-2xl shadow-xs border border-slate-100 dark:border-slate-800/80 hover:shadow-md transition-all space-y-3 cursor-pointer group"
                 >
                   <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950/50 rounded-xl w-fit text-[#5b51d8] dark:text-[#818cf8] group-hover:scale-105 transition-transform">
@@ -727,7 +942,7 @@ export const LandingPage: React.FC = () => {
 
                 {/* 4. Community Card */}
                 <div
-                  onClick={() => handleQuickLogin("student")}
+                  onClick={handleFeatureCardClick}
                   className="bg-white dark:bg-[#182238] p-5 rounded-2xl shadow-xs border border-slate-100 dark:border-slate-800/80 hover:shadow-md transition-all space-y-3 cursor-pointer group"
                 >
                   <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950/50 rounded-xl w-fit text-[#5b51d8] dark:text-[#818cf8] group-hover:scale-105 transition-transform">

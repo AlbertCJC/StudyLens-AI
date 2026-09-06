@@ -1,24 +1,38 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import type { User, UserRole } from "../types";
 import { authFetch, setStoredToken } from "../utils/authFetch";
 
 interface AuthContextType {
   currentUser: User | null;
   token: string | null;
-  login: (emailOrUser: string | Partial<User>, role?: UserRole) => Promise<void>;
-  register: (name: string, email: string, role: UserRole, department?: string) => Promise<void>;
+  pendingEmailVerification: { userId: string; email: string; devCode?: string } | null;
+  login: (emailOrUser: string | Partial<User>, role?: UserRole, password?: string) => Promise<void>;
+  register: (name: string, email: string, role: UserRole, department?: string, password?: string) => Promise<void>;
+  verifyEmail: (userId: string, code: string) => Promise<void>;
+  resendEmailCode: (userId: string) => Promise<void>;
+  clearEmailVerification: () => void;
   updateUser: (updated: User) => Promise<void>;
-  switchRole: (role: UserRole) => Promise<void>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Guard against corrupted avatar placeholders ("None"/"null"/"undefined")
+  // that must render as the initials fallback instead of a broken image.
+  const sanitizeAvatar = (u: User | null): User | null => {
+    if (!u) return u;
+    const raw = (u as { avatar?: unknown }).avatar;
+    if (!raw || ["none", "null", "undefined"].includes(String(raw).trim().toLowerCase())) {
+      return { ...u, avatar: undefined } as User;
+    }
+    return u;
+  };
+
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
       const saved = localStorage.getItem("studylens_user");
-      return saved ? JSON.parse(saved) : null;
+      return saved ? sanitizeAvatar(JSON.parse(saved)) : null;
     } catch {
       return null;
     }
@@ -26,24 +40,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(() => {
     return localStorage.getItem("studylens_token") || null;
   });
+  const [pendingEmailVerification, setPendingEmailVerification] = useState<{ userId: string; email: string; devCode?: string } | null>(null);
 
   const saveUserSession = (user: User, userToken?: string) => {
-    setCurrentUser(user);
-    const tok = userToken || `jwt-token-${user.id}-${Date.now()}`;
+    const cleanUser = sanitizeAvatar(user);
+    setCurrentUser(cleanUser);
+    const tok = userToken || null;
     setToken(tok);
     setStoredToken(tok);
     try {
-      localStorage.setItem("studylens_user", JSON.stringify(user));
+      localStorage.setItem("studylens_user", JSON.stringify(cleanUser));
     } catch (e) {
       console.error("Failed to save session to localStorage", e);
     }
   };
 
-  const login = async (emailOrUser: string | Partial<User>, role?: UserRole) => {
+  const login = async (emailOrUser: string | Partial<User>, role?: UserRole, password?: string) => {
     try {
       let emailStr = "";
       let userRole = role;
       let customUser: Partial<User> | null = null;
+      let userPassword: string | undefined = password;
 
       if (typeof emailOrUser === "string") {
         emailStr = emailOrUser;
@@ -51,16 +68,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         customUser = emailOrUser;
         emailStr = emailOrUser.email || "";
         userRole = emailOrUser.role || role;
+        userPassword = (emailOrUser as { password?: string }).password || password;
       }
 
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: emailStr, role: userRole, user: customUser }),
+        body: JSON.stringify({ email: emailStr, role: userRole, user: customUser, password: userPassword }),
       });
 
       if (res.ok) {
         const data = await res.json();
+        if (data.requiresEmailVerification) {
+          setPendingEmailVerification({
+            userId: data.userId,
+            email: data.email,
+            devCode: data.devCode,
+          });
+          return;
+        }
         saveUserSession(data.user, data.token);
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -72,15 +98,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const register = async (name: string, email: string, role: UserRole, department?: string) => {
+  const register = async (name: string, email: string, role: UserRole, department?: string, password?: string) => {
     try {
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, role, department }),
+        body: JSON.stringify({ name, email, role, department, password }),
       });
       if (res.ok) {
         const data = await res.json();
+        if (data.requiresEmailVerification) {
+          setPendingEmailVerification({
+            userId: data.userId,
+            email: data.email,
+            devCode: data.devCode,
+          });
+          return;
+        }
         saveUserSession(data.user, data.token);
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -92,66 +126,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const switchRole = async (role: UserRole) => {
-    let targetUser: User;
-    if (role === "student") {
-      targetUser = {
-        id: "usr-student-1",
-        name: "John Wendyl S. Sanchez",
-        email: "student@studylens.edu",
-        role: "student",
-        studentId: "2024-STU-0841",
-        department: "Computer Science",
-        createdAt: "2024-01-15T08:00:00.000Z",
-      };
-    } else if (role === "teacher") {
-      targetUser = {
-        id: "usr-teacher-1",
-        name: "Christian C. Barral, MIT",
-        email: "teacher@studylens.edu",
-        role: "teacher",
-        department: "College of Computer Studies",
-        createdAt: "2023-09-01T08:00:00.000Z",
-      };
-    } else {
-      targetUser = {
-        id: "usr-admin-1",
-        name: "Neil A. Basabe, DIT",
-        email: "admin@studylens.edu",
-        role: "admin",
-        department: "Dean, College of Computer Studies",
-        createdAt: "2023-08-01T08:00:00.000Z",
-      };
-    }
-
-    // Mint a real JWT for the target role so server-side RBAC works in demo mode.
+  const verifyEmail = async (userId: string, code: string) => {
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await fetch("/api/auth/verify-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: targetUser.email, role: targetUser.role }),
+        body: JSON.stringify({ userId, code }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        saveUserSession(data.user, data.token);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Could not verify the email. Please try again.");
+      }
+      if (data.requiresEmailVerification) {
+        setPendingEmailVerification({
+          userId: data.userId,
+          email: data.email,
+          devCode: data.devCode,
+        });
         return;
       }
-    } catch {
-      // backend unreachable; keep local demo session (RBAC endpoints will fall back to query params)
+      saveUserSession(data.user, data.token);
+      setPendingEmailVerification(null);
+    } catch (err) {
+      console.warn("Email verification notice:", err);
+      throw err;
     }
-    saveUserSession(targetUser);
+  };
 
-    fetch("/api/logs", {
+  const resendEmailCode = async (userId: string) => {
+    const res = await fetch("/api/auth/resend-email-code", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId: targetUser.id,
-        userName: targetUser.name,
-        userRole: targetUser.role,
-        action: "ROLE_SWITCH",
-        details: `Switched view mode to ${role.toUpperCase()} perspective`,
-      }),
-    }).catch(() => {});
+      body: JSON.stringify({ userId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || "Could not resend the verification code.");
+    }
+    if (data.devCode) {
+      setPendingEmailVerification({ userId, email: pendingEmailVerification?.email || data.email, devCode: data.devCode });
+    }
+  };
+
+  const clearEmailVerification = () => {
+    setPendingEmailVerification(null);
   };
 
   const updateUser = async (updated: User) => {
@@ -167,19 +185,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Replaces the stored session after a server-side security event (e.g. a
+  // password change bumped token_version, so the old JWT is now invalid and a
+  // fresh one was issued in the response).
+  const refreshSession = (user: User, userToken: string) => {
+    saveUserSession(user, userToken);
+  };
+
   const logout = () => {
     setCurrentUser(null);
     setToken(null);
     setStoredToken(null);
+    setPendingEmailVerification(null);
     try {
       localStorage.removeItem("studylens_user");
+
     } catch (e) {
       console.error("Failed to clear localStorage session", e);
     }
   };
 
+  useEffect(() => {
+    const onSessionExpired = () => {
+      setCurrentUser(null);
+      setToken(null);
+      setStoredToken(null);
+      setPendingEmailVerification(null);
+      try {
+        localStorage.removeItem("studylens_user");
+      } catch (e) {
+        console.error("Failed to clear localStorage session", e);
+      }
+    };
+    window.addEventListener("auth:session-expired", onSessionExpired);
+    return () => window.removeEventListener("auth:session-expired", onSessionExpired);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ currentUser, token, login, register, updateUser, switchRole, logout }}>
+    <AuthContext.Provider
+      value={{ currentUser, token, pendingEmailVerification, login, register, verifyEmail, resendEmailCode, clearEmailVerification, updateUser, refreshSession, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );

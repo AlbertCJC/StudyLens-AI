@@ -1,41 +1,106 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import {
   Upload,
   FileText,
   Trash2,
-  Eye,
   Sparkles,
   Filter,
-  CheckCircle2,
   AlertCircle,
   Download,
-  UserCheck,
-  User,
   BookOpen,
   ArrowRight,
   FileCode,
   X,
-  FileCheck,
 } from "lucide-react";
 import { jsPDF } from "jspdf";
+import arialRegularUrl from "../../assets/fonts/arial.ttf?url";
+import arialBoldUrl from "../../assets/fonts/arialbd.ttf?url";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
 import type { LearningMaterial, Subject } from "../../types";
+import { Pagination, slicePage } from "../../components/Pagination";
 
 interface LearningMaterialsPageProps {
   onGenerateResource?: (material: LearningMaterial) => void;
   onNavigate?: (tab: string) => void;
 }
 
+// Embedded Unicode Arial TTF cache so every downloaded PDF embeds a real font with
+// correct per-glyph metrics. jsPDF's built-in Helvetica is WinAnsi-only: characters
+// outside that set (curly quotes, dashes, arrows, bullets) measure ~0 width, which
+// makes splitTextToSize wrap too late and text overflow/overlap the page edges.
+let pdfFontCache: { regular: string; bold: string } | null = null;
+
+const loadPdfFonts = async (): Promise<{ regular: string; bold: string } | null> => {
+  if (pdfFontCache) return pdfFontCache;
+  try {
+    const toBase64 = (buf: ArrayBuffer) => {
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    };
+    const [regular, bold] = await Promise.all([
+      fetch(arialRegularUrl).then((r) => r.arrayBuffer()),
+      fetch(arialBoldUrl).then((r) => r.arrayBuffer()),
+    ]);
+    pdfFontCache = { regular: toBase64(regular), bold: toBase64(bold) };
+  } catch {
+    pdfFontCache = null;
+  }
+  return pdfFontCache;
+};
+
+type PdfSegment = { text: string; bold: boolean };
+
+// Splits AI-generated resource text into bold/normal segments based on its structure
+// (flashcard labels, quiz labels, reviewer topics, summary takeaway labels). Uploaded
+// textbook text carries no structure and stays plain.
+const buildBoldSegments = (text: string): PdfSegment[] => {
+  const segments: PdfSegment[] = [];
+  for (const rawLine of text.split("\n")) {
+    let m: RegExpMatchArray | null;
+
+    if (/^Topic:/.test(rawLine)) {
+      segments.push({ text: rawLine, bold: true });
+    } else if ((m = rawLine.match(/^(Card \d+: Q:)(.*)$/))) {
+      segments.push({ text: m[1], bold: true });
+      if (m[2]) segments.push({ text: m[2], bold: false });
+    } else if ((m = rawLine.match(/^( {2}A:)(.*)$/))) {
+      segments.push({ text: m[1], bold: true });
+      if (m[2]) segments.push({ text: m[2], bold: false });
+    } else if ((m = rawLine.match(/^(Q\d+:)(.*)$/))) {
+      segments.push({ text: m[1], bold: true });
+      if (m[2]) segments.push({ text: m[2], bold: false });
+    } else if ((m = rawLine.match(/^( {2}Correct Answer:)(.*)$/))) {
+      segments.push({ text: m[1], bold: true });
+      if (m[2]) segments.push({ text: m[2], bold: false });
+    } else if ((m = rawLine.match(/^(- )?(Key Takeaway:)(.*)$/))) {
+      if (m[1]) segments.push({ text: m[1], bold: false });
+      segments.push({ text: m[2], bold: true });
+      if (m[3]) segments.push({ text: m[3], bold: false });
+    } else {
+      segments.push({ text: rawLine, bold: false });
+    }
+  }
+  return segments;
+};
+
 export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
-  onGenerateResource,
   onNavigate,
 }) => {
   const { currentUser } = useAuth();
+  const { showToast } = useToast();
   const [materials, setMaterials] = useState<LearningMaterial[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [selectedSubject, setSelectedSubject] = useState<string>("all");
-  const [sourceFilter, setSourceFilter] = useState<"all" | "teacher" | "student">("all");
+  const [materialPage, setMaterialPage] = useState(1);
+  const [showUpload, setShowUpload] = useState(false);
+
+  useEffect(() => {
+    setMaterialPage(1);
+  }, [selectedSubject]);
 
   // Downloaded Tracking State
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(() => {
@@ -52,10 +117,14 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [subjectId, setSubjectId] = useState("");
-  const [targetResourceType, setTargetResourceType] = useState<"course" | "personal">("course");
   const [rawText, setRawText] = useState("");
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+
+  // Assign Subject Modal State (teacher-owned materials)
+  const [assignSubjectMat, setAssignSubjectMat] = useState<LearningMaterial | null>(null);
+  const [assignSubjectId, setAssignSubjectId] = useState("");
+  const [isAssigningSubject, setIsAssigningSubject] = useState(false);
+
 
   // Preview / Document Reader Modal
   const [previewMaterial, setPreviewMaterial] = useState<LearningMaterial | null>(null);
@@ -101,20 +170,20 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file && !rawText) {
-      setUploadMessage("Please upload a file (PDF, DOCX, PPTX, TXT) or paste lecture text.");
+      showToast("Please upload a file (PDF, DOCX, PPTX, TXT) or paste lecture text.", "info");
       return;
     }
 
     setIsUploading(true);
-    setUploadMessage(null);
 
     try {
-      const isPersonalType = currentUser?.role === "teacher" ? targetResourceType === "personal" : true;
+      const chosenSubject = subjectId || subjects[0]?.id || "";
+      const isPersonalType = !chosenSubject;
       const formData = new FormData();
       if (file) formData.append("file", file);
       formData.append("title", title || file?.name || (isPersonalType ? "Personal Study Note" : "Uploaded Lecture Material"));
       formData.append("description", description || (isPersonalType ? "Personal self-study note" : "Course lecture material"));
-      formData.append("subjectId", isPersonalType ? "personal" : (subjectId || subjects[0]?.id || "sub-101"));
+      formData.append("subjectId", isPersonalType ? "" : chosenSubject);
       formData.append("textInput", rawText);
       formData.append("uploadedBy", currentUser?.name || "Prof. Maria Santos");
       formData.append("uploaderRole", currentUser?.role || "teacher");
@@ -129,7 +198,7 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
       if (res.ok) {
         const newMat = await res.json();
         setMaterials([newMat, ...materials]);
-        setUploadMessage(
+        showToast(
           isPersonalType
             ? "Personal study material saved successfully to your repository!"
             : "Course material successfully published to enrolled students!"
@@ -147,12 +216,12 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
         } catch {
           // Non-JSON body (e.g. an HTML error page)
         }
-        setUploadMessage(errMessage);
+        showToast(errMessage, "error");
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("Upload error:", err);
-      setUploadMessage("Upload error: " + errorMsg);
+      showToast("Upload error: " + errorMsg, "error");
     } finally {
       setIsUploading(false);
     }
@@ -164,9 +233,48 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
       if (res.ok) {
         setMaterials((prev) => prev.filter((m) => m.id !== id));
         setDeleteConfirmMat(null);
+        showToast("Material deleted.");
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        showToast(errJson?.error || "Could not delete the material.", "error");
       }
     } catch (err) {
       console.error("Delete material error:", err);
+    }
+  };
+
+  const openAssignSubject = (mat: LearningMaterial) => {
+    setAssignSubjectMat(mat);
+    setAssignSubjectId(mat.subjectId ? mat.subjectId : "");
+
+  };
+
+  const handleAssignSubject = async () => {
+    if (!assignSubjectMat || !assignSubjectId) {
+      showToast("Please select an assigned subject.", "info");
+      return;
+    }
+    setIsAssigningSubject(true);
+
+    try {
+      const res = await authFetch(`/api/materials/${assignSubjectMat.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subjectId: assignSubjectId }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setMaterials((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+        setAssignSubjectMat(null);
+        showToast("Subject assigned to material.");
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        showToast(errJson?.error || "Could not assign the subject. Please try again.", "error");
+      }
+    } catch {
+      showToast("Could not assign the subject. Please try again.", "error");
+    } finally {
+      setIsAssigningSubject(false);
     }
   };
 
@@ -179,7 +287,7 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
   };
 
   // PDF Download Generator using jsPDF
-  const handleDownloadPDF = (mat: LearningMaterial) => {
+  const handleDownloadPDF = async (mat: LearningMaterial) => {
     const doc = new jsPDF({
       orientation: "portrait",
       unit: "mm",
@@ -191,54 +299,119 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
     const pageHeight = doc.internal.pageSize.getHeight();
     const maxLineWidth = pageWidth - margin * 2;
 
-    // Header Background
-    doc.setFillColor(15, 23, 42); // slate-900
-    doc.rect(0, 0, pageWidth, 28, "F");
+    // Embed Arial (regular + bold) so unicode characters get real glyphs and correct
+    // wrap metrics; fall back to the built-in Helvetica if the font fetch fails.
+    const fonts = await loadPdfFonts();
+    if (fonts) {
+      doc.addFileToVFS("ArialEmbed.ttf", fonts.regular);
+      doc.addFileToVFS("ArialEmbed-Bold.ttf", fonts.bold);
+      doc.addFont("ArialEmbed.ttf", "ArialEmbed", "normal");
+      doc.addFont("ArialEmbed-Bold.ttf", "ArialEmbed", "bold");
+    }
+    const baseFont = fonts ? "ArialEmbed" : "helvetica";
+    doc.setLineHeightFactor(1.5);
+    const mmPerPt = 25.4 / 72;
 
-    // Header Title
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(13);
+    // Title: each line drawn at its measured height so wrapped titles never collide
+    doc.setTextColor(30, 41, 59); // slate-800
+    doc.setFont(baseFont, "bold");
+    doc.setFontSize(14);
     const titleLines = doc.splitTextToSize(mat.title, maxLineWidth);
-    doc.text(titleLines, margin, 12);
+    const titleLineHeight = doc.getFontSize() * 1.5 * mmPerPt;
+    let cursorY = 16;
+    for (const line of titleLines) {
+      doc.text(line, margin, cursorY);
+      cursorY += titleLineHeight;
+    }
 
-    // Subtitle Info
-    doc.setFontSize(8);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(203, 213, 225); // slate-300
-    const subText = `Subject: ${mat.subjectName}  |  Uploaded by: ${mat.uploadedBy} (${
-      mat.uploaderRole === "teacher" ? "Faculty" : "Student"
-    })  |  Date: ${new Date(mat.createdAt).toLocaleDateString()}`;
-    doc.text(subText, margin, 22);
-
-    // Separator line
+    // Separator line (drawn below the whole title block so long titles never overlap it)
+    const sepY = 16 + titleLines.length * titleLineHeight + 4;
     doc.setDrawColor(226, 232, 240);
     doc.setLineWidth(0.5);
-    doc.line(margin, 32, pageWidth - margin, 32);
+    doc.line(margin, sepY, pageWidth - margin, sepY);
 
     // Text Body
-    doc.setTextColor(30, 41, 59); // slate-800
+    doc.setFont(baseFont, "normal");
     doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
+    const cleanText = (mat.extractedText || "No content available.")
+      .replace(/[\u00a0\u2007\u2009\u202f\u200b\ufeff]/g, " ")
+      .split("")
+      .map((ch) => {
+        const c = ch.charCodeAt(0);
+        if (c === 11 || c === 12 || c === 13) return "\n";
+        if ((c < 32 && c !== 9 && c !== 10) || (c >= 127 && c <= 159)) return "";
+        return ch;
+      })
+      .join("")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    const bodySegments = buildBoldSegments(cleanText);
 
-    const lines = doc.splitTextToSize(mat.extractedText || "No content available.", maxLineWidth);
-    let cursorY = 40;
-    const lineHeight = 5.5;
+    // Word-aware wrap of the segment stream into display lines. Tokens are measured
+    // under their own font so bold/normal runs share a correct line break. Every
+    // source line ends with a hard break (no line merging), and only width-wrapped
+    // continuation lines drop leading spaces; intentional indents are preserved.
+    const displayLines: PdfSegment[][] = [];
+    let cur: PdfSegment[] = [];
+    let curWidth = 0;
+    const flushLine = () => {
+      displayLines.push(cur);
+      cur = [];
+      curWidth = 0;
+    };
+    for (const seg of bodySegments) {
+      if (seg.text === "") {
+        if (cur.length > 0) flushLine();
+        displayLines.push([]);
+        continue;
+      }
+      doc.setFont(baseFont, seg.bold ? "bold" : "normal");
+      const tokens = seg.text.split(/(\s+)/).filter((t) => t !== "");
+      let firstInLine = true;
+      for (let token of tokens) {
+        if (cur.length === 0 && /^\s+$/.test(token) && !firstInLine) continue;
+        firstInLine = false;
+        // Hard-break tokens wider than the line (URLs, code, long runs) so nothing
+        // overflows the right margin: binary-search the largest prefix that fits.
+        while (doc.getTextWidth(token) > maxLineWidth && token.length > 1) {
+          let lo = 1;
+          let hi = token.length;
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            if (doc.getTextWidth(token.slice(0, mid)) <= maxLineWidth) lo = mid;
+            else hi = mid - 1;
+          }
+          if (cur.length > 0) flushLine();
+          cur.push({ text: token.slice(0, lo), bold: seg.bold });
+          flushLine();
+          token = token.slice(lo);
+        }
+        if (token === "") continue;
+        const tokenWidth = doc.getTextWidth(token);
+        if (curWidth + tokenWidth > maxLineWidth && cur.length > 0) flushLine();
+        cur.push({ text: token, bold: seg.bold });
+        curWidth += tokenWidth;
+      }
+      if (cur.length > 0) flushLine();
+    }
 
-    for (let i = 0; i < lines.length; i++) {
+    const lineHeight = doc.getFontSize() * 1.5 * mmPerPt;
+    cursorY = sepY + lineHeight + 3;
+
+    for (const line of displayLines) {
       if (cursorY + lineHeight > pageHeight - margin) {
         doc.addPage();
-        doc.setFillColor(248, 250, 252);
-        doc.rect(0, 0, pageWidth, 10, "F");
-        doc.setFontSize(8);
-        doc.setTextColor(100, 116, 139);
-        doc.text(`${mat.title} — StudyLens Course Note`, margin, 7);
-
-        cursorY = 18;
-        doc.setFontSize(10);
-        doc.setTextColor(30, 41, 59);
+        cursorY = 20;
       }
-      doc.text(lines[i], margin, cursorY);
+      if (line.length > 0) {
+        let x = margin;
+        for (const s of line) {
+          doc.setFont(baseFont, s.bold ? "bold" : "normal");
+          doc.text(s.text, x, cursorY);
+          x += doc.getTextWidth(s.text);
+        }
+      }
       cursorY += lineHeight;
     }
 
@@ -251,9 +424,6 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
   const handleDownloadTXT = (mat: LearningMaterial) => {
     const fileContent = `================================================
 ${mat.title}
-Subject: ${mat.subjectName}
-Uploaded By: ${mat.uploadedBy} (${mat.uploaderRole === "teacher" ? "Faculty" : "Student"})
-Date: ${new Date(mat.createdAt).toLocaleDateString()}
 ================================================\n\n` + mat.extractedText;
 
     const element = document.createElement("a");
@@ -321,7 +491,7 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
   };
 
   // Probe the original file BEFORE rendering so a missing/unreachable file never
-  // leaves a silently blank viewer — on failure we fall back to the extracted text.
+  // leaves a silently blank viewer - on failure we fall back to the extracted text.
   const preflightOriginalFile = async (mat: LearningMaterial) => {
     const url = resolveFileUrl(mat);
     if (!url) return;
@@ -337,17 +507,8 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
   const filteredMaterials = materials.filter((m) => {
     const matchesSubject = selectedSubject === "all" || m.subjectId === selectedSubject;
 
-    const isCourseMat =
-      m.materialType === "course" ||
-      (!m.materialType &&
-        (m.uploaderRole === "teacher" ||
-          m.uploadedBy?.startsWith("Prof.") ||
-          m.uploadedBy?.startsWith("Dr.")));
-
-    const isPersonalMat = m.materialType === "personal" || (!m.materialType && !isCourseMat);
-
     // Privacy Protection: Personal materials/notes are strictly private to the owner who uploaded them.
-    if (isPersonalMat) {
+    if (m.materialType === "personal") {
       const isOwner =
         (m.uploaderId && currentUser?.id && m.uploaderId === currentUser.id) ||
         (currentUser?.name && m.uploadedBy === currentUser.name) ||
@@ -355,76 +516,55 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
       if (!isOwner && currentUser?.role !== "admin") return false;
     }
 
-    if (!matchesSubject) return false;
-    if (sourceFilter === "teacher") return isCourseMat;
-    if (sourceFilter === "student") return isPersonalMat;
-    return true;
+    return matchesSubject;
   });
 
   // Derived original-file URL for the current preview (the exact uploaded file).
   const originalFileUrl = previewMaterial ? resolveFileUrl(previewMaterial) : null;
   const hasOriginalFile = !!originalFileUrl && isRenderableFileType(previewMaterial as LearningMaterial);
 
+  // AI-generated resources (fileType "ai-*") have no original uploaded file - the
+  // generated content itself IS the document, so the viewer shows it directly.
+  const isAiMaterial = (mat: LearningMaterial | null): boolean =>
+    !!mat && (mat.fileType || "").toLowerCase().startsWith("ai-");
+  const previewIsAi = isAiMaterial(previewMaterial);
+
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* 1. TOP HEADER BANNER OR TEACHER UPLOAD FORM */}
-      {currentUser?.role === "student" ? (
-        <div className="bg-gradient-to-r from-blue-50 via-purple-50/80 to-indigo-50/70 border border-blue-200/80 dark:from-blue-950/80 dark:via-purple-950/60 dark:to-slate-950 dark:border-blue-500/20 p-6 rounded-2xl shadow-xs space-y-3 transition-colors">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center space-x-2">
-                <span className="px-2.5 py-0.5 bg-purple-100 text-purple-700 border border-purple-200/80 dark:bg-purple-500/20 dark:text-purple-300 dark:border-purple-500/30 text-[10px] font-bold rounded-md uppercase tracking-wider flex items-center space-x-1">
-                  <BookOpen className="w-3 h-3 text-purple-600 dark:text-purple-400" />
-                  <span>Course & Personal Notes Repository</span>
-                </span>
-              </div>
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white">Learning & Lecture Materials</h2>
-              <p className="text-xs text-slate-600 dark:text-slate-300 max-w-2xl leading-relaxed">
-                Access official course materials uploaded by your professors, as well as your personal study notes. To upload or generate new study materials, head over to the <strong className="text-purple-700 dark:text-purple-300 font-bold">AI Study Generator</strong>.
-              </p>
-            </div>
+      {/* Toolbar */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        {currentUser?.role === "student" ? (
+          <button
+            onClick={() => onNavigate && onNavigate("ai-assistant")}
+            className="px-4 py-2.5 bg-[#5b51d8] hover:bg-[#4c42c9] text-white rounded-lg text-xs font-bold shadow-sm transition-all flex items-center space-x-2 shrink-0 cursor-pointer"
+          >
+            <Sparkles className="w-4 h-4 text-amber-300" />
+            <span>Create Notes in Resource Generator</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        ) : currentUser?.role === "teacher" ? (
+          <button
+            onClick={() => setShowUpload((prev) => !prev)}
+            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 shrink-0 cursor-pointer"
+          >
+            <Upload className="w-4 h-4" />
+            <span>{showUpload ? "Close Upload Form" : "Upload Material"}</span>
+          </button>
+        ) : null}
+      </div>
 
-            <button
-              onClick={() => onNavigate && onNavigate("ai-assistant")}
-              className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 self-start sm:self-center shrink-0 cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-amber-300" />
-              <span>Create Notes in AI Generator</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* Teacher / Admin Upload Form Box */
+      {currentUser?.role === "teacher" && showUpload && (
+        /* Teacher Upload Form Box */
         <div className="bg-card p-6 rounded-2xl border border-border shadow-xs space-y-4">
           <div className="flex items-center space-x-2 text-foreground">
             <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-lg">
               <Upload className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold">Upload Course Lecture Material (Faculty Portal)</h3>
-              <p className="text-xs text-muted-foreground">
-                Publish lecture files (PDF, DOCX, PPTX, TXT) for student access. StudyLens AI extracts and indexes document text automatically.
-              </p>
+              <h3 className="text-base font-bold">Upload Course Material</h3>
+              <p className="text-xs text-muted-foreground">Publish lecture files (PDF, DOCX, PPTX, TXT) for student access.</p>
             </div>
           </div>
-
-          {uploadMessage && (
-            <div
-              className={`p-3 rounded-xl text-xs font-semibold flex items-center space-x-2 ${
-                uploadMessage.includes("successfully")
-                  ? "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 border border-emerald-500/20"
-                  : "bg-rose-500/10 text-rose-800 dark:text-rose-200 border border-rose-500/20"
-              }`}
-            >
-              {uploadMessage.includes("successfully") ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              ) : (
-                <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
-              )}
-              <span>{uploadMessage}</span>
-            </div>
-          )}
 
           <form onSubmit={handleUpload} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div className="space-y-3">
@@ -441,56 +581,21 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
 
               {currentUser?.role === "teacher" && (
                 <div className="space-y-2">
-                  <label className="block font-semibold text-foreground">Target Resource Purpose / Format</label>
-                  <div className="grid grid-cols-2 gap-2 p-1 bg-muted/60 rounded-xl border border-border">
-                    <button
-                      type="button"
-                      onClick={() => setTargetResourceType("course")}
-                      className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
-                        targetResourceType === "course"
-                          ? "bg-blue-600 text-white shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      <BookOpen className="w-3.5 h-3.5" />
-                      <span>Course Subject Material</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setTargetResourceType("personal")}
-                      className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
-                        targetResourceType === "personal"
-                          ? "bg-purple-600 text-white shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      <User className="w-3.5 h-3.5" />
-                      <span>Personal Self-Study Note</span>
-                    </button>
-                  </div>
-
-                  {targetResourceType === "course" ? (
-                    <div>
-                      <label className="block font-semibold text-foreground mb-1">Enrolled Course Subject</label>
-                      <select
-                        value={subjectId}
-                        onChange={(e) => setSubjectId(e.target.value)}
-                        className="w-full px-3 py-2 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-card text-foreground"
-                      >
-                        {subjects.map((sub) => (
-                          <option key={sub.id} value={sub.id}>
-                            {sub.code} — {sub.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : (
-                    <div className="p-2.5 bg-purple-500/10 border border-purple-500/20 text-purple-700 dark:text-purple-300 text-[11px] font-semibold rounded-xl flex items-center space-x-2">
-                      <User className="w-4 h-4 text-purple-500 shrink-0" />
-                      <span>This file will be saved as your personal study resource (separate from course subjects).</span>
-                    </div>
-                  )}
+                  <label className="block font-semibold text-foreground mb-1">Assigned Course Subject</label>
+                  <select
+                    value={subjectId}
+                    onChange={(e) => setSubjectId(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-card text-foreground"
+                  >
+                    {subjects.map((sub) => (
+                      <option key={sub.id} value={sub.id}>
+                        {sub.code} - {sub.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-muted-foreground">
+                    The material is published to students of the selected subject.
+                  </p>
                 </div>
               )}
 
@@ -550,8 +655,6 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
                 <span>
                   {isUploading
                     ? "Extracting Text & Processing..."
-                    : currentUser?.role === "teacher" && targetResourceType === "personal"
-                    ? "Save Personal Self-Study Note"
                     : "Publish Course Material to Students"}
                 </span>
               </button>
@@ -564,38 +667,9 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
       <div className="bg-card p-6 rounded-2xl border border-border shadow-xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
           <div className="inline-flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border w-fit max-w-full overflow-x-auto shrink-0">
-            <button
-              onClick={() => setSourceFilter("all")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                sourceFilter === "all"
-                  ? "bg-card text-foreground shadow-xs border border-border"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              All ({materials.length})
-            </button>
-            <button
-              onClick={() => setSourceFilter("teacher")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center space-x-1.5 cursor-pointer ${
-                sourceFilter === "teacher"
-                  ? "bg-blue-600 text-white shadow-xs"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <UserCheck className="w-3.5 h-3.5" />
-              <span>Enrolled Course Subjects</span>
-            </button>
-            <button
-              onClick={() => setSourceFilter("student")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center space-x-1.5 cursor-pointer ${
-                sourceFilter === "student"
-                  ? "bg-purple-600 text-white shadow-xs"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <User className="w-3.5 h-3.5" />
-              <span>Personal Notes & Self-Study</span>
-            </button>
+            <span className="px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap bg-card text-foreground shadow-xs border border-border">
+              All Materials ({filteredMaterials.length})
+            </span>
           </div>
 
           <div className="flex items-center space-x-2">
@@ -608,7 +682,7 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
               <option value="all">All Subjects</option>
               {subjects.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.code} — {s.name}
+                  {s.code} - {s.name}
                 </option>
               ))}
             </select>
@@ -621,112 +695,117 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
             <FileText className="w-10 h-10 text-muted-foreground mx-auto opacity-50" />
             <p className="text-sm font-bold text-foreground">No materials found in this section</p>
             <p className="text-xs text-muted-foreground">
-              Try selecting "All Materials" or switching subjects in the filter above.
+              Try selecting "All Subjects" in the filter above.
             </p>
           </div>
         ) : (
+          <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredMaterials.map((mat) => {
-              const isCourseMaterial =
-                mat.materialType === "course" ||
-                (!mat.materialType &&
-                  (mat.uploaderRole === "teacher" ||
-                    mat.uploadedBy?.startsWith("Prof.") ||
-                    mat.uploadedBy?.startsWith("Dr.")));
+            {slicePage(filteredMaterials, materialPage).map((mat) => {
               const isDownloaded = downloadedIds.has(mat.id);
+              const canAssignSubject =
+                currentUser?.role === "teacher" &&
+                mat.uploaderId === currentUser?.id &&
+                mat.uploaderRole !== "student";
 
               return (
                 <div
                   key={mat.id}
-                  className={`p-4 rounded-xl border transition-all space-y-3 flex flex-col justify-between ${
-                    isCourseMaterial
-                      ? "bg-blue-500/5 border-blue-500/20 hover:border-blue-500/50"
-                      : "bg-purple-500/5 border-purple-500/20 hover:border-purple-500/50"
-                  }`}
+                  onClick={() => openPreview(mat, "file")}
+                  className="p-4 rounded-xl border border-border transition-all space-y-3 flex flex-col justify-between bg-card hover:border-blue-500/40 cursor-pointer"
+                  title="Click to view this material"
                 >
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      {isCourseMaterial ? (
-                        <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-700 dark:text-blue-300 font-bold text-[10px] uppercase tracking-wider flex items-center space-x-1 border border-blue-500/30">
-                          <UserCheck className="w-3 h-3 text-blue-500" />
-                          <span>Course Subject Material</span>
+                      {mat.subjectName ? (
+                        <span className="px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold uppercase tracking-wider border border-blue-500/20">
+                          {mat.subjectName}
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-700 dark:text-purple-300 font-bold text-[10px] uppercase tracking-wider flex items-center space-x-1 border border-purple-500/30">
-                          <User className="w-3 h-3 text-purple-500" />
-                          <span>Personal Study Note</span>
+                        <span className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 font-mono text-[10px] font-bold uppercase tracking-wider border border-amber-500/30">
+                          Unassigned
                         </span>
                       )}
 
                       <div className="flex items-center space-x-1.5">
-                        {isDownloaded && (
-                          <span className="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-[9px] rounded flex items-center space-x-1 border border-emerald-500/30">
-                            <CheckCircle2 className="w-2.5 h-2.5" />
-                            <span>Downloaded</span>
-                          </span>
-                        )}
-                        <span className="text-[10px] text-muted-foreground font-mono">{mat.fileSize || "1.2 MB"}</span>
-                        {(currentUser?.role === "teacher" || currentUser?.role === "admin" || mat.uploaderId === currentUser?.id || mat.materialType === "personal") && (
+                        {mat.fileSize && <span className="text-[10px] text-muted-foreground font-mono">{mat.fileSize}</span>}
+                        {(currentUser?.role === "teacher" && mat.uploaderId === currentUser?.id) && (
                           <button
-                            onClick={() => setDeleteConfirmMat(mat)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirmMat(mat);
+                            }}
                             className="text-muted-foreground hover:text-rose-600 transition-colors p-1.5 hover:bg-rose-500/10 rounded-lg cursor-pointer"
                             title="Delete Material"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         )}
+
                       </div>
                     </div>
 
                     <h4 className="text-sm font-bold text-foreground line-clamp-1">{mat.title}</h4>
                     <p className="text-xs text-muted-foreground line-clamp-2">{mat.description}</p>
-                    <p className="text-[10px] font-semibold text-primary">{mat.subjectName}</p>
                   </div>
 
                   <div className="pt-3 border-t border-border space-y-2">
-                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span className="font-medium text-foreground">Uploaded by: {mat.uploadedBy}</span>
+                    <div className="flex items-center justify-end text-[10px] text-muted-foreground">
                       <span>{new Date(mat.createdAt).toLocaleDateString()}</span>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-1.5 pt-1">
+                    <div className="grid grid-cols-1 gap-1.5 pt-1">
                       <button
-                        onClick={() => openPreview(mat, "file")}
-                        className="py-1.5 bg-muted hover:bg-muted/80 text-foreground rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center space-x-1 cursor-pointer"
-                      >
-                        <Eye className="w-3 h-3 text-slate-500" />
-                        <span>View</span>
-                      </button>
-
-                      <button
-                        onClick={() => setDownloadModalMaterial(mat)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDownloadModalMaterial(mat);
+                        }}
                         className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center space-x-1 cursor-pointer border border-slate-700"
                         title="Download material notes in PDF or TXT format"
                       >
                         <Download className="w-3 h-3 text-emerald-400" />
                         <span>{isDownloaded ? "Saved" : "Download"}</span>
                       </button>
-
-                      <button
-                        onClick={() => onGenerateResource && onGenerateResource(mat)}
-                        className="py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold shadow-2xs transition-all flex items-center justify-center space-x-1 cursor-pointer"
-                      >
-                        <Sparkles className="w-3 h-3 text-blue-200" />
-                        <span>AI Tools</span>
-                      </button>
                     </div>
+
+                    {canAssignSubject && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openAssignSubject(mat);
+                        }}
+                        className="w-full py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center space-x-1 cursor-pointer border border-indigo-500/20"
+                        title={mat.subjectId ? "Change the assigned subject" : "Assign this material to an assigned subject"}
+                      >
+                        <BookOpen className="w-3 h-3" />
+                        <span>{mat.subjectId ? "Change Subject" : "Assign Subject"}</span>
+                      </button>
+                    )}
+
                   </div>
                 </div>
               );
             })}
           </div>
+          <Pagination
+            page={materialPage}
+            total={filteredMaterials.length}
+            onPageChange={setMaterialPage}
+          />
+          </>
         )}
+
       </div>
 
       {/* 3. PDF DOCUMENT READER MODAL (VIEWING MATERIAL AS FORMATTED PDF DOCUMENT) */}
       {previewMaterial && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-card rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-border space-y-4 max-h-[90vh] flex flex-col">
+        <div
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPreviewMaterial(null);
+          }}
+        >
+          <div className="bg-card rounded-2xl max-w-3xl w-full p-6 shadow-xl border border-border space-y-4 max-h-[90vh] flex flex-col">
             {/* Document Reader Bar Header */}
             <div className="flex items-center justify-between border-b border-border pb-3 bg-slate-900 -mx-6 -mt-6 p-5 rounded-t-2xl text-white">
               <div className="flex items-center space-x-3">
@@ -735,11 +814,16 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
                 </div>
                 <div>
                   <div className="flex items-center space-x-2">
-                    <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold text-[10px] uppercase tracking-wider flex items-center space-x-1">
-                      <FileCheck className="w-3 h-3 text-rose-400" />
-                      <span>Document Reader</span>
-                    </span>
-                    <span className="text-[11px] text-slate-300 font-semibold">{previewMaterial.subjectName}</span>
+                    {!previewIsAi && (
+                      <span className="text-[11px] text-slate-300 font-semibold">{previewMaterial.subjectName || "Unassigned"}</span>
+                    )}
+
+                    {previewMaterial.fileType && !previewIsAi && (
+                      <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 bg-rose-500/20 text-rose-300 rounded-md border border-rose-500/30">
+                        {previewMaterial.fileType.toUpperCase()}
+                      </span>
+                    )}
+
                   </div>
                   <h3 className="text-base font-bold mt-0.5 text-white">{previewMaterial.title}</h3>
                 </div>
@@ -757,8 +841,9 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
 
             {/* Document Reader Content */}
             <div className="flex-1 overflow-y-auto p-6 bg-slate-100 dark:bg-slate-950 rounded-xl border border-border space-y-4 shadow-inner">
-              {/* View Tabs */}
-              <div className="flex items-center gap-1.5">
+              {/* View Tabs (hidden for AI-generated resources - no original file exists) */}
+              {!previewIsAi && (
+                <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => { setFilePreviewError(false); setPreviewTab("file"); if (previewMaterial) preflightOriginalFile(previewMaterial); }}
                   disabled={!hasOriginalFile}
@@ -781,6 +866,7 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
                   Extracted Text
                 </button>
               </div>
+              )}
 
               {/* ORIGINAL FILE VIEW (PDF iframe / image / video) */}
               {previewTab === "file" && hasOriginalFile && !filePreviewError && (
@@ -820,19 +906,12 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
                   <p className="text-xs text-slate-500">
                     Showing the extracted document text below instead.
                   </p>
-                  {originalFileUrl && (
-                    <button
-                      onClick={() => handleOpenOriginalFile(previewMaterial)}
-                      className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold cursor-pointer"
-                    >
-                      Open Original File
-                    </button>
-                  )}
                 </div>
               )}
 
-              {/* FALLBACK: non-renderable file type with a link to open the original */}
-              {previewTab === "file" && !hasOriginalFile && (
+              {/* FALLBACK: non-renderable uploaded file type with a link to open the original.
+                  Not shown for AI-generated resources (they have no original file). */}
+              {previewTab === "file" && !hasOriginalFile && !previewIsAi && (
                 <div className="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800 shadow-md max-w-2xl mx-auto text-center space-y-4">
                   <FileCode className="w-10 h-10 text-slate-400 mx-auto" />
                   <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
@@ -841,48 +920,55 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
                   <p className="text-xs text-slate-500">
                     Open the original uploaded file to view its exact contents.
                   </p>
-                  {originalFileUrl && (
-                    <button
-                      onClick={() => handleOpenOriginalFile(previewMaterial)}
-                      className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold cursor-pointer"
-                    >
-                      Open Original File
-                    </button>
-                  )}
                 </div>
               )}
 
               {/* EXTRACTED TEXT VIEW (paper style) */}
               {(previewTab === "text" || !hasOriginalFile || filePreviewError) && (
                 <div className="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800 shadow-md space-y-6 max-w-2xl mx-auto">
-                  {/* Paper Page Decorative Header */}
+                  {/* Paper Page Header */}
                   <div className="border-b border-slate-200 dark:border-slate-800 pb-4 flex justify-between items-end">
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
-                        StudyLens Course Material Document
-                      </p>
+                      {!previewIsAi && (
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
+                          {previewMaterial.subjectName || "Unassigned"}
+                          {previewMaterial.fileType ? ` Â· ${previewMaterial.fileType.toUpperCase()}` : ""}
+                        </p>
+                      )}
+
                       <h2 className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
                         {previewMaterial.title}
                       </h2>
                     </div>
-                    <div className="text-right text-[10px] text-slate-500 font-mono">
-                      <p>Uploaded: {new Date(previewMaterial.createdAt).toLocaleDateString()}</p>
-                      <p className="font-bold text-slate-700 dark:text-slate-300">{previewMaterial.uploadedBy}</p>
-                    </div>
+                    {!previewIsAi && (
+                      <div className="text-right text-[10px] text-slate-500 font-mono">
+                        <p>Uploaded: {new Date(previewMaterial.createdAt).toLocaleDateString()}</p>
+                        <p className="font-bold text-slate-700 dark:text-slate-300">{previewMaterial.uploadedBy}</p>
+                        {previewMaterial.fileSize && <p>{previewMaterial.fileSize}</p>}
+                      </div>
+                    )}
+
                   </div>
 
                   {/* Content Body */}
-                  <div className="text-xs text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-sans font-normal tracking-wide">
+                  <div className="text-[13px] text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-7 font-sans font-normal tracking-wide">
                     {previewMaterial.extractedText || "No readable document text available."}
                   </div>
 
-                  {/* Paper Page Footer */}
-                  <div className="border-t border-slate-200 dark:border-slate-800 pt-3 flex items-center justify-between text-[10px] text-slate-400 font-mono">
-                    <span>Subject: {previewMaterial.subjectName}</span>
-                    <span>Page 1 of 1 • StudyLens Extracted Document Text</span>
-                  </div>
+                  {/* Decorative Page Footer (hidden for AI-generated resources) */}
+                  {!previewIsAi && (
+                    <div className="border-t border-slate-200 dark:border-slate-800 pt-4 flex items-center justify-center gap-2">
+                      <span className="w-8 h-px bg-slate-300 dark:bg-slate-700" />
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+                        StudyLens Learning Materials
+                      </p>
+                      <span className="w-8 h-px bg-slate-300 dark:bg-slate-700" />
+                    </div>
+                    )}
+
                 </div>
               )}
+
             </div>
 
             {/* Bottom Actions Bar */}
@@ -916,33 +1002,27 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
               </div>
 
               <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setPreviewMaterial(null)}
-                  className="px-4 py-2 border border-border rounded-xl font-semibold text-muted-foreground hover:bg-muted text-xs cursor-pointer"
-                >
-                  Close Reader
-                </button>
-                <button
-                  onClick={() => {
-                    const m = previewMaterial;
-                    setPreviewMaterial(null);
-                    if (onGenerateResource) onGenerateResource(m);
-                  }}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-xs text-xs flex items-center space-x-1 cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Generate AI Study Tools</span>
-                </button>
-              </div>
+              <button
+                onClick={() => setPreviewMaterial(null)}
+                className="px-4 py-2 border border-border rounded-xl font-semibold text-muted-foreground hover:bg-muted text-xs cursor-pointer"
+              >
+                Close Reader
+              </button>
             </div>
           </div>
         </div>
+      </div>
       )}
 
       {/* 4. CHOOSE DOWNLOAD FORMAT MODAL */}
       {downloadModalMaterial && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-2xl border border-border space-y-5">
+        <div
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDownloadModalMaterial(null);
+          }}
+        >
+          <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-xl border border-border space-y-5">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div className="flex items-center space-x-2">
                 <div className="p-2 bg-emerald-500/10 text-emerald-600 rounded-xl">
@@ -957,7 +1037,7 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
                 onClick={() => setDownloadModalMaterial(null)}
                 className="text-muted-foreground hover:text-foreground font-bold text-lg cursor-pointer"
               >
-                ✕
+                âœ•
               </button>
             </div>
 
@@ -983,7 +1063,7 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
                       PDF Document (.pdf)
                     </p>
                     <p className="text-[10px] text-muted-foreground">
-                      Formatted printable PDF with page headers & layout metadata
+                      Formatted printable PDF document
                     </p>
                   </div>
                 </div>
@@ -1026,10 +1106,75 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
         </div>
       )}
 
+      {/* Assign Subject Modal (teacher assigns a subject to an uploaded material) */}
+      {assignSubjectMat && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setAssignSubjectMat(null);
+          }}
+        >
+          <div className="bg-card border border-border rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex items-center space-x-3 text-indigo-600 dark:text-indigo-400">
+              <div className="p-3 bg-indigo-500/10 rounded-2xl border border-indigo-500/20">
+                <BookOpen className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-foreground">Assign Course Subject</h3>
+                <p className="text-xs text-muted-foreground">
+                  Choose the assigned subject for "{assignSubjectMat.title}"
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-muted/40 border border-border rounded-xl space-y-3 text-xs">
+              <label className="block font-semibold text-foreground">Assigned Course Subject</label>
+              <select
+                value={assignSubjectId}
+                onChange={(e) => setAssignSubjectId(e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-card text-foreground"
+              >
+                <option value="">-- Select Assigned Subject --</option>
+                {subjects.map((sub) => (
+                  <option key={sub.id} value={sub.id}>
+                    {sub.code} - {sub.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-muted-foreground">
+                Students of the selected subject will see this material.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
+              <button
+                onClick={() => setAssignSubjectMat(null)}
+                className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground font-semibold rounded-xl text-xs cursor-pointer transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAssignSubject}
+                disabled={isAssigningSubject || !assignSubjectId}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold rounded-xl text-xs shadow-md transition-colors cursor-pointer flex items-center space-x-1.5"
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>{isAssigningSubject ? "Assigning..." : "Assign Subject"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete Confirmation Warning Modal */}
       {deleteConfirmMat && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-card border border-border rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95">
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDeleteConfirmMat(null);
+          }}
+        >
+          <div className="bg-card border border-border rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95">
             <div className="flex items-center space-x-3 text-rose-600 dark:text-rose-400">
               <div className="p-3 bg-rose-500/10 rounded-2xl border border-rose-500/20">
                 <Trash2 className="w-6 h-6" />
@@ -1065,6 +1210,7 @@ Date: ${new Date(mat.createdAt).toLocaleDateString()}
           </div>
         </div>
       )}
+
     </div>
   );
 };
