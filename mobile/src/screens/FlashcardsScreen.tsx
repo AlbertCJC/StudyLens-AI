@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Animated } from 'react-native';
-import { Layers, ChevronLeft, ChevronRight, RotateCw, Sparkles, Shuffle } from 'lucide-react-native';
-import { fetchFlashcards, FlashcardDeck } from '../services/api';
+import { Layers, ChevronLeft, ChevronRight, RotateCw, Sparkles, Shuffle, Trash2 } from 'lucide-react-native';
+import { fetchFlashcards, deleteFlashcardDeck, FlashcardDeck } from '../services/api';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { Card, Badge, PrimaryButton, LoadingView, EmptyState } from '../components/ui';
 
 function shuffle<T>(arr: T[]): T[] {
@@ -18,10 +19,12 @@ function shuffle<T>(arr: T[]): T[] {
 export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: string) => void }) {
   const { colors } = useTheme();
   const { currentUser } = useAuth();
+  const { showToast } = useToast();
 
   const [decks, setDecks] = useState<FlashcardDeck[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -95,6 +98,24 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
     flipAnim.setValue(0);
     setExplain(null);
   };
+
+  const handleDeleteDeck = async (deck: FlashcardDeck) => {
+    try {
+      await deleteFlashcardDeck(deck.id);
+      setDecks((prev) => prev.filter((d) => d.id !== deck.id));
+      if (selectedDeckId === deck.id) setSelectedDeckId(null);
+      setConfirmDeleteId(null);
+      showToast('Deck deleted.');
+    } catch (err) {
+      showToast((err as Error).message || 'Could not delete the deck.', 'error');
+      setConfirmDeleteId(null);
+    }
+  };
+
+  const canDeleteDeck = (deck: FlashcardDeck) =>
+    currentUser?.role === 'teacher' ||
+    currentUser?.role === 'admin' ||
+    deck.createdById === currentUser?.id;
 
   if (loading) return <LoadingView label="Loading flashcards..." />;
 
@@ -209,8 +230,36 @@ export default function FlashcardsScreen({ onNavigate }: { onNavigate: (tab: str
                 <View style={styles.deckMeta}>
                   <Badge text={`${d.cards.length} Cards`} color={colors.primary} />
                 </View>
-                <View style={styles.deckActions}>
-                  <PrimaryButton label="Start Studying" onPress={() => enterDeck(d)} style={{ flex: 1 }} />
+                <View style={[styles.deckActions, confirmDeleteId === d.id && { flexDirection: 'column', gap: 8 }]}>
+                  {confirmDeleteId === d.id ? (
+                    <View style={styles.confirmRow}>
+                      <TouchableOpacity
+                        onPress={() => handleDeleteDeck(d)}
+                        style={[styles.confirmBtn, { backgroundColor: colors.danger }]}
+                      >
+                        <Trash2 size={14} color="#fff" />
+                        <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>Confirm Delete</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setConfirmDeleteId(null)}
+                        style={[styles.confirmBtn, { backgroundColor: colors.surfaceAlt, borderColor: colors.border, borderWidth: 1 }]}
+                      >
+                        <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '800' }}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <>
+                      <PrimaryButton label="Start Studying" onPress={() => enterDeck(d)} style={{ flex: 1 }} />
+                      {canDeleteDeck(d) && (
+                        <TouchableOpacity
+                          onPress={() => setConfirmDeleteId(d.id)}
+                          style={[styles.deleteBtn, { backgroundColor: 'rgba(239,68,68,0.12)' }]}
+                        >
+                          <Trash2 size={16} color={colors.danger} />
+                        </TouchableOpacity>
+                      )}
+                    </>
+                  )}
                 </View>
               </Card>
             );
@@ -231,11 +280,14 @@ const styles = StyleSheet.create({
   deckTitle: { fontSize: 14, fontWeight: '800' },
   deckMeta: { flexDirection: 'row', gap: 6 },
   deckActions: { flexDirection: 'row', gap: 10 },
+  confirmRow: { flexDirection: 'row', gap: 8 },
+  confirmBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+  deleteBtn: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   playerWrap: { padding: 16, paddingBottom: 40, gap: 18, flexGrow: 1 },
   playerHead: { gap: 10 },
   playerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   backBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  flipPress: { flex: 1, minHeight: 320, borderWidth: 1, borderRadius: 28, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 9 },
+  flipPress: { flex: 1, minHeight: 320, borderWidth: 1, borderRadius: 28, overflow: 'hidden', boxShadow: '0 8px 14px rgba(0, 0, 0, 0.15)', elevation: 9 },
   flipFace: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   hiddenFace: { opacity: 0 },
   faceWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 26, borderRadius: 28 },

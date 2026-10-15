@@ -22,6 +22,10 @@ import {
   UserCheck,
   ChevronRight,
   ChevronDown,
+  Flag,
+  History,
+  CheckCircle2,
+  RefreshCw,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useAnnouncements, type AnnouncementItem } from "../../context/AnnouncementsContext";
@@ -32,6 +36,7 @@ import { authFetch } from "../../utils/authFetch";
 import type {
   Subject,
   LearningMaterial,
+  MaterialFlag,
   Quiz,
   QuizQuestion,
   DifficultyLevel,
@@ -102,6 +107,18 @@ export const SubjectDetailPage: React.FC = () => {
   const [materials, setMaterials] = useState<LearningMaterial[]>([]);
   const [materialsLoading, setMaterialsLoading] = useState(true);
 
+  // Material flags (review workflow)
+  const [materialFlags, setMaterialFlags] = useState<MaterialFlag[]>([]);
+  const [viewingFlags, setViewingFlags] = useState<LearningMaterial | null>(null);
+  const [resolvingFlag, setResolvingFlag] = useState<MaterialFlag | null>(null);
+  const [resolutionNote, setResolutionNote] = useState("");
+  const [resolving, setResolving] = useState(false);
+  const [flagTarget, setFlagTarget] = useState<LearningMaterial | null>(null);
+  const [flagCategory, setFlagCategory] = useState("Wrong file");
+  const [flagNote, setFlagNote] = useState("");
+  const [flagSubmitting, setFlagSubmitting] = useState(false);
+  const highlightMaterialId = searchParams.get("material");
+
   // Quizzes
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [quizzesLoading, setQuizzesLoading] = useState(true);
@@ -160,6 +177,71 @@ export const SubjectDetailPage: React.FC = () => {
   const [annPage, setAnnPage] = useState(1);
   const [peoplePage, setPeoplePage] = useState(1);
 
+  // Flag review helpers
+  const flagsForMaterial = (id: string): MaterialFlag[] => materialFlags.filter((f) => f.materialId === id);
+
+  const reloadFlags = async () => {
+    try {
+      const res = await authFetch("/api/material-flags");
+      if (res.ok) setMaterialFlags((await res.json()) as MaterialFlag[]);
+    } catch (err) {
+      console.error("Reload flags error:", err);
+    }
+  };
+
+  const handleFlagMaterial = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!flagTarget) return;
+    setFlagSubmitting(true);
+    try {
+      const res = await authFetch(`/api/materials/${flagTarget.id}/flag`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: flagCategory, note: flagNote.trim() }),
+      });
+      if (res.ok) {
+        showToast(`Flagged "${flagTarget.title}" for review. The teacher has been notified.`, "success");
+        setFlagTarget(null);
+        setFlagNote("");
+        setFlagCategory("Wrong file");
+        await reloadFlags();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data?.error || "Could not flag the material.", "error");
+      }
+    } catch {
+      showToast("Could not flag the material.", "error");
+    } finally {
+      setFlagSubmitting(false);
+    }
+  };
+
+  const handleResolveFlag = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resolvingFlag) return;
+    setResolving(true);
+    try {
+      const res = await authFetch(`/api/material-flags/${resolvingFlag.id}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolutionNote: resolutionNote.trim() }),
+      });
+      if (res.ok) {
+        showToast("Flag marked as resolved. The admin has been notified.", "success");
+        setResolvingFlag(null);
+        setResolutionNote("");
+        await reloadFlags();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data?.error || "Could not resolve the flag.", "error");
+      }
+    } catch {
+      showToast("Could not resolve the flag.", "error");
+    } finally {
+      setResolving(false);
+    }
+  };
+
   useEffect(() => {
     let active = true;
     (async () => {
@@ -186,17 +268,21 @@ export const SubjectDetailPage: React.FC = () => {
     if (!subject || !currentUser) return;
     let active = true;
     (async () => {
-      const [sRes, mRes, qRes, gRes] = await Promise.all([
+      const [sRes, mRes, qRes, gRes, fRes] = await Promise.all([
         authFetch(`/api/subjects/${subject.id}/students`),
         authFetch(`/api/materials?userId=${currentUser.id || ""}&userRole=${currentUser.role || ""}`),
         authFetch(`/api/quizzes?userId=${currentUser.id || ""}&userRole=${currentUser.role || ""}`),
         authFetch(`/api/subjects/${subject.id}/grades`),
+        authFetch("/api/material-flags"),
       ]);
       if (!active) return;
       if (sRes.ok) setStudents((await sRes.json()) as EnrolledStudent[]);
       if (mRes.ok) {
         const all = (await mRes.json()) as LearningMaterial[];
         setMaterials(all.filter((m) => m.subjectId === subject.id));
+        if (highlightMaterialId && all.some((m) => m.id === highlightMaterialId)) {
+          setActiveTab("materials");
+        }
       }
       if (qRes.ok) {
         const all = (await qRes.json()) as Quiz[];
@@ -206,6 +292,7 @@ export const SubjectDetailPage: React.FC = () => {
         setQuizzes(all.filter((q) => q.subjectId === subject.id && (staff || q.isPublished !== false)));
       }
       if (gRes.ok) setGrades((await gRes.json()) as SubjectGrades);
+      if (fRes.ok) setMaterialFlags((await fRes.json()) as MaterialFlag[]);
       setStudentsLoading(false);
       setMaterialsLoading(false);
       setQuizzesLoading(false);
@@ -214,7 +301,7 @@ export const SubjectDetailPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [subject, currentUser]);
+  }, [subject, currentUser, highlightMaterialId]);
 
   // Admin only: load the student directory for assignment + load subject grades.
   useEffect(() => {
@@ -898,60 +985,155 @@ export const SubjectDetailPage: React.FC = () => {
             </p>
           ) : (
             <>
+            {highlightMaterialId && materials.some((m) => m.id === highlightMaterialId) && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/10 border border-primary/40 text-xs font-semibold text-primary">
+                <Flag className="w-3.5 h-3.5" />
+                <span>
+                  Reviewing "{materials.find((m) => m.id === highlightMaterialId)?.title}" from your notification.
+                </span>
+              </div>
+            )}
             <div className="space-y-2.5">
-              {slicePage(materials, matPage).map((mat) => (
+              {slicePage(materials, matPage).map((mat) => {
+                const matFlags = flagsForMaterial(mat.id);
+                const pendingFlag = matFlags.find((f) => f.status === "pending");
+                const resolvedFlags = matFlags.filter((f) => f.status === "resolved");
+                const highlighted = mat.id === highlightMaterialId;
+                return (
                 <div
                   key={mat.id}
-                  onClick={() => setViewingMaterial(mat)}
-                  className="flex items-center justify-between p-3.5 rounded-xl border border-border bg-muted/30 gap-3 cursor-pointer hover:border-primary/50 hover:bg-muted/50 transition-all"
-                  title="View material"
+                  className={`rounded-xl border transition-all ${
+                    pendingFlag
+                      ? "border-amber-500/50 bg-amber-500/5"
+                      : "border-border bg-muted/30"
+                  } ${highlighted ? "ring-2 ring-primary/60" : ""}`}
                 >
-                  <div className="flex items-center space-x-3 min-w-0">
-                    <div className="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-                      <FileText className="w-4 h-4" />
+                  <div
+                    onClick={() => setViewingMaterial(mat)}
+                    className="flex items-center justify-between p-3.5 rounded-xl gap-3 cursor-pointer hover:bg-muted/50 transition-all"
+                    title="View material"
+                  >
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-foreground truncate">{mat.title}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">
+                          {mat.fileType?.toUpperCase() || "TEXT"} {mat.fileSize ? `• ${mat.fileSize}` : ""}
+                        </p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-foreground truncate">{mat.title}</p>
-                      <p className="text-[10px] text-muted-foreground truncate">
-                        {mat.fileType?.toUpperCase() || "TEXT"} {mat.fileSize ? `• ${mat.fileSize}` : ""}
-                      </p>
+                    <div className="flex items-center space-x-1 shrink-0">
+                      {resolveFileUrl(mat) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isRenderable(mat)) openFile(mat);
+                            else downloadMaterialAsPdf(mat);
+                          }}
+                          className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
+                          title={isRenderable(mat) ? "Open" : "Download as PDF"}
+                        >
+                          {isRenderable(mat) ? <Eye className="w-4 h-4" /> : <Download className="w-4 h-4" />}
+                        </button>
+                      )}
+                      {currentUser?.role === "admin" && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFlagTarget(mat);
+                            setFlagCategory("Wrong file");
+                            setFlagNote("");
+                          }}
+                          disabled={!!pendingFlag}
+                          className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={pendingFlag ? "Already flagged" : "Flag for review"}
+                        >
+                          <Flag className="w-4 h-4" />
+                        </button>
+                      )}
+                      {canManage && (
+                        <>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openEditMaterial(mat); }}
+                            className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer"
+                            title="Edit Material"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setMaterialToDelete(mat); }}
+                            className="p-2 text-rose-600 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
+                            title="Delete Material"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <div className="flex items-center space-x-1 shrink-0">
-                    {resolveFileUrl(mat) && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isRenderable(mat)) openFile(mat);
-                          else downloadMaterialAsPdf(mat);
-                        }}
-                        className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
-                        title={isRenderable(mat) ? "Open" : "Download as PDF"}
-                      >
-                        {isRenderable(mat) ? <Eye className="w-4 h-4" /> : <Download className="w-4 h-4" />}
-                      </button>
-                    )}
-                    {canManage && (
-                      <>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openEditMaterial(mat); }}
-                          className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer"
-                          title="Edit Material"
+
+                  {matFlags.length > 0 && (
+                    <div className="px-3.5 pb-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-start space-x-2 min-w-0">
+                        <span
+                          className={`p-1 rounded-lg shrink-0 ${
+                            pendingFlag
+                              ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                              : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          }`}
                         >
-                          <Pencil className="w-4 h-4" />
-                        </button>
+                          {pendingFlag ? <Flag className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+                        </span>
+                        <div className="min-w-0">
+                          {pendingFlag ? (
+                            <p className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 leading-snug">
+                              Pending review · {pendingFlag.category}
+                              {pendingFlag.note ? ` — "${pendingFlag.note}"` : ""}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 leading-snug">
+                              Resolved · {resolvedFlags.length} flag{resolvedFlags.length > 1 ? "s" : ""} addressed
+                            </p>
+                          )}
+                          <p className="text-[10px] text-muted-foreground">
+                            Flagged by {pendingFlag?.flaggedByName || resolvedFlags[resolvedFlags.length - 1]?.flaggedByName || "Admin"}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-1.5 shrink-0">
                         <button
-                          onClick={(e) => { e.stopPropagation(); setMaterialToDelete(mat); }}
-                          className="p-2 text-rose-600 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
-                          title="Delete Material"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setViewingFlags(mat);
+                          }}
+                          className="px-2.5 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                          title="View flag history"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <History className="w-3 h-3" />
+                          <span>History</span>
                         </button>
-                      </>
-                    )}
-                  </div>
+                        {pendingFlag && canManage && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setResolvingFlag(pendingFlag);
+                              setResolutionNote("");
+                            }}
+                            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                            title="Resolve this flag"
+                          >
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>Mark Resolved</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             <Pagination
@@ -2392,6 +2574,234 @@ export const SubjectDetailPage: React.FC = () => {
             </div>
           );
         })()}
+
+      {/* Flag Dialog */}
+      {flagTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setFlagTarget(null)}>
+          <form
+            onSubmit={handleFlagMaterial}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-card border border-border rounded-2xl shadow-xl p-5 space-y-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-0.5">
+                <h3 className="text-base font-bold text-foreground">Flag Material for Review</h3>
+                <p className="text-xs text-muted-foreground">The teacher will be notified with this reason.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFlagTarget(null)}
+                className="p-1 rounded hover:bg-muted text-muted-foreground cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-muted/40 border border-border rounded-xl">
+              <p className="font-bold text-foreground text-sm truncate">{flagTarget.title}</p>
+              <p className="text-[11px] text-muted-foreground capitalize">{flagTarget.subjectName || "Unassigned"}</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Category</label>
+              <select
+                value={flagCategory}
+                onChange={(e) => setFlagCategory(e.target.value)}
+                className="w-full px-3 py-2 border border-border bg-card text-foreground rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option>Wrong file</option>
+                <option>Wrong subject</option>
+                <option>Incomplete content</option>
+                <option>Other</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Note (optional)</label>
+              <textarea
+                value={flagNote}
+                onChange={(e) => setFlagNote(e.target.value)}
+                rows={3}
+                placeholder="e.g. The uploaded content belongs to a different subject."
+                className="w-full px-3 py-2 border border-border bg-muted/30 text-foreground rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setFlagTarget(null)}
+                className="px-4 py-2 bg-muted text-muted-foreground rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={flagSubmitting}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 cursor-pointer disabled:opacity-60"
+              >
+                {flagSubmitting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
+                <span>{flagSubmitting ? "Flagging..." : "Flag Material"}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Flag History Modal */}
+      {viewingFlags && (
+        <div
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setViewingFlags(null);
+          }}
+        >
+          <div className="bg-card rounded-2xl max-w-lg w-full p-6 shadow-xl border border-border space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
+                  <History className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  <span>Flag History</span>
+                </h3>
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{viewingFlags.title}</p>
+              </div>
+              <button
+                onClick={() => setViewingFlags(null)}
+                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {flagsForMaterial(viewingFlags.id).length === 0 ? (
+              <p className="text-xs text-muted-foreground py-6 text-center">
+                No flags have been raised on this material.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {flagsForMaterial(viewingFlags.id).map((flag) => (
+                  <div key={flag.id} className="p-3.5 border border-border rounded-xl space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          flag.status === "pending"
+                            ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                            : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                        }`}
+                      >
+                        {flag.status === "pending" ? "Pending" : "Resolved"} · {flag.category}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground font-mono">
+                        {new Date(flag.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">Flagged by: {flag.flaggedByName || flag.flaggedById}</p>
+                    {flag.note && <p className="text-xs text-foreground">"{flag.note}"</p>}
+                    {flag.status === "resolved" && (
+                      <div className="pt-2 border-t border-border space-y-1">
+                        <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                          Resolved by: {flag.resolvedByName || flag.resolvedById || "—"}
+                        </p>
+                        {flag.resolutionNote && (
+                          <p className="text-[11px] text-muted-foreground">Resolution note: "{flag.resolutionNote}"</p>
+                        )}
+                        {flag.resolvedAt && (
+                          <p className="text-[10px] text-muted-foreground font-mono">
+                            {new Date(flag.resolvedAt).toLocaleString()}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-end pt-1">
+              <button
+                onClick={() => setViewingFlags(null)}
+                className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resolve Flag Modal */}
+      {resolvingFlag && (
+        <div
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setResolvingFlag(null);
+          }}
+        >
+          <form
+            onSubmit={handleResolveFlag}
+            onClick={(e) => e.stopPropagation()}
+            className="bg-card rounded-2xl max-w-md w-full p-6 shadow-xl border border-border space-y-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-0.5">
+                <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>Resolve Flag</span>
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  The admin who flagged this material will be notified.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResolvingFlag(null)}
+                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-muted/40 border border-border rounded-xl space-y-0.5">
+              <p className="text-xs font-bold text-foreground">
+                {resolvingFlag.category}
+                {resolvingFlag.note ? ` — "${resolvingFlag.note}"` : ""}
+              </p>
+              <p className="text-[10px] text-muted-foreground">
+                Flagged by {resolvingFlag.flaggedByName || "Admin"} on {new Date(resolvingFlag.createdAt).toLocaleString()}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Resolution note (optional)</label>
+              <textarea
+                value={resolutionNote}
+                onChange={(e) => setResolutionNote(e.target.value)}
+                rows={3}
+                placeholder="e.g. Replaced with the corrected file."
+                className="w-full px-3 py-2 border border-border bg-muted/30 text-foreground rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+              />
+            </div>
+
+            <div className="flex justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => setResolvingFlag(null)}
+                className="px-4 py-2 border border-border rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={resolving}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 cursor-pointer disabled:opacity-60"
+              >
+                {resolving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                <span>{resolving ? "Resolving..." : "Mark Resolved"}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

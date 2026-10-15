@@ -386,6 +386,16 @@ const MainAppContent: React.FC = () => {
   const [aiSeedTopic, setAiSeedTopic] = useState<string | null>(null);
   const prevUserIdRef = useRef<string | null>(null);
 
+  // Re-clicking the sidebar item for the page you are already on is a no-op in
+  // react-router: the path is unchanged, so the route element stays mounted and
+  // its fetch effects never re-run. Bumping this counter and keying <Routes>
+  // with it remounts the current page, which re-runs its fetches and clears
+  // per-page state (active deck, card index, filters, pagination, modals).
+  const [refreshKey, setRefreshKey] = useState(0);
+  const handleNavigateActive = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+  }, []);
+
   // Idle session timeout (web only). Reads sessionTimeoutMins from system
   // settings, resets on user activity, and force-signs-out after the grace
   // countdown. A JWT-expiry watchdog catches tokens that have already lapsed.
@@ -522,7 +532,6 @@ const jwtPoll = window.setInterval(() => {
     { icon: CheckSquare, label: "Quizzes & Tests", path: "/assessments" },
     { icon: Layers, label: "Flashcards", path: "/flashcards" },
     { icon: TrendingUp, label: "Adaptive Progress", path: "/analytics" },
-    { icon: FileText, label: "My Report", path: "/reports" },
     { icon: Bell, label: "Announcements", path: "/announcements" },
   ];
 
@@ -571,6 +580,13 @@ const jwtPoll = window.setInterval(() => {
       "activity-logs": role === "admin" ? "/activity-logs" : getRoleDefaultPath(role),
     };
     const targetPath = tabToPathMap[tab] || getRoleDefaultPath(role);
+    // Dashboard quick-action buttons reach the same pages as the sidebar but
+    // bypass it, so they need the same re-click refresh. Compare on pathname
+    // only: a path with a query string is still the same page.
+    if (location.pathname === targetPath) {
+      handleNavigateActive();
+      return;
+    }
     navigate(targetPath);
   };
 
@@ -590,13 +606,14 @@ const jwtPoll = window.setInterval(() => {
       userRole={userRoleDisplay}
       userName={currentUser.name}
       activePath={location.pathname}
+      onNavigateActive={handleNavigateActive}
       onLogout={() => {
         clearWorkspace(currentUser.id);
         logout();
         navigate("/", { replace: true });
       }}
     >
-      <Routes>
+      <Routes key={refreshKey}>
         <Route path="/" element={<Navigate to={getRoleDefaultPath(role)} replace />} />
 
         {/* Dashboards */}
@@ -682,14 +699,14 @@ const jwtPoll = window.setInterval(() => {
             ) : role === "admin" ? (
               <Navigate to="/reports" replace />
             ) : (
-              <ProgressAnalyticsPage />
+              <ProgressAnalyticsPage onOpenWeakTopic={handleOpenWeakTopic} />
             )
           }
         />
         <Route
           path="/reports"
           element={
-            <RoleGuard allowedRoles={["teacher", "admin", "student"]} userRole={role}>
+            <RoleGuard allowedRoles={["teacher", "admin"]} userRole={role}>
               <ReportsPage />
             </RoleGuard>
           }

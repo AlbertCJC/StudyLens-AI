@@ -6,16 +6,24 @@ interface AuthContextType {
   currentUser: User | null;
   token: string | null;
   pendingEmailVerification: { userId: string; email: string; devCode?: string } | null;
+  pending2FA: { userId: string; email: string; expiresInMinutes?: number; devCode?: string } | null;
   login: (emailOrUser: string | Partial<User>, role?: UserRole, password?: string) => Promise<void>;
   register: (name: string, email: string, role: UserRole, department?: string, password?: string) => Promise<void>;
   verifyEmail: (userId: string, code: string) => Promise<void>;
   resendEmailCode: (userId: string) => Promise<void>;
   clearEmailVerification: () => void;
+  verify2FA: (userId: string, code: string) => Promise<void>;
+  resend2FA: (userId: string) => Promise<void>;
+  clear2FA: () => void;
   updateUser: (updated: User) => Promise<void>;
+  refreshSession: (user: User, userToken: string) => void;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const PENDING_VERIFY_KEY = "studylens_pending_verification";
+const PENDING_2FA_KEY = "studylens_pending_2fa";
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Guard against corrupted avatar placeholders ("None"/"null"/"undefined")
@@ -40,7 +48,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(() => {
     return localStorage.getItem("studylens_token") || null;
   });
-  const [pendingEmailVerification, setPendingEmailVerification] = useState<{ userId: string; email: string; devCode?: string } | null>(null);
+  const [pendingEmailVerification, setPendingEmailVerification] = useState<{ userId: string; email: string; devCode?: string } | null>(() => {
+    try {
+      const saved = localStorage.getItem(PENDING_VERIFY_KEY);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [pending2FA, setPending2FAState] = useState<{ userId: string; email: string; expiresInMinutes?: number; devCode?: string } | null>(() => {
+    try {
+      const saved = localStorage.getItem(PENDING_2FA_KEY);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
 
   const saveUserSession = (user: User, userToken?: string) => {
     const cleanUser = sanitizeAvatar(user);
@@ -52,6 +75,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem("studylens_user", JSON.stringify(cleanUser));
     } catch (e) {
       console.error("Failed to save session to localStorage", e);
+    }
+  };
+
+  // Persists the pending email-verification step (userId + email only, never
+  // the devCode) so the Verify Email panel survives a reload / tab discard.
+  // Cleared once the step completes, the user bails out, or they sign in.
+  const setPendingVerification = (pending: { userId: string; email: string; devCode?: string } | null) => {
+    setPendingEmailVerification(pending);
+    try {
+      if (pending) {
+        localStorage.setItem(PENDING_VERIFY_KEY, JSON.stringify({ userId: pending.userId, email: pending.email }));
+      } else {
+        localStorage.removeItem(PENDING_VERIFY_KEY);
+      }
+    } catch (e) {
+      console.error("Failed to persist pending email verification", e);
+    }
+  };
+
+  // Persists the pending two-factor step (userId + email only, never the
+  // devCode) so the Confirm Sign-In panel survives a reload / tab discard.
+  // Cleared once the step completes, the user bails out, or they sign in.
+  const setPending2FA = (pending: { userId: string; email: string; expiresInMinutes?: number; devCode?: string } | null) => {
+    setPending2FAState(pending);
+    try {
+      if (pending) {
+        localStorage.setItem(PENDING_2FA_KEY, JSON.stringify({ userId: pending.userId, email: pending.email, expiresInMinutes: pending.expiresInMinutes }));
+      } else {
+        localStorage.removeItem(PENDING_2FA_KEY);
+      }
+    } catch (e) {
+      console.error("Failed to persist pending two-factor verification", e);
     }
   };
 
@@ -80,13 +135,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok) {
         const data = await res.json();
         if (data.requiresEmailVerification) {
-          setPendingEmailVerification({
+          setPendingVerification({
             userId: data.userId,
             email: data.email,
             devCode: data.devCode,
           });
           return;
         }
+        if (data.twoFactorRequired) {
+          setPendingVerification(null);
+          setPending2FA({
+            userId: data.userId,
+            email: data.email,
+            expiresInMinutes: data.expiresInMinutes,
+            devCode: data.devCode,
+          });
+          return;
+        }
+        setPendingVerification(null);
+        setPending2FA(null);
         saveUserSession(data.user, data.token);
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -108,13 +175,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok) {
         const data = await res.json();
         if (data.requiresEmailVerification) {
-          setPendingEmailVerification({
+          setPendingVerification({
             userId: data.userId,
             email: data.email,
             devCode: data.devCode,
           });
           return;
         }
+        setPendingVerification(null);
         saveUserSession(data.user, data.token);
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -138,7 +206,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error(data.error || "Could not verify the email. Please try again.");
       }
       if (data.requiresEmailVerification) {
-        setPendingEmailVerification({
+        setPendingVerification({
           userId: data.userId,
           email: data.email,
           devCode: data.devCode,
@@ -146,7 +214,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
       saveUserSession(data.user, data.token);
-      setPendingEmailVerification(null);
+      setPendingVerification(null);
     } catch (err) {
       console.warn("Email verification notice:", err);
       throw err;
@@ -164,12 +232,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error(data.error || "Could not resend the verification code.");
     }
     if (data.devCode) {
-      setPendingEmailVerification({ userId, email: pendingEmailVerification?.email || data.email, devCode: data.devCode });
+      setPendingVerification({ userId, email: pendingEmailVerification?.email || data.email, devCode: data.devCode });
     }
   };
 
   const clearEmailVerification = () => {
-    setPendingEmailVerification(null);
+    setPendingVerification(null);
+  };
+
+  const verify2FA = async (userId: string, code: string) => {
+    const res = await fetch("/api/auth/verify-2fa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, code }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // Terminal states force a fresh sign-in; invalid codes keep the panel open.
+      if (["EXPIRED_2FA", "NOT_FOUND", "ACCOUNT_LOCKED"].includes(data.code)) {
+        setPending2FA(null);
+      }
+      throw new Error(data.error || "Verification failed. Please try again.");
+    }
+    setPending2FA(null);
+    setPendingVerification(null);
+    saveUserSession(data.user, data.token);
+  };
+
+  const resend2FA = async (userId: string) => {
+    const res = await fetch("/api/auth/resend-2fa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (["NO_PENDING_2FA", "NOT_FOUND", "2FA_NOT_REQUIRED", "ACCOUNT_LOCKED"].includes(data.code)) {
+        setPending2FA(null);
+      }
+      throw new Error(data.error || "Could not resend the verification code.");
+    }
+    if (pending2FA) {
+      setPending2FA({ ...pending2FA, expiresInMinutes: data.expiresInMinutes, devCode: data.devCode });
+    }
+  };
+
+  const clear2FA = () => {
+    setPending2FA(null);
   };
 
   const updateUser = async (updated: User) => {
@@ -196,7 +305,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentUser(null);
     setToken(null);
     setStoredToken(null);
-    setPendingEmailVerification(null);
+    setPendingVerification(null);
+    setPending2FA(null);
     try {
       localStorage.removeItem("studylens_user");
 
@@ -210,7 +320,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentUser(null);
       setToken(null);
       setStoredToken(null);
-      setPendingEmailVerification(null);
+      setPendingVerification(null);
+      setPending2FA(null);
       try {
         localStorage.removeItem("studylens_user");
       } catch (e) {
@@ -223,7 +334,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider
-      value={{ currentUser, token, pendingEmailVerification, login, register, verifyEmail, resendEmailCode, clearEmailVerification, updateUser, refreshSession, logout }}
+      value={{ currentUser, token, pendingEmailVerification, pending2FA, login, register, verifyEmail, resendEmailCode, clearEmailVerification, verify2FA, resend2FA, clear2FA, updateUser, refreshSession, logout }}
     >
       {children}
     </AuthContext.Provider>

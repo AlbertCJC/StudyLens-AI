@@ -216,7 +216,7 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
   // Fetch announcements + notifications from the server; poll lightly and
   // refresh when the tab regains focus so both platforms stay in sync.
   useEffect(() => {
-    if (!userId) return;
+    if (!currentUser) return;
     let active = true;
 
     const loadAnnouncements = () =>

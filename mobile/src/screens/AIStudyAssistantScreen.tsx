@@ -50,6 +50,9 @@ const friendlyAiError = (message: string, code?: string): string => {
   if (lower.includes('limit') || lower.includes('rate limit') || code === 'RATE_LIMITED') {
     return 'You have reached the AI generation limit for this session. Please wait a moment and try again.';
   }
+  if (lower.includes('how many questions') || code === 'COUNT_REQUIRED') {
+    return 'Tell the AI how many questions to make in your prompt (e.g. "Make 10 multiple choice questions" or "5 identification, 10 multiple choice, 5 true or false").';
+  }
   return message;
 };
 
@@ -70,7 +73,6 @@ export default function AIStudyAssistantScreen({
 
   const [mode, setMode] = useState<Mode>('quiz');
   const [text, setText] = useState('');
-  const [quizCount, setQuizCount] = useState('');
   const [cardCount, setCardCount] = useState('');
   const [quizRevealAnswers, setQuizRevealAnswers] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -197,7 +199,7 @@ export default function AIStudyAssistantScreen({
       };
       let draft: Record<string, unknown>;
       if (mode === 'quiz') {
-        draft = await aiGenerateDraft('quiz', { ...base, numQuestions: parseCount(quizCount), difficulty: 'medium', revealAnswers: quizRevealAnswers }, controller.signal);
+        draft = await aiGenerateDraft('quiz', { ...base, difficulty: 'medium', revealAnswers: quizRevealAnswers }, controller.signal);
         setTitleExists(draft.titleExists === true);
         setOutput({ type: 'quiz', data: shuffleQuizAnswers(draft as unknown as Quiz) });
       } else if (mode === 'flashcards') {
@@ -350,15 +352,6 @@ export default function AIStudyAssistantScreen({
 
         {mode === 'quiz' && (
           <>
-            <Field
-              label="Number of Quiz Questions"
-              value={quizCount}
-              onChangeText={setQuizCount}
-              placeholder="e.g. 10"
-              keyboardType="numeric"
-              onSubmitEditing={!isGenerating && canGenerate ? handleGenerate : undefined}
-              returnKeyType="send"
-            />
             {currentUser?.role === 'teacher' && (
               <View style={{ gap: 6 }}>
                 <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>Show correct answers to students</Text>
@@ -417,6 +410,12 @@ export default function AIStudyAssistantScreen({
             </TouchableOpacity>
           </View>
         </View>
+
+        {mode === 'quiz' && (
+          <Text style={{ color: colors.mutedForeground, fontSize: 11, marginTop: -8 }}>
+            Tip: include how many questions you want and any formats (e.g. "5 identification, 10 multiple choice, 5 true or false").
+          </Text>
+        )}
 
         {showAttachMenu && (
           <View style={[styles.attachMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -533,6 +532,11 @@ function QuizOutput({ quiz, colors }: { quiz: Quiz; colors: any }) {
               </View>
             );
           })}
+          {(!q.options || q.options.length === 0) && q.correctAnswer && (
+            <View style={[styles.answerBox, { backgroundColor: colors.successSoft }]}>
+              <Text style={{ color: colors.success, fontSize: 12, fontWeight: '700' }}>Answer: {q.correctAnswer}</Text>
+            </View>
+          )}
           {q.explanation && <Text style={{ color: colors.mutedForeground, fontSize: 11, lineHeight: 16 }}>Explanation: {q.explanation}</Text>}
         </View>
       ))}

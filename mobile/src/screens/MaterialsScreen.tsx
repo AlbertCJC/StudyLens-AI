@@ -151,7 +151,7 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
       try {
         const bytes = await convertToPdf({
           title: m.title,
-          metaLine: `${m.subjectName || 'Unassigned'} · ${m.uploadedBy || ''}`.trim(),
+          metaLine: [m.subjectName, m.uploadedBy || ''].filter(Boolean).join(' · '),
           content: m.extractedText || m.description || m.title,
           items: [],
         });
@@ -170,7 +170,7 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
     try {
       const bytes = await convertToPdf({
         title: m.title,
-        metaLine: `${m.subjectName || 'Unassigned'} · ${m.uploadedBy || ''}`.trim(),
+        metaLine: [m.subjectName, m.uploadedBy || ''].filter(Boolean).join(' · '),
         content: m.extractedText || m.description || m.title,
         items: [],
       });
@@ -195,8 +195,19 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
   const canAssignSubject = (m: Material) =>
     (currentUser?.role === 'admin' || m.uploaderId === currentUser?.id) && m.uploaderRole !== 'student';
 
-  const filteredMaterials =
-    subjectFilter === 'all' ? materials : materials.filter((m) => m.subjectId === subjectFilter);
+  // A subjectless resource (AI resource or personal note) is not scoped to any
+  // subject, so it stays visible under every subject filter.
+  // Newest first: the list is paged, so a newly saved resource must lead or it
+  // lands on the last page and looks unsaved.
+  const filteredMaterials = (
+    subjectFilter === 'all'
+      ? materials
+      : materials.filter(
+          (m) =>
+            m.subjectId === subjectFilter ||
+            (m.subjectId == null && m.materialType === 'personal'),
+        )
+  ).slice().sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
 
   const filterOptions = (() => {
     const seen = new Map<string, string>();
@@ -335,10 +346,8 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
                 >
                   <Text style={[styles.matTitle, { color: colors.foreground }]} numberOfLines={1}>{m.title}</Text>
                   {m.description && <Text style={{ color: colors.mutedForeground, fontSize: 12, lineHeight: 17 }} numberOfLines={2}>{m.description}</Text>}
-                  {m.subjectName ? (
+                  {m.subjectName && (
                     <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>{m.subjectName}</Text>
-                  ) : (
-                    <Text style={{ color: '#f59e0b', fontSize: 11, fontWeight: '700' }}>Unassigned</Text>
                   )}
                   <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>
                     {new Date(m.createdAt).toLocaleDateString()}
@@ -374,7 +383,17 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
       </View>
 
       {/* Preview modal */}
-      <Modal visible={!!previewMaterial} onClose={() => setPreviewMaterial(null)} title={previewMaterial?.title} subtitle={`${previewMaterial?.fileType?.toUpperCase() || 'DOC'} Document - ${previewMaterial?.subjectName || 'Unassigned'}`}>
+      <Modal
+        visible={!!previewMaterial}
+        onClose={() => setPreviewMaterial(null)}
+        title={previewMaterial?.title}
+        subtitle={[
+          `${previewMaterial?.fileType?.toUpperCase() || 'DOC'} Document`,
+          previewMaterial?.subjectName || '',
+        ]
+          .filter(Boolean)
+          .join(' - ')}
+      >
         <ScrollView style={{ maxHeight: 400 }}>
           <View style={[styles.previewPaper, { backgroundColor: colors.surfaceAlt }]}>
             {!isAiMaterial(previewMaterial) && (
@@ -382,7 +401,9 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
                 {/* Paper Header */}
                 <View style={styles.previewHeader}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <Badge text={previewMaterial?.subjectName || 'Unassigned'} color={colors.primary} />
+                    {previewMaterial?.subjectName && (
+                      <Badge text={previewMaterial.subjectName} color={colors.primary} />
+                    )}
                     <Badge text={previewMaterial?.fileType?.toUpperCase() || 'DOC'} color={colors.warning} />
                   </View>
                   <Text style={[styles.previewTitle, { color: colors.foreground }]}>{previewMaterial?.title}</Text>

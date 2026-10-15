@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import {
   BookOpen, CheckCircle2, ArrowRight,
   Moon, Sun, User, Mail, Lock, Eye, EyeOff,
-  Users, ArrowLeft,
+  Users, ArrowLeft, ShieldCheck,
   X, Sparkles, Brain, PieChart, Star
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
@@ -12,11 +12,73 @@ import { PasswordRequirements } from "../../components/PasswordRequirements";
 import { checkPasswordStrength } from "../../utils/password";
 import type { UserRole } from "../../types";
 
+const FORGOT_RESET_KEY = "studylens_forgot_reset";
+const PENDING_VERIFY_KEY = "studylens_pending_verification";
+const PENDING_2FA_KEY = "studylens_pending_2fa";
+const VERIFY_CODE_KEY = "studylens_verify_code";
+
+function readForgotReset(): { open: boolean; email: string; step: "request" | "verify" } {
+  try {
+    const raw = localStorage.getItem(FORGOT_RESET_KEY);
+    if (!raw) return { open: false, email: "", step: "request" };
+    const parsed = JSON.parse(raw);
+    return {
+      open: !!parsed.open,
+      email: typeof parsed.email === "string" ? parsed.email : "",
+      step: parsed.step === "verify" ? "verify" : "request",
+    };
+  } catch {
+    return { open: false, email: "", step: "request" };
+  }
+}
+
+function readStoredPending(): { userId: string; email: string } | null {
+  try {
+    const raw = localStorage.getItem(PENDING_VERIFY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.userId !== "string") return null;
+    return { userId: parsed.userId, email: typeof parsed.email === "string" ? parsed.email : "" };
+  } catch {
+    return null;
+  }
+}
+
+function readStoredPending2FA(): boolean {
+  try {
+    return !!localStorage.getItem(PENDING_2FA_KEY);
+  } catch {
+    return false;
+  }
+}
+
+function readStoredVerifyCode(): string {
+  try {
+    return localStorage.getItem(VERIFY_CODE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function storeVerifyCode(code: string): void {
+  try {
+    if (code) {
+      localStorage.setItem(VERIFY_CODE_KEY, code);
+    } else {
+      localStorage.removeItem(VERIFY_CODE_KEY);
+    }
+  } catch {
+    // ignore persistence failures
+  }
+}
+
 export const LandingPage: React.FC = () => {
-  const { login, register, verifyEmail, resendEmailCode, clearEmailVerification, pendingEmailVerification } = useAuth();
+  const { login, register, verifyEmail, resendEmailCode, clearEmailVerification, pendingEmailVerification, pending2FA, verify2FA, resend2FA, clear2FA } = useAuth();
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<"home" | "features" | "about" | "contact">("home");
-  const [authModal, setAuthModal] = useState<"login" | "register" | null>(null);
+  // If a pending email-verification or two-factor step was restored from localStorage, reopen
+  // the auth panel so the Verify Email / Confirm Sign-In screen survives a reload / tab discard.
+  const [authModal, setAuthModal] = useState<"login" | "register" | null>(() => (readStoredPending() || readStoredPending2FA() ? "login" : null));
   
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
@@ -58,15 +120,53 @@ export const LandingPage: React.FC = () => {
   const [rememberMe, setRememberMe] = useState(false);
 
   // Forgot Password State
-  const [forgotOpen, setForgotOpen] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState("");
-  const [forgotStep, setForgotStep] = useState<"request" | "verify">("request");
+  const [forgotOpen, setForgotOpen] = useState(() => readForgotReset().open);
+  const [forgotEmail, setForgotEmail] = useState(() => readForgotReset().email);
+  const [forgotStep, setForgotStep] = useState<"request" | "verify">(() => readForgotReset().step);
   const [forgotOtp, setForgotOtp] = useState("");
   const [forgotPassword, setForgotPassword] = useState("");
   const [forgotConfirm, setForgotConfirm] = useState("");
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
   const [forgotNotice, setForgotNotice] = useState("");
   const [forgotDevCode, setForgotDevCode] = useState("");
+
+  // Persist the forgot-password OTP step (email + which step) so it survives a
+  // reload / tab discard. The devCode is never persisted.
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(FORGOT_RESET_KEY, JSON.stringify({ open: forgotOpen, email: forgotEmail, step: forgotStep }));
+    } catch {
+      // ignore persistence failures
+    }
+  }, [forgotOpen, forgotEmail, forgotStep]);
+
+  // Local mirror of the pending email-verification step, restored straight from
+  // localStorage on mount (same pattern as the forgot-password flow) so the
+  // Verify Email panel survives a reload / tab discard even if the AuthContext
+  // restore lands late. The context value takes precedence once available.
+  const [restoredPending, setRestoredPending] = useState<{ userId: string; email: string } | null>(() => readStoredPending());
+  const effectivePending = pendingEmailVerification || restoredPending;
+
+  const mountedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
+    setRestoredPending(
+      pendingEmailVerification
+        ? { userId: pendingEmailVerification.userId, email: pendingEmailVerification.email }
+        : null
+    );
+  }, [pendingEmailVerification]);
+
+  // Keep the typed verification code across reload / tab restore; cleared once
+  // the pending step is resolved (success, "Use a different account", logout).
+  React.useEffect(() => {
+    if (mountedRef.current && !pendingEmailVerification && !restoredPending) {
+      storeVerifyCode("");
+    }
+  }, [pendingEmailVerification, restoredPending]);
 
   const openRegisterModal = () => {
     setAuthModal("register");
@@ -145,23 +245,29 @@ export const LandingPage: React.FC = () => {
   };
 
   // Email Verification State
-  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyCode, setVerifyCode] = useState(() => readStoredVerifyCode());
   const [verifySubmitting, setVerifySubmitting] = useState(false);
   const [verifyResending, setVerifyResending] = useState(false);
   const [verifyError, setVerifyError] = useState("");
   const [verifyNotice, setVerifyNotice] = useState("");
 
+  // Keep the typed verification code across reload / tab restore; cleared once
+  // the pending step is resolved (success, "Use a different account", logout).
+  React.useEffect(() => {
+    storeVerifyCode(verifyCode);
+  }, [verifyCode]);
+
   const handleVerifyEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setVerifyError("");
-    if (!pendingEmailVerification) return;
+    if (!effectivePending) return;
     if (!/^\d{6}$/.test(verifyCode.trim())) {
       setVerifyError("Please enter the 6-digit code sent to your email.");
       return;
     }
     setVerifySubmitting(true);
     try {
-      await verifyEmail(pendingEmailVerification.userId, verifyCode.trim());
+      await verifyEmail(effectivePending.userId, verifyCode.trim());
     } catch (err) {
       setVerifyError((err as Error).message || "Could not verify the email. Please try again.");
     } finally {
@@ -171,16 +277,65 @@ export const LandingPage: React.FC = () => {
 
   const handleResendVerifyCode = async () => {
     setVerifyError("");
-    if (!pendingEmailVerification) return;
+    if (!effectivePending) return;
     setVerifyResending(true);
     try {
-      await resendEmailCode(pendingEmailVerification.userId);
+      await resendEmailCode(effectivePending.userId);
       setVerifyNotice("A new verification code has been sent.");
     } catch (err) {
       setVerifyError((err as Error).message || "Could not resend the verification code.");
     } finally {
       setVerifyResending(false);
     }
+  };
+
+  // Two-Factor Verification State
+  const [f2aCode, setF2aCode] = useState("");
+  const [f2aSubmitting, setF2aSubmitting] = useState(false);
+  const [f2aResending, setF2aResending] = useState(false);
+  const [f2aError, setF2aError] = useState("");
+  const [f2aNotice, setF2aNotice] = useState("");
+
+  const handleVerify2FASubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setF2aError("");
+    if (!pending2FA) return;
+    if (!/^\d{6}$/.test(f2aCode.trim())) {
+      setF2aError("Please enter the 6-digit code sent to your email.");
+      return;
+    }
+    setF2aSubmitting(true);
+    try {
+      await verify2FA(pending2FA.userId, f2aCode.trim());
+      setF2aCode("");
+    } catch (err) {
+      setF2aError((err as Error).message || "Could not complete sign-in. Please try again.");
+    } finally {
+      setF2aSubmitting(false);
+    }
+  };
+
+  const handleResend2FASubmit = async () => {
+    setF2aError("");
+    setF2aNotice("");
+    if (!pending2FA) return;
+    setF2aResending(true);
+    try {
+      await resend2FA(pending2FA.userId);
+      setF2aNotice("A new verification code has been sent.");
+      setF2aCode("");
+    } catch (err) {
+      setF2aError((err as Error).message || "Could not resend the verification code.");
+    } finally {
+      setF2aResending(false);
+    }
+  };
+
+  const handleUseDifferent2FA = () => {
+    clear2FA();
+    setF2aCode("");
+    setF2aError("");
+    setF2aNotice("");
   };
 
   const handleFeatureCardClick = () => {
@@ -310,7 +465,7 @@ export const LandingPage: React.FC = () => {
         <div className="w-full max-w-[420px] mx-auto py-8">
           {/* Centered White / Dark Card */}
           <div className="bg-white dark:bg-[#131b30] border border-slate-100 dark:border-slate-800/80 rounded-2xl p-8 sm:p-10 shadow-sm space-y-6">
-            {pendingEmailVerification ? (
+            {effectivePending ? (
               <>
                 {/* Verify Email Panel */}
                 <div className="h-12 w-12 rounded-2xl bg-[#5b51d8] text-white flex items-center justify-center mx-auto shadow-md">
@@ -321,12 +476,12 @@ export const LandingPage: React.FC = () => {
                     Verify Your Email
                   </h2>
                   <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                    We sent a 6-digit code to <span className="font-semibold text-slate-700 dark:text-slate-200">{pendingEmailVerification.email}</span>.
+                    We sent a 6-digit code to <span className="font-semibold text-slate-700 dark:text-slate-200">{effectivePending.email}</span>.
                     Enter it below to activate your account.
                   </p>
-                  {!!pendingEmailVerification.devCode && (
+                  {!!effectivePending.devCode && (
                     <div className="mt-3 text-xs font-medium text-[#15803d] bg-[#16a34a]/5 border border-[#16a34a]/20 rounded-xl px-3 py-2.5">
-                      Dev mode: your code is <span className="font-mono font-bold text-sm tracking-[0.25em]">{pendingEmailVerification.devCode}</span>
+                      Dev mode: your code is <span className="font-mono font-bold text-sm tracking-[0.25em]">{effectivePending.devCode}</span>
                     </div>
                   )}
                 </div>
@@ -385,12 +540,88 @@ export const LandingPage: React.FC = () => {
                   </div>
                 </form>
               </>
+            ) : pending2FA ? (
+              <>
+                {/* Two-Factor Verification Panel */}
+                <div className="h-12 w-12 rounded-2xl bg-[#5b51d8] text-white flex items-center justify-center mx-auto shadow-md">
+                  <ShieldCheck className="w-6 h-6 text-white" />
+                </div>
+                <div className="text-center space-y-1">
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                    Confirm Your Sign-In
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+                    We sent a 6-digit code to <span className="font-semibold text-slate-700 dark:text-slate-200">{pending2FA.email}</span>. Enter it below to finish signing in.
+                  </p>
+                  {!!pending2FA.devCode && (
+                    <div className="mt-3 text-xs font-medium text-[#15803d] bg-[#16a34a]/5 border border-[#16a34a]/20 rounded-xl px-3 py-2.5">
+                      Dev mode: your code is <span className="font-mono font-bold text-sm tracking-[0.25em]">{pending2FA.devCode}</span>
+                    </div>
+                  )}
+                </div>
+                <form onSubmit={handleVerify2FASubmit} className="space-y-4 text-xs sm:text-sm">
+                  {f2aNotice && (
+                    <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
+                      {f2aNotice}
+                    </div>
+                  )}
+                  {f2aError && (
+                    <div className="text-xs font-medium text-rose-600 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-xl px-3 py-2.5">
+                      {f2aError}
+                    </div>
+                  )}
+                  <div className="space-y-1.5">
+                    <label className="block font-semibold text-slate-800 dark:text-slate-200">Verification Code</label>
+                    <div className="relative">
+                      <ShieldCheck className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={f2aCode}
+                        onChange={(e) => setF2aCode(e.target.value.replace(/[^0-9]/g, ""))}
+                        placeholder="6-digit code"
+                        className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium tracking-[0.25em]"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={f2aSubmitting}
+                    className="w-full py-3 bg-[#5b51d8] hover:bg-[#4c42c9] text-white font-semibold rounded-xl shadow-sm transition-all text-sm cursor-pointer mt-2 disabled:opacity-60"
+                  >
+                    {f2aSubmitting ? "Verifying..." : "Verify & Sign In"}
+                  </button>
+                  <div className="text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400 pt-1">
+                    Didn't get a code?{" "}
+                    <button
+                      type="button"
+                      onClick={handleResend2FASubmit}
+                      disabled={f2aResending}
+                      className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline cursor-pointer disabled:opacity-60"
+                    >
+                      {f2aResending ? "Sending..." : "Resend code"}
+                    </button>
+                  </div>
+                  <div className="text-center">
+                    <button
+                      type="button"
+                      onClick={handleUseDifferent2FA}
+                      className="text-xs text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-white font-medium cursor-pointer pt-1 underline"
+                    >
+                      Use a different account
+                    </button>
+                  </div>
+                </form>
+              </>
             ) : (
               <>
             {/* Logo Icon */}
-            <div className="h-12 w-12 rounded-2xl bg-[#5b51d8] text-white flex items-center justify-center mx-auto shadow-md">
-              <BookOpen className="w-6 h-6 text-white" />
-            </div>
+            <img
+              src="/studylens.png"
+              alt="StudyLens AI"
+              className="h-12 w-12 rounded-2xl object-cover shadow-md mx-auto"
+            />
 
             {/* Header Text */}
             <div className="text-center space-y-1">
@@ -631,7 +862,7 @@ export const LandingPage: React.FC = () => {
           {/* Bottom Back To Home Link */}
           <div className="text-center mt-6">
             <button
-              onClick={() => setAuthModal(null)}
+              onClick={() => { setAuthModal(null); setVerifyCode(""); storeVerifyCode(""); }}
               className="inline-flex items-center space-x-1.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white font-medium cursor-pointer transition-colors"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
@@ -770,9 +1001,11 @@ export const LandingPage: React.FC = () => {
       <header className="sticky top-0 z-50 bg-white dark:bg-[#0e1628] border-b border-slate-200/80 dark:border-slate-800/80 px-6 sm:px-12 py-3.5 flex items-center justify-between shadow-2xs transition-colors">
         {/* Logo */}
         <div className="flex items-center space-x-3 cursor-pointer" onClick={() => scrollToSection("home")}>
-          <div className="h-10 w-10 rounded-xl bg-[#5b51d8] text-white flex items-center justify-center font-bold text-lg shadow-sm">
-            <BookOpen className="w-5 h-5 text-white" />
-          </div>
+          <img
+            src="/studylens.png"
+            alt="StudyLens AI"
+            className="h-10 w-10 rounded-xl object-cover shadow-sm"
+          />
           <span className="font-extrabold text-xl text-[#5b51d8] dark:text-white tracking-tight">
             StudyLens AI
           </span>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -8,9 +8,9 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import {
-  BookOpen,
   Sun,
   Moon,
   User as UserIcon,
@@ -27,11 +27,12 @@ import {
 } from 'lucide-react-native';
 import { useAuth, UserRole, TwoFactorRequiredError, TwoFactorPending, EmailVerificationRequiredError } from '../context/AuthContext';
 import { apiRequestResetOtp, apiResetPassword, EmailVerificationPending } from '../services/api';
+import { STORAGE_KEYS, getJSON, setJSON } from '../utils/storage';
 import { useTheme } from '../theme/ThemeContext';
 import { Modal, Field, PrimaryButton, OutlineButton } from '../components/ui';
 
 export default function LoginScreen({ navigation, onBack }: any) {
-  const { login, register, verifyTwoFactor, cancelTwoFactor, verifyEmail, resendEmailCode, cancelEmailVerification } = useAuth();
+  const { login, register, verifyTwoFactor, cancelTwoFactor, verifyEmail, resendEmailCode, cancelEmailVerification, pendingEmailVerification } = useAuth();
   const { isDark, colors, toggleTheme } = useTheme();
 
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -65,6 +66,34 @@ export default function LoginScreen({ navigation, onBack }: any) {
   const [verifyCode, setVerifyCode] = useState('');
   const [verifyError, setVerifyError] = useState<string | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
+
+  // Resume an in-progress email-verification step after the OS restarted the app.
+  useEffect(() => {
+    if (pendingEmailVerification) {
+      setEmailVerifyPending(pendingEmailVerification);
+      setVerifyCode('');
+      setVerifyError(null);
+    }
+  }, [pendingEmailVerification]);
+
+  // Restore the forgot-password OTP step (email + which step) after an app restart.
+  useEffect(() => {
+    let active = true;
+    getJSON<{ open: boolean; email: string; step: 'request' | 'verify' }>(STORAGE_KEYS.forgotReset).then((saved) => {
+      if (!active || !saved) return;
+      setForgotOpen(!!saved.open);
+      if (typeof saved.email === 'string') setForgotEmail(saved.email);
+      setForgotStep(saved.step === 'verify' ? 'verify' : 'request');
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Persist the forgot-password OTP step. The devCode is never persisted.
+  useEffect(() => {
+    setJSON(STORAGE_KEYS.forgotReset, { open: forgotOpen, email: forgotEmail, step: forgotStep });
+  }, [forgotOpen, forgotEmail, forgotStep]);
 
   const closeForgotModal = () => {
     setForgotOpen(false);
@@ -251,7 +280,7 @@ export default function LoginScreen({ navigation, onBack }: any) {
   const placeholderColor = colors.mutedForeground;
   const fieldColor = colors.accent;
 
-  const field = (value: string, setValue: (v: string) => void, placeholder: string, icon: React.ReactNode, secure?: boolean, showToggle?: boolean, show?: boolean, setShow?: (v: boolean) => void, extraProps?: any) => (
+  const field = (value: string, setValue: (v: string) => void, placeholder: string, icon: React.ReactNode, secure?: boolean, extraProps?: any) => (
     <View style={[styles.inputWrap, { backgroundColor: inputBg, borderColor: inputBorder }]}>
       <View style={styles.inputIcon}>{icon}</View>
       <TextInput
@@ -259,16 +288,31 @@ export default function LoginScreen({ navigation, onBack }: any) {
         onChangeText={setValue}
         placeholder={placeholder}
         placeholderTextColor={placeholderColor}
-        secureTextEntry={secure && !(show || false)}
+        secureTextEntry={secure}
         autoCapitalize="none"
         style={[styles.input, { color: inputText }]}
         {...extraProps}
       />
-      {showToggle && setShow && (
-        <TouchableOpacity onPress={() => setShow(!show)} style={styles.inputToggle}>
-          {show ? <EyeOff size={16} color={placeholderColor} /> : <Eye size={16} color={placeholderColor} />}
-        </TouchableOpacity>
-      )}
+    </View>
+  );
+
+  const passwordField = (placeholder: string) => (
+    <View style={[styles.inputWrap, { backgroundColor: inputBg, borderColor: inputBorder }]}>
+      <View style={styles.inputIcon}>
+        <Lock size={16} color={colors.mutedForeground} />
+      </View>
+      <TextInput
+        value={password}
+        onChangeText={setPassword}
+        placeholder={placeholder}
+        placeholderTextColor={placeholderColor}
+        secureTextEntry={!showPassword}
+        autoCapitalize="none"
+        style={[styles.input, { color: inputText }]}
+      />
+      <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.inputToggle}>
+        {showPassword ? <EyeOff size={16} color={placeholderColor} /> : <Eye size={16} color={placeholderColor} />}
+      </TouchableOpacity>
     </View>
   );
 
@@ -305,9 +349,11 @@ export default function LoginScreen({ navigation, onBack }: any) {
           {/* Card */}
           <View style={[styles.card, { backgroundColor: colors.loginCard, borderColor: isDark ? colors.border : '#f1f5f9' }]}>
             {/* Logo */}
-            <View style={[styles.logo, { backgroundColor: colors.primary }]}>
-              <BookOpen size={22} color="#ffffff" />
-            </View>
+            <Image
+              source={require('../../assets/studylens-icon.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
 
             {/* Header */}
             <View style={[styles.cardHeader, { borderBottomColor: isDark ? colors.border : '#f1f5f9' }]}>
@@ -328,19 +374,9 @@ export default function LoginScreen({ navigation, onBack }: any) {
                 </View>
               )}
 
-              {field(email, setEmail, 'Enter your email', <Mail size={16} color={colors.mutedForeground} />, false, false, false, undefined, { keyboardType: 'email-address' })}
+              {field(email, setEmail, 'Enter your email', <Mail size={16} color={colors.mutedForeground} />, false, { keyboardType: 'email-address' })}
 
-              {!twoFactorPending &&
-                field(
-                  password,
-                  setPassword,
-                  mode === 'login' ? 'Enter your password' : 'Create a password',
-                  <Lock size={16} color={colors.mutedForeground} />,
-                  true,
-                  true,
-                  showPassword,
-                  setShowPassword
-                )}
+              {!twoFactorPending && passwordField(mode === 'login' ? 'Enter your password' : 'Create a password')}
 
               {twoFactorPending && (
                 <View style={{ gap: 10 }}>
@@ -448,16 +484,7 @@ export default function LoginScreen({ navigation, onBack }: any) {
               )}
 
               {mode === 'register' && (
-                field(
-                  confirmPassword,
-                  setConfirmPassword,
-                  'Confirm your password',
-                  <Lock size={16} color={colors.mutedForeground} />,
-                  true,
-                  false,
-                  false,
-                  undefined
-                )
+                field(confirmPassword, setConfirmPassword, 'Confirm your password', <Lock size={16} color={colors.mutedForeground} />, true)
               )}
 
               {error && (
@@ -571,23 +598,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 28,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
+    boxShadow: '0 12px 24px rgba(0, 0, 0, 0.25)',
     elevation: 12,
   },
   logo: {
     height: 48,
     width: 48,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 4,
     marginBottom: 14,
   },
   cardHeader: {

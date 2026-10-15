@@ -155,11 +155,12 @@ The system ships with two seeded demo accounts (a teacher and an administrator) 
 
 > After **5 consecutive failed login attempts**, an account is temporarily locked for **5 minutes**. Forgot-password uses a 6-digit one-time code (see *OTP delivery* below).
 
-### OTP delivery for password reset
+### OTP delivery for email verification, password reset, and 2FA
 
-There is no SMTP mail service wired up. When a reset code is requested:
-- The 6-digit code is **printed to the backend console** (`[Auth] Password reset OTP for <email>: <code>`).
-- With `OTP_DEV_REVEAL=true` (default in `backend/.env`), the code is also returned as `devCode` in the API response so the web/mobile forgot-password modal can show it as a hint. Set `OTP_DEV_REVEAL=false` in production and connect a real mailer.
+One-time codes (email verification, password reset, and staff 2FA) are delivered depending on configuration:
+
+- **Production (email enabled):** set `GMAIL_SENDER` and `GMAIL_APP_PASSWORD` in `backend/.env` — codes are emailed through Gmail SMTP (`smtp.gmail.com`), from your Gmail address to any recipient, and are **never** returned in API responses. Requires 2-Step Verification + an App Password on the sending account.
+- **Development (no mailer):** with `OTP_DEV_REVEAL=true` (the dev default), codes are printed to the backend console (`[Auth] ... OTP for <email>: <code>`) and echoed as `devCode` in the API response so the web/mobile UI can display them as a hint. Set `OTP_DEV_REVEAL=false` in production.
 
 ### Seed Accounts (seeded profiles)
 

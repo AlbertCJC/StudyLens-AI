@@ -31,7 +31,7 @@ export const authFetch = (url: string, options?: RequestInit): Promise<Response>
   const token = getStoredToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   return fetch(url, { ...options, headers }).then((response) => {
-    if (response.status === 401 && !_loggedOut) {
+    if (response.status === 401 && !_loggedOut && token) {
       _loggedOut = true;
       setStoredToken(null);
       try {

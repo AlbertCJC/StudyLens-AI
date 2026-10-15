@@ -19,11 +19,30 @@ import type { StudentProgress, Recommendation } from "../../types";
 
 type DetailCardKey = "weak" | "average" | "assessments";
 
-export const ProgressAnalyticsPage: React.FC = () => {
+function stepTypeLabel(type: string): string {
+  switch (type) {
+    case "review":
+      return "Read";
+    case "reviewer":
+      return "AI Reviewer";
+    case "flashcard":
+      return "Flashcard";
+    case "summary":
+      return "Summary";
+    case "material":
+      return "Material";
+    case "quiz":
+    default:
+      return type.charAt(0).toUpperCase() + type.slice(1);
+  }
+}
+
+export const ProgressAnalyticsPage: React.FC<{ onOpenWeakTopic?: (topic: string) => void }> = ({ onOpenWeakTopic }) => {
   const { currentUser } = useAuth();
   const { showToast } = useToast();
   const [progress, setProgress] = useState<StudentProgress | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [exportingPDF, setExportingPDF] = useState(false);
   const [detailCard, setDetailCard] = useState<DetailCardKey | null>(null);
 
   useEffect(() => {
@@ -62,35 +81,78 @@ export const ProgressAnalyticsPage: React.FC = () => {
       score: att.percentage,
     })) ?? [];
 
-  const handleExportPDF = async () => {
+const handleExportPDF = async () => {
+    if (exportingPDF) return;
+    setExportingPDF(true);
     try {
+      const topics =
+        progress?.topicPerformances?.map(
+          (d) => `- **${d.topic}** - ${d.accuracyPercentage}% accuracy (${d.correctAnswers}/${d.totalQuestions} correct) - ${d.accuracyPercentage >= 70 ? "Mastered" : "Needs Review"}`
+        ) ?? [];
+      const weak =
+        progress?.weakTopics?.length
+          ? progress.weakTopics.map((t) => `- ${t}`)
+          : ["- None - you're all caught up!"];
+      const mastered =
+        (progress?.masteredTopics ?? []).length
+          ? (progress.masteredTopics ?? []).map((m) =>
+              `- **${m.topic}** - mastered at ${m.currentAccuracy}%${typeof m.improvedFrom === "number" ? ` (up from ${m.improvedFrom}%)` : ""}`
+            )
+          : ["- None yet - keep going!"];
+      const attempts =
+        progress?.recentQuizAttempts?.map(
+          (att) => `- ${att.quizTitle} - ${att.percentage}% (${att.passed ? "PASS" : "FAIL"})`
+        ) ?? [];
+
+      const content = [
+        `**Student:** ${currentUser?.name ?? "—"} | **Email:** ${currentUser?.email ?? "—"}`,
+        `**Average score:** ${progress?.averageScore ?? 0}% | **Quizzes completed:** ${progress?.totalQuizzesTaken ?? 0}`,
+        `**Flashcard decks built:** ${progress?.completedFlashcardDecks ?? 0}`,
+        "",
+        "## Topic Performance",
+        ...(topics.length ? topics : ["- No topic data yet."]),
+        "",
+        "## Weak Topics (below 70%)",
+        ...weak,
+        "",
+        "## Overcome Topics",
+        ...mastered,
+        "",
+        "## Recent Attempts",
+        ...(attempts.length ? attempts : ["- No attempts recorded yet."]),
+      ].join("\n");
+
       const res = await authFetch("/api/convert-to-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: `StudyLens AI Progress & Knowledge Gap Analytics Report`,
-          content: `Student: ${currentUser?.name} | Email: ${currentUser?.email}\nAverage Score: ${progress?.averageScore ?? 0}%\nTotal Quizzes Completed: ${progress?.totalQuizzesTaken ?? 0}`,
-          items: chartData.map((d) => ({
-            question: `Topic: ${d.topic}`,
-            answer: `Accuracy: ${d.accuracyPercentage}% | Status: ${
-              d.accuracyPercentage >= 70 ? "Mastered" : "Needs Review"
-            }`,
-          })),
+          title: "StudyLens AI Progress & Knowledge Gap Analytics Report",
+          content,
+          items: [],
         }),
       });
 
-      if (res.ok) {
-        const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `StudyLens_Progress_Report_${Date.now()}.pdf`;
-        a.click();
-        showToast("Progress report exported as PDF.");
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        showToast(data.error || `Export failed (${res.status}). Please try again.`, "error");
+        return;
       }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `StudyLens_Progress_Report_${Date.now()}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      showToast("Progress report exported as PDF.");
     } catch (err) {
       console.error("Export PDF error:", err);
       showToast("Could not export the report. Please try again.", "error");
+    } finally {
+setExportingPDF(false);
     }
   };
 
@@ -100,10 +162,11 @@ export const ProgressAnalyticsPage: React.FC = () => {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <button
           onClick={handleExportPDF}
-          className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 shrink-0 cursor-pointer"
+          disabled={exportingPDF}
+          className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 shrink-0 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <Download className="w-4 h-4" />
-          <span>Export Analytics PDF</span>
+          <span>{exportingPDF ? "Exporting…" : "Export Analytics PDF"}</span>
         </button>
       </div>
 
@@ -241,13 +304,12 @@ export const ProgressAnalyticsPage: React.FC = () => {
                     </p>
                     <ol className="space-y-1.5">
                       {rec.steps.map((s) => (
-                        <li key={`${rec.id}-${s.step}`} className="flex items-start space-x-2 text-xs">
+                        <li key={`${rec.id}-${s.step}`} className="flex items-center space-x-2 text-xs">
                           <span className="flex-shrink-0 h-5 w-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[10px] font-bold">
                             {s.step}
                           </span>
-                          <span className="text-foreground">
-                            <span className="font-bold capitalize">{s.type}:</span>{" "}
-                            {s.title}
+                          <span className="text-foreground truncate">
+                            <span className="font-bold">{stepTypeLabel(s.type)}:</span> {s.title}
                           </span>
                         </li>
                       ))}
@@ -270,6 +332,14 @@ export const ProgressAnalyticsPage: React.FC = () => {
           topics={progress?.weakTopics ?? []}
           performances={progress?.topicPerformances ?? []}
           mastered={progress?.masteredTopics ?? []}
+          onTopicClick={
+            onOpenWeakTopic
+              ? (topic) => {
+                  setDetailCard(null);
+                  onOpenWeakTopic(topic);
+                }
+              : undefined
+          }
         />
       </CardDetailModal>
 

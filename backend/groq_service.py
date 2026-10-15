@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import re
 import time
 
 try:
@@ -562,6 +563,135 @@ def _build_quiz_fallback(text_content, num_questions, difficulty, context=None):
     return questions
 
 
+def _build_identification_questions(text_content, count, context=None):
+    """Content-derived identification questions: each as a material sentence that the
+    learner must recognize a specific term/concept from. The correct answer is a concise
+    key term drawn from the same sentence, so it reads like an authentic identification item."""
+    import re
+    text_content = _expand_prompt_material(text_content)
+    sentences = _sentences(text_content) or [_trim(text_content) or "Core Concepts"]
+    topics = _topics_from_text(text_content)
+    blooms_levels = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"]
+    existing = {
+        str(q.get("question", "")).strip()
+        for q in (context or [])
+        if isinstance(q, dict)
+    }
+    existing_answers = {
+        str(q.get("correctAnswer", "")).strip().lower()
+        for q in (context or [])
+        if isinstance(q, dict) and str(q.get("type", "")).strip() == "identification"
+    }
+    stops = {"about", "above", "after", "again", "between", "because", "could", "have", "from",
+             "their", "there", "these", "those", "through", "under", "which", "whereas", "whereas",
+             "without", "would", "should", "shall", "might", "being", "been", "were", "with"}
+    questions = []
+    for i in range(count):
+        sent = sentences[i % len(sentences)]
+        top = topics[i % len(topics)]
+        words = re.findall(r"[A-Za-z][A-Za-z'-]+", sent)
+        term = None
+        for w in words:
+            clean = w.strip("'").strip("-_")
+            if len(clean) >= 6 and clean.lower() not in stops:
+                term = clean
+                break
+        if term is None and words:
+            term = max(words, key=len).strip("'").strip("-_")
+        if term is None and top.split():
+            term = top.split()[0].strip(".,;:")
+        if term is None:
+            term = "key concept"
+        base = term
+        suffix = 2
+        while term.lower() in existing_answers and suffix <= 10:
+            term = f"{base} {suffix}"
+            suffix += 1
+        existing_answers.add(term.lower())
+        q_text = f"Identify the term or concept described by this statement: {_trim(sent, 140)}"
+        if q_text in existing:
+            q_text = f"What key term is being defined or described in this statement? {_trim(sent, 140)}"
+        existing.add(q_text)
+        questions.append({
+            "id": f"q-id-{i + 1}",
+            "question": q_text,
+            "type": "identification",
+            "options": [],
+            "correctAnswer": term,
+            "explanation": f"From the material: {_trim(sent, 160)}",
+            "bloomsLevel": blooms_levels[i % len(blooms_levels)],
+            "difficulty": "medium",
+            "topicTag": top
+        })
+    return questions
+
+
+def _build_true_false_questions(text_content, count, context=None):
+    """Content-derived true/false questions.
+
+    Every other item is a statement made FALSE by swapping a key term with a different
+    key term taken from another material sentence (so the answer is genuinely False); the
+    rest are verbatim material statements (genuinely True). When no safe swap exists the
+    statement stays True rather than risking a mislabeled answer."""
+    import re
+    text_content = _expand_prompt_material(text_content)
+    sentences = _sentences(text_content) or [_trim(text_content) or "Key concept."]
+    topics = _topics_from_text(text_content)
+    blooms_levels = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"]
+    existing = {
+        str(q.get("question", "")).strip()
+        for q in (context or [])
+        if isinstance(q, dict)
+    }
+
+    def key_word(sent):
+        m = re.search(r"\b([A-Za-z][A-Za-z']{5,})\b", sent)
+        return m.group(1).strip("'") if m else None
+
+    def swapped(sent, donor):
+        w = key_word(sent)
+        o = key_word(donor)
+        if w and o and w.lower() != o.lower():
+            return re.sub(rf"\b{re.escape(w)}\b", o, sent, count=1)
+        return None
+
+    questions = []
+    for i in range(count):
+        sent = sentences[i % len(sentences)]
+        top = topics[i % len(topics)]
+        false_variant = None
+        if i % 2 == 1:
+            for shift in range(1, len(sentences) + 1):
+                cand = swapped(sent, sentences[(i + shift) % len(sentences)])
+                if cand and cand.strip() != sent.strip():
+                    false_variant = cand
+                    break
+        if false_variant is None:
+            stmt, is_true = sent, True
+        else:
+            stmt, is_true = false_variant, False
+        q_text = f"True or False: {_trim(stmt, 200)}"
+        if q_text in existing:
+            q_text = f"TRUE or FALSE: {_trim(stmt, 200)}"
+        existing.add(q_text)
+        questions.append({
+            "id": f"q-tf-{i + 1}",
+            "question": q_text,
+            "type": "true_false",
+            "options": ["True", "False"],
+            "correctAnswer": 0 if is_true else 1,
+            "explanation": (
+                f"Based on the material: {_trim(sent, 160)}"
+                if is_true
+                else f"The statement is false. The material states: {_trim(sent, 160)}"
+            ),
+            "bloomsLevel": blooms_levels[i % len(blooms_levels)],
+            "difficulty": "medium",
+            "topicTag": top
+        })
+    return questions
+
+
 def _build_flashcards_fallback(text_content, count, context=None):
     text_content = _expand_prompt_material(text_content)
     sentences = _sentences(text_content) or [_trim(text_content) or "Key concept to review."]
@@ -867,11 +997,409 @@ def _context_existing_block(context, label):
     )
 
 
-def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficulty: str = "medium", instructions: str = "", context: list = None) -> list:
+_QUIZ_TYPE_ALIASES = {
+    "identification": "identification",
+    "identifications": "identification",
+    "identify": "identification",
+    "multiple choice": "multiple_choice",
+    "multiple-choice": "multiple_choice",
+    "true or false": "true_false",
+    "true and false": "true_false",
+    "true/false": "true_false",
+    "true false": "true_false",
+    "true_false": "true_false",
+    "truefalse": "true_false",
+}
+
+_QUIZ_TYPE_RE = re.compile(
+    r"(\d+)?\s*"
+    r"((?:identification(?:s)?|identify)|(?:multiple[\s-]choice)|(?:true[\s_/]*(?:or|and)?[\s_/]*false))",
+    re.IGNORECASE,
+)
+
+
+def _parse_quiz_types(text):
+    """Detects which question formats a user asked for inside a prompt.
+
+    Returns ``(ordered_types, counts)`` where:
+      - ``ordered_types`` is a list of ``multiple_choice`` / ``identification`` /
+        ``true_false`` in the order they first appear in the text, and
+      - ``counts`` maps a type to the explicit number that appeared before it
+        (first occurrence wins).
+
+    Returns ``(None, None)`` when no formats are named so callers keep the default
+    all-multiple-choice behavior.
+    """
+    if not (text or "").strip():
+        return None, None
+    ordered = []
+    counts = {}
+    for m in _QUIZ_TYPE_RE.finditer(text):
+        token = (m.group(2) or "").strip().lower()
+        qtype = _QUIZ_TYPE_ALIASES.get(token)
+        if qtype is None:
+            continue
+        if qtype not in ordered:
+            ordered.append(qtype)
+        if m.group(1) is not None and qtype not in counts:
+            try:
+                counts[qtype] = max(1, int(m.group(1)))
+            except (TypeError, ValueError):
+                pass
+    return (ordered, counts) if ordered else (None, None)
+
+
+_OVERALL_COUNT_RE = re.compile(r"(\d{1,3})\s*(?:questions?|items?|problems?|quiz|tests?)\b", re.IGNORECASE)
+
+DEFAULT_PER_FORMAT = 5
+
+
+def _extract_overall_count(text):
+    """Returns the first standalone overall count like "20 questions" in ``text``,
+    or None when no such phrase is present."""
+    if not (text or "").strip():
+        return None
+    m = _OVERALL_COUNT_RE.search(text)
+    if not m:
+        return None
+    try:
+        return max(1, int(m.group(1)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp_plan_total(plan, maximum):
+    """Scales a plan down proportionally so its total never exceeds ``maximum``."""
+    total = sum(plan.values())
+    if total <= maximum:
+        return plan
+    weights = plan
+    raw = {t: weights[t] * maximum / float(total) for t in plan}
+    out = {t: int(raw[t]) for t in plan}
+    remaining = maximum - sum(out.values())
+    for t in sorted(plan, key=lambda x: raw[x] - float(out[x]), reverse=True):
+        if remaining <= 0:
+            break
+        out[t] += 1
+        remaining -= 1
+    return {t: c for t, c in out.items() if c > 0}
+
+
+def _resolve_quiz_plan(ordered_types, counts=None, overall_count=None):
+    """Determines exactly how many questions of each requested format to generate.
+
+    The prompt (or, on mobile, the source text) is the single source of truth:
+
+      1. Formats named with an explicit count keep that count exactly; formats named
+         without a number default to ``DEFAULT_PER_FORMAT`` (5 each).
+      2. Otherwise, an overall total like "20 questions" is split evenly across the
+         named formats using the largest-remainder method.
+      3. Otherwise every named format defaults to ``DEFAULT_PER_FORMAT`` (5).
+
+    The plan never exceeds ``MAX_AI_QUESTIONS`` total.
+    """
+    if not ordered_types:
+        return None
+    counts = counts or {}
+    explicit = {}
+    for t, n in counts.items():
+        if n:
+            try:
+                explicit[t] = max(1, int(n))
+            except (TypeError, ValueError):
+                continue
+    if explicit:
+        plan = {t: explicit.get(t, DEFAULT_PER_FORMAT) for t in ordered_types}
+    elif overall_count:
+        total = max(1, int(overall_count))
+        total_w = float(len(ordered_types))
+        raw = {t: 1.0 * total / total_w for t in ordered_types}
+        plan = {t: int(raw[t]) for t in ordered_types}
+        remaining = total - sum(plan.values())
+        if remaining > 0:
+            for t in sorted(ordered_types, key=lambda x: raw[x] - float(plan[x]), reverse=True):
+                if remaining <= 0:
+                    break
+                plan[t] += 1
+                remaining -= 1
+    else:
+        plan = {t: DEFAULT_PER_FORMAT for t in ordered_types}
+    plan = {t: min(c, MAX_AI_QUESTIONS) for t, c in plan.items() if c > 0}
+    return _clamp_plan_total(plan, MAX_AI_QUESTIONS) or None
+
+
+def _mc_index(correct, options):
+    """Normalizes a multiple-choice correctAnswer (int, digit string, or option letter)
+    into a valid option index."""
+    if isinstance(correct, bool):
+        return int(correct)
+    if isinstance(correct, int):
+        return correct
+    if isinstance(correct, float) and correct.is_integer():
+        return int(correct)
+    if isinstance(correct, str):
+        cl = correct.strip()
+        if cl.isdigit():
+            return int(cl)
+        if len(cl) == 1 and cl.upper() in "ABCD":
+            return "ABCD".index(cl.upper())
+        for i, opt in enumerate(options):
+            if str(opt).strip().lower() == cl.lower():
+                return i
+    return None
+
+
+def _tf_index(correct):
+    """Normalizes a true_false correctAnswer into 0 (True) or 1 (False)."""
+    if isinstance(correct, bool):
+        return 0 if correct else 1
+    if isinstance(correct, int):
+        return 0 if correct == 0 else 1
+    if isinstance(correct, str):
+        cl = correct.strip().lower()
+        if cl in ("0", "1"):
+            return int(cl)
+        if cl in ("true", "t", "yes", "a", "correct"):
+            return 0
+        if cl in ("false", "f", "no", "b"):
+            return 1
+    return None
+
+
+def _normalize_question_shapes(questions):
+    """Coerces every question into a valid, self-consistent shape for its declared type.
+
+    - identification -> ``options: []`` and a string ``correctAnswer``
+    - true_false     -> ``options: ["True", "False"]`` with a 0/1 index
+    - multiple_choice -> real option list with a valid 0-based index
+
+    Questions with an unknown/missing type are inferred from their shape (options+index
+    => multiple_choice, otherwise identification).
+    """
+    out = []
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        q = dict(q)
+        qtype = str(q.get("type") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if qtype in ("tf", "truefalse"):
+            qtype = "true_false"
+        if qtype in ("identify", "identifications"):
+            qtype = "identification"
+        options = q.get("options")
+        if qtype not in ("multiple_choice", "true_false", "identification", "short_answer"):
+            if isinstance(options, list) and len(options) >= 2:
+                qtype = "multiple_choice"
+            else:
+                qtype = "identification"
+        if qtype in ("identification", "short_answer"):
+            q["type"] = "identification"
+            q["options"] = []
+            correct = q.get("correctAnswer")
+            q["correctAnswer"] = str(correct if correct is not None else "")
+        elif qtype == "true_false":
+            q["type"] = "true_false"
+            q["options"] = (list(options[:2]) if isinstance(options, list) and len(options) >= 2
+                            else ["True", "False"])
+            idx = _tf_index(q.get("correctAnswer"))
+            q["correctAnswer"] = 0 if idx is None else idx
+        else:
+            q["type"] = "multiple_choice"
+            q["options"] = (list(options) if isinstance(options, list) and len(options) >= 2
+                            else ["Option A", "Option B"])
+            idx = _mc_index(q.get("correctAnswer"), q["options"])
+            if idx is None or not (0 <= idx < len(q["options"])):
+                idx = 0
+            q["correctAnswer"] = idx
+        out.append(q)
+    return out
+
+
+def _composition_system_prompt():
+    """System prompt for multiple-format quiz generation: documents the exact JSON schema
+    for every supported question type so the model emits structurally valid items."""
+    return (
+        "You are StudyLens AI Assessment Generator powered by Groq Inference (GPT-OSS-120B). "
+        "Return a raw JSON array of quiz questions. Every item MUST match exactly ONE of "
+        "these schemas (chosen by the requested type) and include every field:\n\n"
+        "SCHEMA A — type \"multiple_choice\":\n"
+        "  {\n"
+        '    "id": "q1",\n'
+        '    "question": "Question text here?",\n'
+        '    "type": "multiple_choice",\n'
+        '    "options": ["Option A", "Option B", "Option C", "Option D"],\n'
+        '    "correctAnswer": 0,\n'
+        '    "explanation": "Detailed explanation of correct answer",\n'
+        '    "bloomsLevel": "Understanding",\n'
+        '    "difficulty": "medium",\n'
+        '    "topicTag": "Topic Name"\n'
+        "  }\n\n"
+        "SCHEMA B — type \"identification\":\n"
+        "  {\n"
+        '    "id": "q1",\n'
+        '    "question": "Identify the term/concept described by ...?",\n'
+        '    "type": "identification",\n'
+        '    "options": [],\n'
+        '    "correctAnswer": "exact term or short phrase",\n'
+        '    "explanation": "Detailed explanation of correct answer",\n'
+        '    "bloomsLevel": "Understanding",\n'
+        '    "difficulty": "medium",\n'
+        '    "topicTag": "Topic Name"\n'
+        "  }\n\n"
+        "SCHEMA C — type \"true_false\":\n"
+        "  {\n"
+        '    "id": "q1",\n'
+        '    "question": "A single clear statement to mark True or False.",\n'
+        '    "type": "true_false",\n'
+        '    "options": ["True", "False"],\n'
+        '    "correctAnswer": 0,\n'
+        '    "explanation": "Detailed explanation of correct answer",\n'
+        '    "bloomsLevel": "Understanding",\n'
+        '    "difficulty": "medium",\n'
+        '    "topicTag": "Topic Name"\n'
+        "  }\n\n"
+        "Observe the requested type for each question and use the matching schema above."
+    )
+
+
+def _composition_request_prompt(qtype, need, chunk, difficulty, instructions, existing_block, request_no):
+    """Builds a per-format batch prompt asking the AI for exactly ``need`` questions of
+    one specific type, grounded in ``chunk``."""
+    labels = {
+        "multiple_choice": "multiple-choice",
+        "identification": "identification",
+        "true_false": "true or false",
+    }
+    rules_by_type = {
+        "multiple_choice": (
+            "OPTION RULES (strict):\n"
+            "- Every option must be SHORT (roughly 1 to 8 words), self-contained, and distinct — a plausible answer phrase, never a quoted paragraph or full sentence copied from the document.\n"
+            "- NEVER copy a document sentence verbatim, and NEVER truncate an option with '...'.\n"
+            "- Keep the three wrong options the same KIND of answer as the correct one (all short facts, all short terms, etc.) so the question is genuinely discriminating.\n"
+            '- "correctAnswer" must be the index of the exactly-correct option; make sure only ONE option is correct.\n'
+            "- Vary the correct answer position across questions (mix indices 0, 1, 2, 3) — never always place the correct option first.\n"
+        ),
+        "identification": (
+            "IDENTIFICATION RULES (strict):\n"
+            '- The question must ask the reader to "Identify" (or name) a specific term, concept, person, formula, or short phrase from the material.\n'
+            '- "correctAnswer" must be the exact one-word or short-phrase answer, concise as the learner should type it.\n'
+            '- Set "options" to an empty array [] for these questions.\n'
+        ),
+        "true_false": (
+            "TRUE/FALSE RULES (strict):\n"
+            '- The question must be a single clear statement the learner marks True or False.\n'
+            '- Set "options" to exactly ["True", "False"].\n'
+            '- "correctAnswer" must be 0 when the statement is TRUE and 1 when it is FALSE.\n'
+            "- Mix TRUE and FALSE statements (roughly half of each), and every FALSE statement must be genuinely false per the material.\n"
+        ),
+    }
+    rule = rules_by_type.get(qtype, rules_by_type["multiple_choice"])
+    label = labels.get(qtype, "assessment")
+    gen_line = (
+        f"Generate exactly {need} NEW additional high-quality {label} assessment questions, "
+        f"ALL of type \"{qtype}\", based on the following material.\n"
+    )
+    return (
+        gen_line
+        + rule
+        + f"\nTarget Difficulty: {difficulty}\n"
+        "The material below is the PRIMARY source. Use this entire section and generate every question strictly from its own concepts.\n"
+        f"{_instruction_directive(instructions)}"
+        f"{existing_block}"
+        f"\nMaterial Text (request {request_no}):\n{chunk}\n\n"
+        "Return ONLY raw valid JSON array."
+    )
+
+
+def _top_up_questions(qtype, target, text_content, difficulty, tickets):
+    """Caps a per-type list at ``target``, topping up any shortfall with the matching
+    content-derived offline builder so exact requested counts are always honored."""
+    items = list(tickets)[:target]
+    if len(items) >= target:
+        return items[:target]
+    need = target - len(items)
+    if qtype == "identification":
+        more = _build_identification_questions(text_content, need, tickets)
+    elif qtype == "true_false":
+        more = _build_true_false_questions(text_content, need, tickets)
+    else:
+        more = _build_quiz_fallback(text_content, need, difficulty, tickets)
+    items.extend(more)
+    return items[:target]
+
+
+def _generate_composed_quiz(text_content, plan, difficulty, instructions, context):
+    """Generates a quiz composed of multiple question formats with exact counts.
+
+    Each requested format is generated in its own small, type-specific AI batch whose
+    shortfalls are topped up from the offline builders, so the returned set always
+    contains exactly the planned number of items per format.
+    """
+    order = list(plan.keys())
+    generated = {t: [] for t in order}
+    system_prompt = _composition_system_prompt()
+    request_no = 0
+    offline_reason = ""
+    for qtype in order:
+        target = plan[qtype]
+        rounds = 0
+        while len(generated[qtype]) < target and rounds < MAX_BATCH_ROUNDS and not offline_reason:
+            rounds += 1
+            chunks = _generation_chunks(text_content, 4000)
+            added = False
+            for chunk in chunks:
+                if len(generated[qtype]) >= target:
+                    break
+                need = min(MAX_PER_CHUNK, target - len(generated[qtype]))
+                request_no += 1
+                existing_block = _context_existing_block(list(generated[qtype]) + list(context or []), "QUESTIONS")
+                prompt = _composition_request_prompt(
+                    qtype, need, chunk, difficulty, instructions, existing_block, request_no
+                )
+                if request_no > 1:
+                    time.sleep(BATCH_CALL_PACING_SECONDS)
+                try:
+                    parsed = _ai_json_call(prompt, system_prompt=system_prompt, temperature=0.5)
+                except GroqOfflineError as e:
+                    offline_reason = e.code or "OFFLINE_USED"
+                    break
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        if not isinstance(item, dict):
+                            continue
+                        item = _normalize_question_shapes([item])[0]
+                        if item.get("type") == qtype:
+                            generated[qtype].append(item)
+                    added = True
+            if not added:
+                break
+        if len(generated[qtype]) < target:
+            generated[qtype] = _top_up_questions(
+                qtype, target, text_content, difficulty, generated[qtype] + list(context or [])
+            )
+    if offline_reason:
+        mark_offline_fallback(offline_reason)
+    result = []
+    for t in order:
+        result.extend(generated[t])
+    return result[:sum(plan.values())]
+
+
+def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficulty: str = "medium", instructions: str = "", context: list = None, require_count: bool = False) -> list:
     """
     Generates structured assessment questions classified strictly into Bloom's Taxonomy 6 cognitive levels:
 
     - Remembering, Understanding, Applying, Analyzing, Evaluating, Creating
+
+    When a user instruction (or, on mobile, the source text itself) names specific formats
+    such as "5 identification, 10 multiple choice, 5 true or false", exactly the requested
+    counts are generated (prompt is the single source of truth). Formats named without an
+    explicit number default to 5 each; an overall total like "20 questions" splits evenly
+    across the named formats. With no formats named, every question is multiple-choice and
+    the prompt's overall count (e.g. "make 20 questions") sets the total. Set
+    ``require_count`` to True when the caller no longer provides a count box: a prompt that
+    names neither a format nor an overall count then raises ``GroqAPIError("COUNT_REQUIRED")``
+    so the UI can tell the user to include a number.
 
     When ``context`` (previously generated questions) is supplied, only NEW non-duplicate
     questions are generated and the combined set is returned with the new ones flagged.
@@ -887,6 +1415,38 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
 
     if _is_prompt_like(text_content):
         text_content = _expand_prompt_material(text_content)
+
+    # Honor requested question formats. The instruction (Prompt box) is the primary
+    # source; the source text is scanned too for mobile/prompt-only flows, but only when
+    # there is a strong signal (multiple formats or at least one explicit count) so
+    # ordinary body text that merely contains the word "identification" is not misread.
+    ordered_types, type_counts = None, None
+    if instructions and instructions.strip():
+        ordered_types, type_counts = _parse_quiz_types(instructions)
+    if not ordered_types:
+        o, c = _parse_quiz_types(text_content)
+        if o and (len(o) >= 2 or (c and any(v is not None and v > 0 for v in c.values()))):
+            ordered_types, type_counts = o, c
+
+    if ordered_types:
+        overall_count = _extract_overall_count(instructions) or _extract_overall_count(text_content)
+        plan = _resolve_quiz_plan(ordered_types, type_counts, overall_count)
+        if plan:
+            composed = _generate_composed_quiz(text_content, plan, difficulty, instructions, context)
+            return _randomize_mc_correct_answer(_merge_context_and_new(context, composed, "q"))
+
+    # No formats named: the prompt's overall count (e.g. "make 20 questions") sets the
+    # total when present; otherwise the caller-supplied count is used. Once the quiz
+    # count box was removed from the UI, the prompt must mention a count, so raise a
+    # structured error the route surface turns into a friendly validation message.
+    overall_count = _extract_overall_count(instructions) or _extract_overall_count(text_content)
+    if overall_count is not None:
+        num_questions = max(1, min(MAX_AI_QUESTIONS, overall_count))
+    elif require_count:
+        raise GroqAPIError(
+            "COUNT_REQUIRED",
+            'Include how many questions you want in the prompt (e.g. "Make 10 multiple choice questions" or "5 identification, 10 multiple choice, 5 true or false").',
+        )
 
     system_prompt = (
         "You are StudyLens AI Assessment Generator powered by Groq Inference (GPT-OSS-120B). "

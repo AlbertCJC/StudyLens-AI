@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   CheckSquare,
   Clock,
@@ -26,6 +26,11 @@ import type { Quiz, QuizQuestion, QuizAttempt, Subject, QuizFeedbackItem, Questi
 import { Pagination, slicePage } from "../../components/Pagination";
 
 const AI_DEFAULT_QUIZ_DESCRIPTION = "Automated Bloom's Taxonomy Quiz generated via Groq Inference (GPT-OSS-120B).";
+
+// Editor styling used to mark the correct answer as the selected option card.
+const CORRECT_ANSWER_CARD_CLASS =
+  "bg-green-500/10 border-green-500 text-green-700 dark:text-green-400 shadow-xs ring-1 ring-green-500";
+const CORRECT_ANSWER_CHIP_CLASS = "bg-green-500/10 dark:bg-green-500/20 text-green-700 dark:text-green-400";
 
 // Fixed assessment parameters (not editable by users).
 const FIXED_PASS_PERCENTAGE = 75;
@@ -89,6 +94,95 @@ function feedbackUserAnswerText(fb: QuizFeedbackItem, question?: QuizQuestion): 
 
 function cleanQuizDescription(desc: string): string {
   return desc.replace(AI_DEFAULT_QUIZ_DESCRIPTION, "").trim();
+}
+
+// Canonicalizes a question's type, honoring producer aliases (the backend stamps the
+// same canonicalization on read) and falling back to shape inference when the type
+// field is missing or unknown.
+function canonicalQuestionType(q: Pick<QuizQuestion, "type" | "options">): QuestionType {
+  const t = (q.type || "").trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
+  if (t === "mc" || t === "multiplechoice" || t === "multiple_choice") return "multiple_choice";
+  if (t === "tf" || t === "truefalse" || t === "true_false") return "true_false";
+  if (t === "identify" || t === "identifications" || t === "shortanswer" || t === "short_answer" || t === "identification")
+    return "identification";
+  const options = Array.isArray(q.options) ? q.options : [];
+  if (options.length === 2) {
+    const normalized = new Set(options.map((o) => String(o).trim().toLowerCase()));
+    if (normalized.size === 2 && normalized.has("true") && normalized.has("false")) return "true_false";
+  }
+  if (options.length >= 2) return "multiple_choice";
+  return "identification";
+}
+
+// Human-readable type label for a question, robust to missing/aliased type fields.
+function questionTypeLabel(q: Pick<QuizQuestion, "type" | "correctAnswer" | "options">): string {
+  const type = canonicalQuestionType(q);
+  if (type === "true_false") return "True / False";
+  if (type === "multiple_choice") return Array.isArray(q.correctAnswer) ? "Multiple Select" : "Multiple Choice";
+  return "Identification";
+}
+
+// Resolves a single stored answer value (integer, digit-string, letter "A"-"D", or
+// exact option text) into a valid option index, or -1 when it cannot be matched.
+function resolveOptionIndex(value: string | number, options: (string | number)[]): number {
+  if (typeof value === "number") {
+    if (Number.isInteger(value) && value >= 0 && value < options.length) return value;
+    if (!Number.isNaN(value) && Math.floor(value) >= 0 && Math.floor(value) < options.length)
+      return Math.floor(value);
+    return -1;
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") return -1;
+  if (/^\d+$/.test(trimmed)) {
+    const n = parseInt(trimmed, 10);
+    if (n >= 0 && n < options.length) return n;
+    return -1;
+  }
+  const letterIdx = "ABCD".indexOf(trimmed.toUpperCase());
+  if (letterIdx >= 0 && letterIdx < options.length) return letterIdx;
+  const textIdx = options.findIndex((o) => o !== undefined && String(o).trim().toLowerCase() === trimmed.toLowerCase());
+  if (textIdx >= 0) return textIdx;
+  return -1;
+}
+
+// Returns the option index currently marked correct for a multiple-choice question,
+// or -1 when the question is multi-answer / has no selectable answer.
+function resolveMCIndex(q: QuizQuestion): number {
+  if (q.type !== "multiple_choice") return -1;
+  const options = Array.isArray(q.options) ? q.options : [];
+  if (options.length === 0) return -1;
+  const correct = q.correctAnswer;
+  if (Array.isArray(correct)) return -1;
+  if (typeof correct === "string" && correct.trim() === "") return -1;
+  return resolveOptionIndex(correct as string | number, options);
+}
+
+// Normalizes a question before editing so answer state is ALWAYS a valid, visibly
+// selectable value regardless of the encoding (index, letter, text, null) it came in
+// with. Correct answers are never left "blank" in the editor.
+function normalizeQuestionForEdit(q: QuizQuestion): QuizQuestion {
+  const type = canonicalQuestionType(q);
+  const base = { ...q, type };
+  if (type === "multiple_choice") {
+    const options = Array.isArray(base.options) && base.options.length > 0 ? base.options : ["Option A", "Option B"];
+    const normalized = { ...base, options };
+    if (Array.isArray(base.correctAnswer)) {
+      const resolved = base.correctAnswer
+        .map((v) => resolveOptionIndex(v as string | number, options))
+        .filter((idx) => idx >= 0);
+      return { ...normalized, correctAnswer: resolved.length > 0 ? resolved : [0] };
+    }
+    const idx = resolveMCIndex(normalized);
+    return { ...normalized, correctAnswer: idx >= 0 ? idx : 0 };
+  }
+  if (type === "true_false") {
+    const tf = Number(base.correctAnswer);
+    return { ...base, correctAnswer: Number.isNaN(tf) ? 0 : tf === 1 ? 1 : 0, options: ["True", "False"] };
+  }
+  if (type === "identification") {
+    return { ...base, options: [], correctAnswer: typeof base.correctAnswer === "string" ? base.correctAnswer : String(base.correctAnswer ?? "") };
+  }
+  return base;
 }
 
 interface AssessmentPageProps {
@@ -179,6 +273,19 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   const [editRevealAnswers, setEditRevealAnswers] = useState(true);
   const [editDeadline, setEditDeadline] = useState<string>("");
   const [editQuestions, setEditQuestions] = useState<QuizQuestion[]>([]);
+  const editQuestionListRef = useRef<HTMLDivElement>(null);
+  const editPromptRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const [editScrollTick, setEditScrollTick] = useState(0);
+
+  // When a question is added via "Add Question", scroll the list to the new card and
+  // focus its prompt so the next one can be typed immediately.
+  useEffect(() => {
+    if (editScrollTick === 0) return;
+    const el = editQuestionListRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    const prompts = editPromptRefs.current;
+    prompts[prompts.length - 1]?.focus();
+  }, [editScrollTick]);
 
   // Active Quiz Taking State
   const [currentQIndex, setCurrentQIndex] = useState(0);
@@ -438,6 +545,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   };
 
   const handleSelectAnswer = (qId: string, answer: unknown) => {
+    setHint(null);
     setUserAnswers({ ...userAnswers, [qId]: answer });
   };
 
@@ -644,7 +752,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     setEditAttempts(quiz.attemptsAllowed || 3);
     setEditRevealAnswers(quiz.revealAnswers !== false);
     setEditDeadline(toLocalInputValue(quiz.deadline));
-    setEditQuestions(quiz.questions || []);
+    setEditQuestions((quiz.questions || []).map(normalizeQuestionForEdit));
   };
 
   const handleSaveEditQuiz = async () => {
@@ -878,7 +986,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                             }}
                             className={`p-3.5 rounded-xl border text-left text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
                               isSelected
-                                ? "bg-primary/10 border-primary text-primary shadow-xs ring-1 ring-primary"
+                                ? CORRECT_ANSWER_CARD_CLASS
                                 : "bg-muted/40 border-border text-foreground hover:bg-muted"
                             }`}
                           >
@@ -890,7 +998,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                               (isMulti ? (
                                 <CheckSquare className="w-4 h-4 text-primary" />
                               ) : (
-                                <CheckCircle2 className="w-4 h-4 text-primary" />
+                                <CheckCircle2 className="w-4 h-4 text-green-500" />
                               ))}
                           </button>
                         );
@@ -914,8 +1022,16 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   <div className="pt-2">
                     {!isTeacherQuiz && hint ? (
                       <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-800 dark:text-amber-200 space-y-1">
-                        <span className="font-bold flex items-center space-x-1 text-amber-600 dark:text-amber-400">
+                        <span className="font-bold flex items-center justify-between gap-2 text-amber-600 dark:text-amber-400">
                           <span>Study Hint</span>
+                          <button
+                            type="button"
+                            onClick={() => setHint(null)}
+                            aria-label="Dismiss hint"
+                            className="p-0.5 rounded hover:bg-amber-500/20 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
                         </span>
                         <p className="leading-relaxed">{hint}</p>
                       </div>
@@ -941,7 +1057,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
               {/* Stepper Navigation */}
               <div className="flex items-center justify-between pt-4 border-t border-border">
                 <button
-                  onClick={() => setCurrentQIndex((prev) => Math.max(0, prev - 1))}
+                  onClick={() => {
+                    setHint(null);
+                    setCurrentQIndex((prev) => Math.max(0, prev - 1));
+                  }}
                   disabled={currentQIndex === 0}
                   className="px-4 py-2 border border-border text-foreground rounded-xl text-xs font-bold disabled:opacity-40 cursor-pointer"
                 >
@@ -950,7 +1069,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
                 {currentQIndex < activeQuiz.questions.length - 1 ? (
                   <button
-                    onClick={() => setCurrentQIndex((prev) => prev + 1)}
+                    onClick={() => {
+                      setHint(null);
+                      setCurrentQIndex((prev) => prev + 1);
+                    }}
                     className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs cursor-pointer"
                   >
                     Next Question →
@@ -1436,13 +1558,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-bold text-foreground text-xs">Question {idx + 1}</span>
                         <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold rounded uppercase tracking-wider">
-                          {q.type === "multiple_choice"
-                            ? Array.isArray(q.correctAnswer)
-                              ? "Multiple Select"
-                              : "Multiple Choice"
-                            : q.type === "true_false"
-                              ? "True / False"
-                              : "Identification"}
+                          {questionTypeLabel(q)}
                         </span>
                       </div>
                       <p className="text-sm font-semibold text-foreground leading-snug">{q.question}</p>
@@ -1736,7 +1852,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
             if (e.target === e.currentTarget) setEditingQuiz(null);
           }}
         >
-          <div className="bg-card border border-border p-6 rounded-2xl max-w-2xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+          <div className="bg-card border border-border p-6 rounded-2xl max-w-5xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center space-x-2">
                 <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
@@ -1755,7 +1871,9 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
               </button>
             </div>
 
-            <div className="space-y-4 text-xs">
+            <div className="lg:grid lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-5 lg:items-start space-y-4 lg:space-y-0 text-xs">
+              {/* Settings column */}
+              <div className="space-y-4 lg:bg-muted/20 lg:border lg:border-border lg:rounded-2xl lg:p-4">
               {/* Row 1: Quiz Scope */}
               <div>
                 <label className="block font-bold text-foreground mb-1">Quiz Scope</label>
@@ -1891,8 +2009,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
               </div>
               )}
 
+              </div>
+
               {/* Questions List Editor */}
-              <div className="space-y-3 pt-3 border-t border-border">
+              <div className="space-y-3 pt-3 lg:pt-0 border-t border-border lg:border-t-0 lg:bg-muted/20 lg:border lg:border-border lg:rounded-2xl lg:p-4">
                 <div className="flex items-center justify-between">
                   <h4 className="font-bold text-foreground text-xs flex items-center gap-1.5">
                     <CheckSquare className="w-4 h-4 text-primary" />
@@ -1913,6 +2033,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                         topicTag: "General Topic",
                       };
                       setEditQuestions([...editQuestions, newQ]);
+                      setEditScrollTick((t) => t + 1);
                     }}
                     className="px-3 py-1 bg-primary/10 text-primary hover:bg-primary/20 rounded-lg text-xs font-bold cursor-pointer flex items-center space-x-1"
                   >
@@ -1921,7 +2042,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   </button>
                 </div>
 
-                <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+                <div ref={editQuestionListRef} className="space-y-3 max-h-60 lg:max-h-[calc(100vh-20rem)] overflow-y-auto pr-1">
                   {editQuestions.map((q, idx) => (
                     <div key={q.id || idx} className="p-3 bg-muted/30 border border-border rounded-xl space-y-2">
                       <div className="flex items-center justify-between gap-2">
@@ -1960,6 +2081,9 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                       </div>
 
                       <input
+                        ref={(el) => {
+                          editPromptRefs.current[idx] = el;
+                        }}
                         type="text"
                         value={q.question}
                         onChange={(e) => {
@@ -1968,7 +2092,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                           setEditQuestions(updated);
                         }}
                         placeholder="Enter question prompt..."
-                        className="w-full p-2 bg-card border border-border rounded-lg text-xs text-foreground focus:outline-none"
+                        className="w-full text-xs font-bold text-foreground bg-transparent border-b border-dashed border-border focus:border-primary focus:outline-none pb-1"
                       />
 
                       {q.type === "identification" ? (
@@ -1983,24 +2107,39 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                               setEditQuestions(updated);
                             }}
                             placeholder="Type exact key term..."
-                            className="w-full p-1.5 bg-card border border-border rounded text-[11px] font-semibold"
+                            className="w-full p-2 bg-muted/30 border border-border rounded-xl text-xs font-semibold text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                           />
                         </div>
                       ) : q.type === "true_false" ? (
                         <div>
-                          <label className="text-[10px] font-bold text-muted-foreground">Correct Option:</label>
-                          <select
-                            value={Number(q.correctAnswer) || 0}
-                            onChange={(e) => {
-                              const updated = [...editQuestions];
-                              updated[idx] = { ...updated[idx], correctAnswer: Number(e.target.value) };
-                              setEditQuestions(updated);
-                            }}
-                            className="w-full p-1.5 bg-card border border-border rounded text-[11px]"
-                          >
-                            <option value={0}>True</option>
-                            <option value={1}>False</option>
-                          </select>
+                          <label className="text-[10px] font-bold text-muted-foreground">Correct Answer:</label>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                            {["True", "False"].map((tf, tfIdx) => {
+                              const tfCorrect = Number(q.correctAnswer) === tfIdx;
+                              return (
+                                <button
+                                  key={tf}
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = [...editQuestions];
+                                    updated[idx] = { ...updated[idx], correctAnswer: tfIdx };
+                                    setEditQuestions(updated);
+                                  }}
+                                  className={`p-2.5 rounded-xl border text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
+                                    tfCorrect
+                                      ? CORRECT_ANSWER_CARD_CLASS
+                                      : "bg-muted/40 border-border text-foreground hover:bg-muted"
+                                  }`}
+                                >
+                                  <span>
+                                    <span className="font-bold mr-2">{tfIdx === 0 ? "A." : "B."}</span>
+                                    {tf}
+                                  </span>
+                                  {tfCorrect && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
                       ) : (
                         <div className="space-y-2">
@@ -2020,15 +2159,21 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                             />
                             <span>Multiple correct answers (select all that apply)</span>
                           </label>
-                          <div className="grid grid-cols-2 gap-2">
-                            {(q.options || ["Option 1", "Option 2", "Option 3", "Option 4"]).map((opt, optIdx) => (
-                              <div key={optIdx} className="flex items-center space-x-1.5">
-                                {Array.isArray(q.correctAnswer) ? (
-                                  <input
-                                    type="checkbox"
-                                    checked={(q.correctAnswer as number[]).includes(optIdx)}
-                                    onChange={() => {
-                                      const updated = [...editQuestions];
+                          <p className="text-[10px] text-muted-foreground">Click an option to set it as the correct answer. Click its text to edit it.</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {(q.options || ["Option 1", "Option 2", "Option 3", "Option 4"]).map((opt, optIdx) => {
+                              const isMulti = Array.isArray(q.correctAnswer);
+                              const isCorrect = isMulti
+                                ? (q.correctAnswer as number[]).includes(optIdx)
+                                : resolveMCIndex(q) === optIdx;
+                              return (
+                                <div
+                                  key={optIdx}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => {
+                                    const updated = [...editQuestions];
+                                    if (isMulti) {
                                       const cur = Array.isArray(updated[idx].correctAnswer)
                                         ? (updated[idx].correctAnswer as number[])
                                         : [];
@@ -2038,39 +2183,68 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                                           ? cur.filter((i) => i !== optIdx)
                                           : [...cur, optIdx],
                                       };
-                                      setEditQuestions(updated);
-                                    }}
-                                    className="accent-primary"
-                                  />
-                                ) : (
-                                  <input
-                                    type="radio"
-                                    name={`correct-${idx}`}
-                                    checked={Number(q.correctAnswer) === optIdx}
-                                    onChange={() => {
-                                      const updated = [...editQuestions];
+                                    } else {
                                       updated[idx] = { ...updated[idx], correctAnswer: optIdx };
-                                      setEditQuestions(updated);
-                                    }}
-                                  />
-                                )}
-                                <input
-                                  type="text"
-                                  value={opt}
-                                  onChange={(e) => {
-                                    const updated = [...editQuestions];
-                                    const opts = [...(updated[idx].options || [])];
-                                    opts[optIdx] = e.target.value;
-                                    updated[idx] = { ...updated[idx], options: opts };
+                                    }
                                     setEditQuestions(updated);
                                   }}
-                                  className="w-full p-1.5 bg-card border border-border rounded text-[11px]"
-                                />
-                              </div>
-                            ))}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      e.currentTarget.click();
+                                    }
+                                  }}
+                                  className={`p-2 rounded-xl border text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
+                                    isCorrect
+                                      ? CORRECT_ANSWER_CARD_CLASS
+                                      : "bg-muted/40 border-border text-foreground hover:bg-muted"
+                                  }`}
+                                >
+                                  <span className={`w-5 h-5 rounded-full ${CORRECT_ANSWER_CHIP_CLASS} text-[10px] font-bold flex items-center justify-center shrink-0`}>
+                                    {String.fromCharCode(65 + optIdx)}
+                                  </span>
+                                  <input
+                                    type="text"
+                                    value={opt}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onChange={(e) => {
+                                      const updated = [...editQuestions];
+                                      const opts = [...(updated[idx].options || [])];
+                                      opts[optIdx] = e.target.value;
+                                      updated[idx] = { ...updated[idx], options: opts };
+                                      setEditQuestions(updated);
+                                    }}
+                                    placeholder={`Option ${String.fromCharCode(65 + optIdx)}`}
+                                    className="flex-1 min-w-0 bg-transparent focus:outline-none text-foreground"
+                                  />
+                                  {isCorrect &&
+                                    (isMulti ? (
+                                      <CheckSquare className="w-4 h-4 text-green-500 shrink-0" />
+                                    ) : (
+                                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                                    ))}
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       )}
+
+                      <div>
+                        <label className="text-[10px] font-bold text-muted-foreground">Explanation / Solution Notes</label>
+                        <input
+                          type="text"
+                          value={String(q.explanation || "")}
+                          onChange={(e) => {
+                            const updated = [...editQuestions];
+                            updated[idx] = { ...updated[idx], explanation: e.target.value };
+                            setEditQuestions(updated);
+                          }}
+                          placeholder="Brief explanation for why this answer is correct..."
+                          className="w-full p-1.5 bg-card border border-border rounded text-[11px]"
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -2104,7 +2278,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
             if (e.target === e.currentTarget) setShowCreateModal(false);
           }}
         >
-          <div className="bg-card border border-border p-6 rounded-2xl max-w-xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+          <div className="bg-card border border-border p-6 rounded-2xl max-w-5xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div className="flex items-center space-x-2">
                 <div className={`p-2 rounded-xl ${
@@ -2139,7 +2313,9 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
               </button>
             </div>
 
-            <div className="space-y-4 text-xs">
+            <div className="lg:grid lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-5 lg:items-start space-y-4 lg:space-y-0 text-xs">
+              {/* Settings column */}
+              <div className="space-y-4 lg:bg-muted/20 lg:border lg:border-border lg:rounded-2xl lg:p-4">
               {/* Row 1: Quiz Scope (staff only — students always create personal drills) */}
               {canManageCourseQuizzes ? (
                 <div>
@@ -2278,8 +2454,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
               </div>
               )}
 
+              </div>
+
               {/* Manual Question Builder */}
-              <div className="p-4 bg-muted/20 border border-border rounded-2xl space-y-3">
+              <div className="p-4 bg-muted/20 border border-border rounded-2xl space-y-3 lg:max-h-[calc(100vh-18rem)] lg:overflow-y-auto">
                 <div className="flex items-center justify-between pb-2 border-b border-border">
                   <div>
                     <h4 className="font-bold text-foreground text-xs">Manual Question Builder</h4>
@@ -2337,14 +2515,26 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   ) : manualQType === "true_false" ? (
                     <div className="p-3 bg-card border border-border rounded-xl space-y-1.5">
                       <label className="block text-[11px] font-bold text-primary">Correct True/False Answer:</label>
-                      <select
-                        value={manualQCorrect}
-                        onChange={(e) => setManualQCorrect(Number(e.target.value))}
-                        className="w-full p-2 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none"
-                      >
-                        <option value={0}>True</option>
-                        <option value={1}>False</option>
-                      </select>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                        {["True", "False"].map((tf, tfIdx) => (
+                          <button
+                            key={tf}
+                            type="button"
+                            onClick={() => setManualQCorrect(tfIdx)}
+                            className={`p-2.5 rounded-xl border text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
+                              manualQCorrect === tfIdx
+                                ? CORRECT_ANSWER_CARD_CLASS
+                                : "bg-muted/40 border-border text-foreground hover:bg-muted"
+                            }`}
+                          >
+                            <span>
+                              <span className="font-bold mr-2">{tfIdx === 0 ? "A." : "B."}</span>
+                              {tf}
+                            </span>
+                            {manualQCorrect === tfIdx && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -2356,7 +2546,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                             setManualQMulti(e.target.checked);
                             setManualQMultiCorrect(e.target.checked ? [0] : []);
                           }}
-                          className="accent-purple-600"
+                          className="accent-primary"
                         />
                         <span>Multiple correct answers (students select all that apply)</span>
                       </label>
@@ -2366,81 +2556,114 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                           type="text"
                           value={manualQOpt0}
                           onChange={(e) => setManualQOpt0(e.target.value)}
-                          placeholder="Option A (Index 0)"
+                          placeholder="Option A"
                           className="p-2 bg-card border border-border rounded-xl text-xs"
                         />
                         <input
                           type="text"
                           value={manualQOpt1}
                           onChange={(e) => setManualQOpt1(e.target.value)}
-                          placeholder="Option B (Index 1)"
+                          placeholder="Option B"
                           className="p-2 bg-card border border-border rounded-xl text-xs"
                         />
                         <input
                           type="text"
                           value={manualQOpt2}
                           onChange={(e) => setManualQOpt2(e.target.value)}
-                          placeholder="Option C (Index 2)"
+                          placeholder="Option C"
                           className="p-2 bg-card border border-border rounded-xl text-xs"
                         />
                         <input
                           type="text"
                           value={manualQOpt3}
                           onChange={(e) => setManualQOpt3(e.target.value)}
-                          placeholder="Option D (Index 3)"
+                          placeholder="Option D"
                           className="p-2 bg-card border border-border rounded-xl text-xs"
                         />
                       </div>
                       {manualQMulti ? (
                         <div>
                           <label className="text-[11px] font-bold text-muted-foreground">Correct Answers (select all):</label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-1">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
                             {[
                               { label: "Option A", value: manualQOpt0, idx: 0 },
                               { label: "Option B", value: manualQOpt1, idx: 1 },
                               { label: "Option C", value: manualQOpt2, idx: 2 },
                               { label: "Option D", value: manualQOpt3, idx: 3 },
-                            ].map((opt) => (
-                              <label
-                                key={opt.idx}
-                                className={`flex items-center space-x-2 p-2 rounded-xl border text-xs cursor-pointer transition-all ${
-                                  manualQMultiCorrect.includes(opt.idx)
-                                    ? "bg-purple-500/10 border-purple-500/40 text-foreground"
-                                    : "bg-card border-border text-muted-foreground"
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={manualQMultiCorrect.includes(opt.idx)}
-                                  onChange={() =>
+                            ].map((opt) => {
+                              const isCorrect = manualQMultiCorrect.includes(opt.idx);
+                              return (
+                                <div
+                                  key={opt.idx}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() =>
                                     setManualQMultiCorrect((prev) =>
                                       prev.includes(opt.idx)
                                         ? prev.filter((i) => i !== opt.idx)
                                         : [...prev, opt.idx]
                                     )
                                   }
-                                  className="accent-purple-600"
-                                />
-                                <span className="truncate">
-                                  {opt.label} ({opt.value || opt.label})
-                                </span>
-                              </label>
-                            ))}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      e.currentTarget.click();
+                                    }
+                                  }}
+                                  className={`flex items-center p-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                                    isCorrect
+                                      ? CORRECT_ANSWER_CARD_CLASS
+                                      : "bg-muted/40 border-border text-muted-foreground hover:bg-muted"
+                                  }`}
+                                >
+                                  <span className={`w-5 h-5 rounded-full ${CORRECT_ANSWER_CHIP_CLASS} text-[10px] font-bold flex items-center justify-center shrink-0 mr-2`}>
+                                    {String.fromCharCode(65 + opt.idx)}
+                                  </span>
+                                  <span className="truncate flex-1">{opt.value || opt.label}</span>
+                                  {isCorrect && <CheckSquare className="w-4 h-4 text-green-500 shrink-0" />}
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       ) : (
                         <div>
                           <label className="text-[11px] font-bold text-muted-foreground">Correct Answer Option:</label>
-                          <select
-                            value={manualQCorrect}
-                            onChange={(e) => setManualQCorrect(Number(e.target.value))}
-                            className="w-full p-2 bg-card border border-border rounded-xl text-xs mt-1"
-                          >
-                            <option value={0}>Option A ({manualQOpt0 || "Option A"})</option>
-                            <option value={1}>Option B ({manualQOpt1 || "Option B"})</option>
-                            <option value={2}>Option C ({manualQOpt2 || "Option C"})</option>
-                            <option value={3}>Option D ({manualQOpt3 || "Option D"})</option>
-                          </select>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                            {[
+                              { label: "Option A", value: manualQOpt0, idx: 0 },
+                              { label: "Option B", value: manualQOpt1, idx: 1 },
+                              { label: "Option C", value: manualQOpt2, idx: 2 },
+                              { label: "Option D", value: manualQOpt3, idx: 3 },
+                            ].map((opt) => {
+                              const isCorrect = manualQCorrect === opt.idx;
+                              return (
+                                <div
+                                  key={opt.idx}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => setManualQCorrect(opt.idx)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      e.currentTarget.click();
+                                    }
+                                  }}
+                                  className={`flex items-center p-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                                    isCorrect
+                                      ? CORRECT_ANSWER_CARD_CLASS
+                                      : "bg-muted/40 border-border text-muted-foreground hover:bg-muted"
+                                  }`}
+                                >
+                                  <span className={`w-5 h-5 rounded-full ${CORRECT_ANSWER_CHIP_CLASS} text-[10px] font-bold flex items-center justify-center shrink-0 mr-2`}>
+                                    {String.fromCharCode(65 + opt.idx)}
+                                  </span>
+                                  <span className="truncate flex-1">{opt.value || opt.label}</span>
+                                  {isCorrect && <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />}
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -2467,7 +2690,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                         <div key={i} className="flex items-center justify-between p-2.5 bg-card border border-border rounded-xl text-xs">
                           <div className="flex items-center space-x-2 truncate pr-2">
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/10 text-primary uppercase">
-                              {q.type === "identification" ? "Identification" : q.type === "true_false" ? "True/False" : Array.isArray(q.correctAnswer) ? "MC · Multi" : "MC"}
+                              {questionTypeLabel(q)}
                             </span>
                             <span className="truncate font-medium">{i + 1}. {q.question}</span>
                           </div>

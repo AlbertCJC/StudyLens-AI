@@ -52,6 +52,8 @@ import {
 } from '../services/api';
 import { Card, Badge, LoadingView, Modal, Field, PrimaryButton, OutlineButton, SegmentedButtons, SectionHeader, EmptyState, StatCard } from '../components/ui';
 import { formatRelative, formatExact } from '../utils/time';
+import { saveTextFile } from '../utils/fileExport';
+import { openSubject } from '../navigation/navigationRef';
 
 type TabKey = 'overview' | 'users' | 'subjects' | 'logs' | 'announcements' | 'settings';
 
@@ -105,7 +107,9 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
   const [subjectsList, setSubjectsList] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [backupLoading, setBackupLoading] = useState(false);
   const [detailCard, setDetailCard] = useState<'users' | 'subjects' | 'quizzes' | 'logs' | null>(null);
+  const [selectedLog, setSelectedLog] = useState<ActivityLog | null>(null);
 
   // Users filters
   const [userSearch, setUserSearch] = useState('');
@@ -145,10 +149,10 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
         fetchSystemSettings(),
         fetchSubjects(),
       ]);
-      setUsers(u);
-      setLogs(l);
-      setSettings(s);
-      setSubjectsList(subs);
+      setUsers(Array.isArray(u) ? u : []);
+      setLogs(Array.isArray(l) ? l : []);
+      setSettings(s && typeof s === 'object' ? s : null);
+      setSubjectsList(Array.isArray(subs) ? subs : []);
     } catch (err) {
       setError((err as Error).message || 'Failed to load admin data.');
     } finally {
@@ -311,13 +315,16 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
 
   const handleDownloadBackup = async () => {
     try {
+      setBackupLoading(true);
       const backup = await fetchSystemBackup();
-      const name = backup?.platformName || backup?.name || 'StudyLens';
-      const version = backup?.version || '';
-      showToast(`${name}${version ? ' v' + version : ''} backup fetched.`);
-      console.log('[Backup]', JSON.stringify(backup, null, 2));
+      const jsonStr = JSON.stringify(backup, null, 2);
+      const ts = new Date().getTime();
+      await saveTextFile(`StudyLens_System_Backup_${ts}.json`, jsonStr, 'application/json', 'System Backup');
+      showToast('Full database backup downloaded.');
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setBackupLoading(false);
     }
   };
 
@@ -376,8 +383,8 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
             </View>
             <View style={styles.grid}>
               <StatCard label="User Accounts" value={String(users.length)} icon={<Users size={18} color={colors.primary} />} onPress={() => setDetailCard('users')} />
-              <StatCard label="Subjects" value={String(subjectsList.length)} icon={<GraduationCap size={18} color="#2563eb" />} iconBg="rgba(37,99,235,0.12)" onPress={() => setDetailCard('subjects')} />
-              <StatCard label="Audit Logs" value={String(logs.length)} icon={<Activity size={18} color={colors.success} />} iconBg={colors.successSoft} onPress={() => setDetailCard('logs')} />
+              <StatCard label="Course Subjects" value={String(subjectsList.length)} icon={<GraduationCap size={18} color="#2563eb" />} iconBg="rgba(37,99,235,0.12)" onPress={() => setDetailCard('subjects')} />
+              <StatCard label="Activity Events" value={String(logs.length)} icon={<Activity size={18} color={colors.success} />} iconBg={colors.successSoft} onPress={() => setTab('logs')} />
             </View>
 
             <Card style={{ gap: 10 }}>
@@ -417,7 +424,7 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
                 <EmptyState icon={<Activity size={30} color={colors.mutedForeground} />} title="No activity yet" subtitle="Logs will appear here as events occur." />
               ) : (
                 logs.slice(0, 5).map((l) => (
-                  <View key={l.id} style={[styles.row, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+                  <TouchableOpacity key={l.id} onPress={() => setSelectedLog(l)} style={[styles.row, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
                     <View style={{ flex: 1, gap: 2 }}>
                       <View style={styles.rowBadges}>
                         <Badge text={l.action} color={l.action === 'USER_LOGIN' ? colors.success : colors.primary} />
@@ -426,7 +433,7 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
                       <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '600' }} numberOfLines={1}>{l.details}</Text>
                       <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>{l.userName} · {l.userRole}</Text>
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 ))
               )}
             </Card>
@@ -537,7 +544,7 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
               <EmptyState icon={<Activity size={32} color={colors.mutedForeground} />} title="No activity logs" />
             ) : (
               logs.map((l) => (
-                <View key={l.id} style={[styles.row, { borderColor: colors.border, backgroundColor: colors.card }]}>
+                <TouchableOpacity key={l.id} onPress={() => setSelectedLog(l)} style={[styles.row, { borderColor: colors.border, backgroundColor: colors.card }]}>
                   <View style={{ flex: 1, gap: 2 }}>
                     <View style={styles.rowBadges}>
                       <Badge text={l.action} color={l.action === 'USER_LOGIN' ? colors.success : colors.primary} />
@@ -546,7 +553,7 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
                     <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '600' }}>{l.details}</Text>
                     <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>{l.userName} · {l.userRole}</Text>
                   </View>
-                </View>
+                </TouchableOpacity>
               ))
             )}
           </View>
@@ -569,12 +576,16 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
                       <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>{a.authorName}</Text>
                     </View>
                   </View>
-                  <TouchableOpacity onPress={() => setAnnounceModal({ mode: 'edit', announcement: a })} style={[styles.iconBtnSm, { backgroundColor: colors.surfaceAlt }]}>
-                    <Pencil size={15} color={colors.primary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setDeleteAnnTarget(a)} style={[styles.iconBtnSm, { backgroundColor: colors.dangerSoft }]}>
-                    <Trash2 size={15} color={colors.danger} />
-                  </TouchableOpacity>
+                  {a.authorId === currentUser?.id && (
+                    <>
+                      <TouchableOpacity onPress={() => setAnnounceModal({ mode: 'edit', announcement: a })} style={[styles.iconBtnSm, { backgroundColor: colors.surfaceAlt }]}>
+                        <Pencil size={15} color={colors.primary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setDeleteAnnTarget(a)} style={[styles.iconBtnSm, { backgroundColor: colors.dangerSoft }]}>
+                        <Trash2 size={15} color={colors.danger} />
+                      </TouchableOpacity>
+                    </>
+                  )}
                 </View>
               ))
             )}
@@ -618,10 +629,10 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
 
             <Card style={{ gap: 10 }}>
               <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: '800' }}>Backup & Maintenance</Text>
-              <TouchableOpacity onPress={handleDownloadBackup} style={[styles.settingsAction, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+              <TouchableOpacity onPress={handleDownloadBackup} disabled={backupLoading} style={[styles.settingsAction, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
                 <Download size={18} color={colors.primary} />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>Download System Backup</Text>
+                  <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>{backupLoading ? 'Creating Backup...' : 'Download System Backup'}</Text>
                   <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>Fetch the latest system backup data</Text>
                 </View>
                 <ChevronRight size={16} color={colors.mutedForeground} />
@@ -763,6 +774,112 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
           <OutlineButton label="Cancel" onPress={() => setConfirmClearLogs(false)} />
           <PrimaryButton label="Clear Logs" onPress={handleClearLogs} color={colors.danger} />
         </View>
+      </Modal>
+
+      {/* User Accounts drill-down */}
+      <Modal visible={detailCard === 'users'} onClose={() => setDetailCard(null)} title="User Accounts" subtitle={`${users.length} registered account${users.length === 1 ? '' : 's'} in the system.`}>
+        <View style={{ gap: 8 }}>
+          {(['student', 'teacher', 'admin'] as UserRole[]).map((role) => {
+            const count = users.filter((u) => u.role === role).length;
+            const label = role === 'student' ? 'Students' : role === 'teacher' ? 'Teachers' : 'Administrators';
+            return (
+              <TouchableOpacity
+                key={role}
+                onPress={() => { setDetailCard(null); setUserRoleFilter(role); setUserStatusFilter('all'); setTab('users'); }}
+                style={[styles.detailRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>{label}</Text>
+                </View>
+                <Badge text={String(count)} color={colors.danger} bg={colors.dangerSoft} />
+                <ChevronRight size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            );
+          })}
+          <TouchableOpacity
+            onPress={() => { setDetailCard(null); setUserRoleFilter('all'); setUserStatusFilter('suspended'); setTab('users'); }}
+            style={[styles.detailRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>Suspended Accounts</Text>
+            </View>
+            <Badge text={String(users.filter((u) => u.status === 'suspended').length)} color={colors.foreground} bg="rgba(148,163,184,0.15)" />
+            <ChevronRight size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Course Subjects drill-down */}
+      <Modal visible={detailCard === 'subjects'} onClose={() => setDetailCard(null)} title="Course Subjects" subtitle={`${subjectsList.length} course subject${subjectsList.length === 1 ? '' : 's'} in the catalog.`}>
+        <ScrollView style={{ maxHeight: 440 }} contentContainerStyle={{ gap: 8 }}>
+          {subjectsList.length === 0 ? (
+            <Text style={{ color: colors.mutedForeground, fontSize: 12, textAlign: 'center', paddingVertical: 16 }}>
+              No course subjects in the catalog yet.
+            </Text>
+          ) : (
+            subjectsList.map((s) => (
+              <TouchableOpacity
+                key={s.id}
+                onPress={() => { setDetailCard(null); openSubject(s); }}
+                style={[styles.detailRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+              >
+                <View style={{ flex: 1, gap: 3 }}>
+                  <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }} numberOfLines={1}>{s.code} — {s.name}</Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 11 }} numberOfLines={1}>
+                    {s.teacherName || [s.semester, s.course].filter(Boolean).join(' • ') || 'Unassigned'}
+                  </Text>
+                  <View style={styles.rowBadges}>
+                    <Badge text={`${s.studentCount ?? 0} students`} color="#2563eb" bg="rgba(37,99,235,0.12)" />
+                    <Badge text={`${s.materialCount ?? 0} materials`} color={colors.mutedForeground} bg="rgba(148,163,184,0.15)" />
+                  </View>
+                </View>
+                <ChevronRight size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            ))
+          )}
+        </ScrollView>
+      </Modal>
+
+      {/* Audit Event Inspector */}
+      <Modal visible={!!selectedLog} onClose={() => setSelectedLog(null)} title="Audit Event Inspector" subtitle={selectedLog ? selectedLog.action : undefined}>
+        {selectedLog && (
+          <View style={{ gap: 10 }}>
+            <View style={[styles.detailRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.detailLabel}>Event Action</Text>
+                <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>{selectedLog.action}</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: 10, fontFamily: 'monospace' }}>ID: {selectedLog.id}</Text>
+              </View>
+            </View>
+            <View style={[styles.detailRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.detailLabel}>Triggered By</Text>
+                <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }}>{selectedLog.userName}</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>Role: {selectedLog.userRole}</Text>
+              </View>
+            </View>
+            <View style={[styles.detailRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.detailLabel}>Origin & Timestamp</Text>
+                <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '600', fontFamily: 'monospace' }}>
+                  IP: {selectedLog.ipAddress || '127.0.0.1'}
+                </Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: 10, fontFamily: 'monospace' }}>
+                  {formatExact(selectedLog.timestamp)}
+                </Text>
+              </View>
+            </View>
+            <View style={[styles.detailRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.detailLabel}>Event Description</Text>
+                <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 19 }}>{selectedLog.details}</Text>
+              </View>
+            </View>
+            <View style={styles.modalActions}>
+              <PrimaryButton label="Close" onPress={() => setSelectedLog(null)} style={{ flex: 1 }} />
+            </View>
+          </View>
+        )}
       </Modal>
     </View>
   );
@@ -1062,6 +1179,7 @@ const styles = StyleSheet.create({
   errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 14, marginTop: 8, borderRadius: 12, padding: 12 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 12, padding: 12 },
+  detailLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, color: '#64748b' },
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
   searchInput: { flex: 1, fontSize: 13, paddingVertical: 0 },
   filterRow: { flexDirection: 'row', gap: 8 },

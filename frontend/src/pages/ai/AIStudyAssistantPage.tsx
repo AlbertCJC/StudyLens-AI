@@ -25,6 +25,9 @@ const friendlyAiError = (message: string, code?: string): string => {
   if (lower.includes("limit") || lower.includes("rate limit") || code === "RATE_LIMITED") {
     return "You have reached the AI generation limit for this session. Please wait a moment and try again.";
   }
+  if (lower.includes("how many questions") || code === "COUNT_REQUIRED") {
+    return "How many questions to make in your prompt (e.g. 'Make 10 multiple choice questions' or '5 identification, 10 multiple choice, 5 true or false').";
+  }
   return message;
 };
 
@@ -106,7 +109,6 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
   const [uploadSuccessMsg, setUploadSuccessMsg] = useState<string | null>(hasCachedSource && initialWs.uploadedFileName ? `Restored extracted text from "${initialWs.uploadedFileName}".` : null);
 
   // Options
-  const [quizCount, setQuizCount] = useState<string>(initialWs.quizCount || "5");
   const [flashcardCount, setFlashcardCount] = useState<string>(initialWs.flashcardCount || "5");
   const [quizRevealAnswers] = useState<boolean>(initialWs.quizRevealAnswers ?? true);
 
@@ -157,7 +159,6 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
       sourceText,
       selectedMaterialId,
       uploadedFileName: uploadedFileName || undefined,
-      quizCount,
       flashcardCount,
       quizRevealAnswers,
       drafts,
@@ -178,7 +179,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     mode, prompt, sourceText, selectedMaterialId, uploadedFileName,
-    quizCount, flashcardCount, quizRevealAnswers,
+    flashcardCount, quizRevealAnswers,
     drafts, draftTitles, savedDrafts, generatedOutput, editTitle,
     offlineNotice, titleExists, currentUser?.id,
   ]);
@@ -383,7 +384,6 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
     registerJob(uid, genMode, controller);
 
     try {
-      const requestedQuizCount = parseInt(quizCount, 10);
       const requestedFlashcardCount = parseInt(flashcardCount, 10);
       const res = await authFetch("/api/ai/generate", {
         method: "POST",
@@ -394,7 +394,6 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
           instructions: prompt.trim(),
           // Draft by default: nothing is persisted until the user presses "Save Resource".
           save: false,
-          quizCount: Number.isNaN(requestedQuizCount) ? 5 : requestedQuizCount,
           flashcardCount: Number.isNaN(requestedFlashcardCount) ? 5 : requestedFlashcardCount,
           materialId: selectedMaterialId && selectedMaterialId !== "custom" ? selectedMaterialId : undefined,
           createdById: currentUser?.id || "usr-1",
@@ -518,7 +517,6 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
     setMode("quiz");
     setUploadedFile(null);
     setUploadedFileName(null);
-    setQuizCount("5");
     setFlashcardCount("5");
     setGeneratedOutput(null);
     setDrafts({});
@@ -720,23 +718,6 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
               ) : null}
             </div>
 
-            {mode === "quiz" && (
-              <div>
-                <label className="block font-semibold text-foreground mb-1">Number of Quiz Questions</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={quizCount}
-                  onChange={(e) => setQuizCount(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !isGenerating) handleGenerate();
-                  }}
-                  className="w-full px-3 py-2 border border-border bg-muted/40 rounded-xl font-bold text-foreground"
-                />
-              </div>
-            )}
-
             {mode === "flashcards" && (
               <div>
                 <label className="block font-semibold text-foreground mb-1">Number of Flashcards</label>
@@ -793,7 +774,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !isGenerating) handleGenerate();
                   }}
-                  placeholder="e.g. Focus on database normalization: 3 conceptual and 2 applied questions."
+                  placeholder='e.g. 5 identification, 10 multiple choice, and 5 true or false.'
                   className="flex-1 min-w-0 px-3 py-2 border border-border bg-muted/40 rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -964,6 +945,12 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
                             </div>
                           ))}
                         </div>
+                      )}
+                      {q.type === "identification" && q.correctAnswer && (
+                        <p className="text-[11px] pt-1">
+                          <strong className="text-emerald-600 dark:text-emerald-400">Answer:</strong>{" "}
+                          <span className="text-foreground">{String(q.correctAnswer)}</span>
+                        </p>
                       )}
                       <p className="text-[11px] text-muted-foreground pt-1">
                         <strong className="text-foreground">Explanation:</strong> {q.explanation}

@@ -33,6 +33,7 @@ from groq_service import (
     GroqAPIError
 )
 from cloud_storage import upload_file_to_cloud
+from email_service import is_email_enabled, send_otp_email
 
 # Load environment variables (path-independent: resolves .env from this file's folder
 # regardless of which directory the Flask process is launched from).
@@ -56,7 +57,7 @@ _ALLOWED_ORIGINS = [
     o.strip()
     for o in os.getenv(
         "ALLOWED_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8081,http://127.0.0.1:8081",
     ).split(",")
     if o.strip()
 ]
@@ -338,6 +339,59 @@ class MaterialModel(db.Model):
             "createdAt": self.uploaded_at
         }
 
+class MaterialFlagModel(db.Model):
+    """A content-review flag an administrator raises on a teacher's uploaded
+    material (e.g. wrong file, wrong subject). Resolved flags are kept as an
+    audit trail; resolution notes are teacher-provided."""
+
+    __tablename__ = "material_flags"
+    flag_id = db.Column(db.String(64), primary_key=True)
+    material_id = db.Column(db.String(64), db.ForeignKey("learning_materials.material_id", ondelete="SET NULL"), nullable=True)
+    flagged_by = db.Column(db.String(64), db.ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False)
+    category = db.Column(db.String(50), nullable=False, default="Other")
+    note = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="pending")
+    created_at = db.Column(db.String(64), nullable=False)
+    resolved_at = db.Column(db.String(64), nullable=True)
+    resolved_by = db.Column(db.String(64), nullable=True)
+    resolution_note = db.Column(db.Text, nullable=True)
+
+    def to_dict(self):
+        def name_for(user_id):
+            if not user_id:
+                return None
+            try:
+                u = db.session.get(UserModel, user_id)
+                if not u:
+                    return None
+                return f"{u.first_name} {u.last_name}".strip() or u.email
+            except Exception:
+                return None
+        mat = None
+        sub = None
+        try:
+            mat = db.session.get(MaterialModel, self.material_id)
+            sub = db.session.get(SubjectModel, mat.subject_id) if mat and mat.subject_id else None
+        except Exception:
+            pass
+        return {
+            "id": self.flag_id,
+            "materialId": self.material_id,
+            "materialTitle": mat.title if mat else "(deleted material)",
+            "subjectId": sub.subject_id if sub else (mat.subject_id if mat else None),
+            "subjectName": f"{sub.subject_code} - {sub.subject_name}" if sub else None,
+            "flaggedById": self.flagged_by,
+            "flaggedByName": name_for(self.flagged_by),
+            "category": self.category,
+            "note": self.note,
+            "status": self.status,
+            "createdAt": self.created_at,
+            "resolvedAt": self.resolved_at,
+            "resolvedById": self.resolved_by,
+            "resolvedByName": name_for(self.resolved_by),
+            "resolutionNote": self.resolution_note,
+        }
+
 class AIGeneratedContentModel(db.Model):
     __tablename__ = "ai_generated_content"
     content_id = db.Column(db.String(64), primary_key=True)
@@ -347,6 +401,26 @@ class AIGeneratedContentModel(db.Model):
     content_type = db.Column(db.String(32), nullable=False)
     generated_text = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.String(64), nullable=False)
+
+def _canonical_question_type(q):
+    """Returns a canonical question type ("multiple_choice" | "true_false" | "identification")
+    for a question dict, honoring type aliases from any producer and falling back to shape
+    inference (True/False option pair, then option count)."""
+    t = str(q.get("type") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if t in ("mc", "multiplechoice", "multiple_choice"):
+        return "multiple_choice"
+    if t in ("tf", "truefalse", "true_false"):
+        return "true_false"
+    if t in ("identify", "identifications", "shortanswer", "short_answer", "identification"):
+        return "identification"
+    options = q.get("options")
+    if isinstance(options, list):
+        normalized = {str(o).strip().lower() for o in options}
+        if len(options) == 2 and normalized == {"true", "false"}:
+            return "true_false"
+        if len(options) >= 2:
+            return "multiple_choice"
+    return "identification"
 
 class QuizModel(db.Model):
     __tablename__ = "quizzes"
@@ -378,6 +452,9 @@ class QuizModel(db.Model):
             except Exception: qs = []
         else:
             qs = _merge_questions_json(qs, self.questions_json)
+        for q in qs:
+            if isinstance(q, dict):
+                q["type"] = _canonical_question_type(q)
         return {
             "id": self.quiz_id,
             "title": self.title,
@@ -855,7 +932,9 @@ def _issue_email_verify_code(user):
     user.email_verify_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=EMAIL_VERIFY_EXPIRY_MINUTES)).isoformat()
     user.email_verify_attempts = 0
     db.session.commit()
-    if OTP_DEV_REVEAL:
+    if is_email_enabled():
+        send_otp_email(user.email, "verify", code, EMAIL_VERIFY_EXPIRY_MINUTES)
+    elif OTP_DEV_REVEAL:
         print(f"[Auth] Email verification OTP for {user.email}: {code}")
     return code
 
@@ -1550,7 +1629,7 @@ def enforce_maintenance_mode():
     path = request.path
     if not path.startswith("/api/"):
         return
-    if path in ("/api/auth/login", "/api/auth/register", "/api/auth/verify-2fa"):
+    if path in ("/api/auth/login", "/api/auth/register", "/api/auth/verify-2fa", "/api/auth/resend-2fa"):
         return
     settings = _load_system_settings()
     if settings.get("maintenanceMode") != "true":
@@ -1647,13 +1726,20 @@ def auth_login():
         user.two_factor_code = code
         user.two_factor_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=5)).isoformat()
         db.session.commit()
+        if is_email_enabled():
+            send_otp_email(user.email, "2fa", code, 5)
+        elif OTP_DEV_REVEAL:
+            print(f"[Auth] 2FA OTP for {user.email}: {code}")
         log_action(user.user_id, user.to_dict()["name"], user.role, "TWO_FACTOR_REQUIRED", f"2FA code issued for {user.email}")
-        return jsonify({
+        payload = {
             "twoFactorRequired": True,
             "userId": user.user_id,
             "email": user.email,
             "expiresInMinutes": 5,
-        }), 200
+        }
+        if OTP_DEV_REVEAL:
+            payload["devCode"] = code
+        return jsonify(payload), 200
 
     user_dict = user.to_dict()
     token = generate_token(user_dict)
@@ -1825,6 +1911,52 @@ def resend_email_code():
     _issue_email_verify_code(user)
     return jsonify(_email_verify_payload(user)), 200
 
+@app.route("/api/auth/resend-2fa", methods=["POST"])
+def resend_two_factor_code():
+    """Re-issues a 6-digit two-factor code for a pending staff/admin sign-in."""
+    data = request.json or {}
+    if _rate_limit_exceeded(f"verify-ip:{request.remote_addr}", 30):
+        return jsonify({
+            "error": "Too many verification attempts. Please try again in a minute.",
+            "code": "RATE_LIMITED",
+        }), 429
+    user_id = data.get("userId") or ""
+    user = db.session.get(UserModel, user_id) if user_id else None
+    if not user:
+        return jsonify({"error": "Session expired. Please sign in again.", "code": "NOT_FOUND"}), 404
+    if (user.status or "active") != "active":
+        return jsonify({"error": "This account cannot sign in. Please contact an administrator.", "code": "ACCOUNT_DISABLED"}), 403
+    if _is_account_locked(user):
+        show_minutes = max(1, int(_lock_minutes_remaining(user)) + 1)
+        return jsonify({
+            "error": f"Account temporarily locked due to too many failed attempts. Try again in about {show_minutes} minute(s).",
+            "code": "ACCOUNT_LOCKED",
+        }), 429
+    settings = _load_system_settings()
+    if settings.get("require2FA") != "true" or user.role not in ("teacher", "admin"):
+        return jsonify({
+            "error": "Two-factor authentication is not required for this account. Please sign in again.",
+            "code": "2FA_NOT_REQUIRED",
+        }), 400
+    if not user.two_factor_code:
+        return jsonify({
+            "error": "No pending verification. Please sign in again.",
+            "code": "NO_PENDING_2FA",
+        }), 400
+    code = _generate_otp()
+    user.two_factor_code = code
+    user.two_factor_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=5)).isoformat()
+    user.two_factor_attempts = None
+    db.session.commit()
+    if is_email_enabled():
+        send_otp_email(user.email, "2fa", code, 5)
+    elif OTP_DEV_REVEAL:
+        print(f"[Auth] 2FA OTP for {user.email}: {code}")
+    payload = {"message": f"A new verification code was sent to {user.email}.", "expiresInMinutes": 5}
+    if OTP_DEV_REVEAL:
+        payload["devCode"] = code
+    return jsonify(payload), 200
+
 @app.route("/api/auth/change-password", methods=["POST"])
 @require_auth
 def auth_change_password():
@@ -1895,7 +2027,9 @@ def auth_request_reset_otp():
     user.reset_otp_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=RESET_OTP_EXPIRY_MINUTES)).isoformat()
     user.reset_otp_attempts = 0
     db.session.commit()
-    if OTP_DEV_REVEAL:
+    if is_email_enabled():
+        send_otp_email(user.email, "reset", code, RESET_OTP_EXPIRY_MINUTES)
+    elif OTP_DEV_REVEAL:
         print(f"[Auth] Password reset OTP for {user.email}: {code}")
     log_action(user.user_id, user.to_dict()["name"], user.role, "RESET_OTP_REQUESTED", f"Password reset code issued for {user.email}")
 
@@ -2613,7 +2747,11 @@ def get_materials():
     requester_role = current_user.get("role") or ""
     requester_id = current_user.get("id") or ""
 
-    mats = MaterialModel.query.all()
+    # Newest first so a freshly saved resource is on page 1 of the client-side
+    # paginated grid. uploaded_at is an ISO-8601 string, so lexical order is
+    # chronological. Without this the grid renders primary-key order (oldest
+    # first) and new saves appear to "vanish" onto the last page.
+    mats = MaterialModel.query.order_by(MaterialModel.uploaded_at.desc()).all()
 
     # Privacy Rule: teachers only see materials belonging to the subjects they manage
     # (plus their own personal notes and their own uploads, including unassigned
@@ -2942,6 +3080,12 @@ def update_material(material_id):
             return jsonify({"error": "Only teachers can assign a subject to a material.", "code": "FORBIDDEN"}), 403
 
     _commit_or_warn("material update")
+    # A material edit (replacing the file, fixing the content, or reassigning the
+    # subject) counts as addressing any pending content-review flag on it.
+    if role in ("teacher", "admin"):
+        pending = MaterialFlagModel.query.filter_by(material_id=mat.material_id, status="pending").count()
+        if pending:
+            _resolve_material_flags(mat.material_id, user_id, None, actor_role=role)
     log_action(user_id or mat.teacher_id, mat.uploaded_by, mat.uploader_role, "MATERIAL_UPDATE", f"Updated '{mat.title}'")
     return jsonify(mat.to_dict()), 200
 
@@ -2961,11 +3105,16 @@ def delete_material(material_id):
     # Ownership rule: teachers may delete their own uploads (including unassigned
     # materials awaiting a subject), or materials in subjects they are assigned
     # to manage.
+    #
+    # The subject check must NOT be conditional on mat.subject_id: a subjectless
+    # row (an AI-generated mirror, or an unassigned upload) has no subject to
+    # validate, so a teacher who is not the uploader used to fall through the
+    # `if mat.subject_id:` body with no denial and delete someone else's
+    # resource. Only a row the teacher actually owns may be subjectless.
     if role == "teacher" and mat.teacher_id != user_id:
-        if mat.subject_id:
-            subject = db.session.get(SubjectModel, mat.subject_id)
-            if not subject or subject.teacher_id != user_id:
-                return jsonify({"error": "You can only delete materials from a subject assigned to you.", "code": "FORBIDDEN"}), 403
+        subject = db.session.get(SubjectModel, mat.subject_id) if mat.subject_id else None
+        if not subject or subject.teacher_id != user_id:
+            return jsonify({"error": "You can only delete materials from a subject assigned to you.", "code": "FORBIDDEN"}), 403
 
     # Students may only delete materials they uploaded themselves. The rule keys
     # off the uploader's own id (usable even for legacy rows with a NULL
@@ -2978,10 +3127,150 @@ def delete_material(material_id):
     if subject and subject.material_count and subject.material_count > 0:
         subject.material_count -= 1
     _delete_local_upload(mat.file_url)
+    # Resolve pending content-review flags BEFORE deleting so the flag history is
+    # preserved (the FK is ON DELETE SET NULL and records survive as an audit trail).
+    _resolve_material_flags(mat.material_id, user_id, None, actor_role=role)
     db.session.delete(mat)
     _commit_or_warn("material deletion")
     log_action(mat.teacher_id, mat.uploaded_by, mat.uploader_role, "MATERIAL_DELETE", f"Deleted '{mat.title}'")
     return jsonify({"success": True}), 200
+
+# --------------------------------------------------
+# MATERIAL CONTENT REVIEW (ADMIN FLAGS TEACHER UPLOADS)
+# --------------------------------------------------
+MATERIAL_FLAG_CATEGORIES = ("Wrong file", "Wrong subject", "Incomplete content", "Other")
+
+def _resolve_material_flags(material_id, resolved_by, resolution_note=None, actor_role="teacher"):
+    """Flips every pending flag on a material to resolved and notifies the admin(s)
+    who raised them. Called by the explicit resolve endpoint and automatically after
+    a material edit/delete fixes the underlying issue."""
+    flags = MaterialFlagModel.query.filter_by(material_id=material_id, status="pending").all()
+    if not flags:
+        return flags
+    server_now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    mat = None
+    try:
+        mat = db.session.get(MaterialModel, material_id)
+    except Exception:
+        pass
+    mat_title = mat.title if mat else "(deleted material)"
+    for flag in flags:
+        flag.status = "resolved"
+        flag.resolved_at = server_now
+        flag.resolved_by = resolved_by
+        if resolution_note:
+            flag.resolution_note = resolution_note
+        _create_notification(
+            flag.flagged_by,
+            f"Flag resolved on '{mat_title}'",
+            f"The teacher addressed the '{flag.category}' flag."
+            + (f" Note: {resolution_note}" if resolution_note else ""),
+            target=f"material:{material_id}",
+        )
+        log_action(resolved_by, None, actor_role, "MATERIAL_FLAG_RESOLVED",
+                   f"Resolved '{flag.category}' flag on '{mat_title}'")
+    _commit_or_warn("material flag resolution")
+    return flags
+
+@app.route("/api/materials/<material_id>/flag", methods=["POST"])
+@require_roles("admin")
+def flag_material(material_id):
+    """Admin raises a content-review flag on a material; the owning teacher is
+    notified via the notification bell with a deep-link to the material."""
+    mat = db.session.get(MaterialModel, material_id)
+    if not mat:
+        return jsonify({"error": "Material not found.", "code": "NOT_FOUND"}), 404
+
+    data = request.json or {}
+    category = data.get("category") or "Other"
+    if category not in MATERIAL_FLAG_CATEGORIES:
+        category = "Other"
+    note = (data.get("note") or "").strip()
+
+    current_user = getattr(request, "current_user", None) or {}
+    admin_id = current_user.get("id") or ""
+    admin_name = current_user.get("name") or "An administrator"
+
+    flag = MaterialFlagModel(
+        flag_id=f"flag-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+        material_id=material_id,
+        flagged_by=admin_id or "usr-admin-1",
+        category=category,
+        note=note or None,
+        status="pending",
+        created_at=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+    )
+    db.session.add(flag)
+    _commit_or_warn("material flag")
+
+    sub = db.session.get(SubjectModel, mat.subject_id) if mat.subject_id else None
+    subject_label = f"{sub.subject_code} - {sub.subject_name}" if sub else "your subject"
+    _create_notification(
+        mat.teacher_id,
+        f"{admin_name} flagged your material '{mat.title}'",
+        f"Reason: {category}." + (f" {note}" if note else "") + f" Please review it in {subject_label}.",
+        target=f"material:{material_id}",
+    )
+    log_action(admin_id, admin_name, "admin", "MATERIAL_FLAG",
+               f"Flagged '{mat.title}' in {subject_label} ({category})"
+               + (f": {note}" if note else ""))
+    return jsonify(flag.to_dict()), 201
+
+@app.route("/api/material-flags", methods=["GET"])
+@require_auth
+def get_material_flags():
+    """Admins see every flag in the system; teachers see only flags raised on
+    their own uploads (flag visibility is never granted to students)."""
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role") or ""
+    user_id = current_user.get("id") or ""
+
+    flags = MaterialFlagModel.query.order_by(MaterialFlagModel.created_at.desc()).all()
+    if role == "teacher":
+        own_material_ids = {
+            m.material_id for m in MaterialModel.query.filter_by(teacher_id=user_id).all()
+        }
+        flags = [f for f in flags if f.material_id in own_material_ids]
+    elif role != "admin":
+        flags = []
+
+    return jsonify([f.to_dict() for f in flags])
+
+@app.route("/api/material-flags/<flag_id>/resolve", methods=["POST"])
+@require_roles("admin", "teacher")
+def resolve_material_flag(flag_id):
+    """Teacher (or admin) marks a flag resolved, optionally with a short note.
+    The admin who raised the flag is notified of the resolution."""
+    flag = db.session.get(MaterialFlagModel, flag_id)
+    if not flag:
+        return jsonify({"error": "Flag not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role") or ""
+    user_id = current_user.get("id") or ""
+
+    mat = db.session.get(MaterialModel, flag.material_id) if flag.material_id else None
+    if role == "teacher":
+        if not mat:
+            return jsonify({"error": "The material for this flag no longer exists. Please contact the administrator.", "code": "FORBIDDEN"}), 403
+        if mat.teacher_id != user_id:
+            if not mat.subject_id:
+                return jsonify({"error": "You can only resolve flags on materials you manage.", "code": "FORBIDDEN"}), 403
+            sub = db.session.get(SubjectModel, mat.subject_id)
+            if not sub or sub.teacher_id != user_id:
+                return jsonify({"error": "You can only resolve flags on materials you manage.", "code": "FORBIDDEN"}), 403
+
+    if flag.status == "resolved":
+        return jsonify(flag.to_dict()), 200
+
+    data = request.json or {}
+    resolution_note = (data.get("resolutionNote") or "").strip()
+
+    if not resolution_note and flag.status != "resolved":
+        resolution_note = None
+
+    _resolve_material_flags(flag.material_id, user_id, resolution_note or None, actor_role=role)
+    return jsonify(flag.to_dict()), 200
 
 # --------------------------------------------------
 # AI ASSESSMENT GENERATION (GROQ GPT-OSS-120B)
@@ -3186,8 +3475,13 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
 
     if mode == "quiz":
         num_questions = _clamp_count(data.get("quizCount") or data.get("numQuestions") or 5, fallback=5, maximum=MAX_AI_QUESTIONS)
+        # The quiz count box was removed from the UI: the prompt is the single source of
+        # truth for how many questions to make. Callers that still send an explicit count
+        # (legacy /api/quizzes/generate) keep the old default behavior.
+        explicit_count = "quizCount" in data or "numQuestions" in data
         questions = generate_quiz_with_groq(
             text_content, num_questions=num_questions, difficulty=difficulty, instructions=instructions,
+            require_count=not explicit_count,
         )
         ai_title = generate_title_with_groq("quiz", questions)
         quiz_title = data.get("title") or ai_title or f"AI Quiz: {_trim_preview(text_content)}..."
@@ -3407,7 +3701,11 @@ def _persist_generated_resource(mode, payload, data, timestamp_ms, created_at):
         title = (payload.get("title") or "").strip() or f"AI {content_type}"
         db.session.add(MaterialModel(
             material_id=f"mat-{timestamp_ms}",
-            subject_id="" if user_role != "student" else "personal",
+            # subject_id is a real FK to subjects.subject_id, so it must be NULL
+            # (unassigned) rather than ""/"personal" -- those are not subject ids
+            # and MySQL rejects the insert. Matches upload_material and
+            # /api/materials/from-ai, which both normalise the same way.
+            subject_id=None,
             teacher_id=created_by_id,
             title=title,
             description=f"AI-generated {content_type.lower()} saved from the StudyLens Resource Creator.",
@@ -3483,7 +3781,12 @@ def generate_ai_resource():
     created_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
     reset_generation_source()
-    payload = _build_generated_resource(mode, data, text_content, timestamp_ms, created_at)
+    try:
+        payload = _build_generated_resource(mode, data, text_content, timestamp_ms, created_at)
+    except GroqAPIError as e:
+        # Structured generation errors (e.g. COUNT_REQUIRED when the prompt names no
+        # count) become friendly 400s instead of a generic 500.
+        return jsonify({"error": e.message, "code": e.code}), 400
     if payload is None:
         return jsonify({"error": f"Unknown generation mode: {mode}", "code": "INVALID_MODE"}), 400
     offline_reason = generation_used_fallback()
@@ -3700,6 +4003,9 @@ def export_ai_pdf():
                     ci = int(correct_idx)
                     if 0 <= ci < len(options):
                         story.append(Paragraph(f"Correct Answer: {esc(options[ci])}", body))
+                elif isinstance(correct_idx, str) and not (isinstance(options, list) and options):
+                    # Identification / short-answer items carry a string answer with no options.
+                    story.append(Paragraph(f"Correct Answer: {esc(correct_idx)}", body))
     else:
         cards = payload.get("cards") or []
         if isinstance(cards, list) and cards:
@@ -3779,6 +4085,10 @@ def convert_to_pdf():
             return f"\x00{len(tags) - 1}\x00"
         s = _TAG_PLACEHOLDER_RE.sub(_save_tag, s)
 
+        # Escape literal markup characters first so stray <, >, & render as
+        # text instead of being interpreted (or escaping our own tags below).
+        s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
         # **bold**
         s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
         # *italic* (but not ** which was already handled)
@@ -3788,8 +4098,7 @@ def convert_to_pdf():
         # _italic_
         s = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", s)
 
-        # Restore saved tags (escaping any remaining angle brackets first)
-        s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        # Restore saved tags.
         for idx, tag in enumerate(tags):
             s = s.replace(f"\x00{idx}\x00", tag)
         return s
@@ -3883,6 +4192,9 @@ def convert_to_pdf():
             story.append(Paragraph(_md_to_pdf_html(stripped), body))
         story.append(HRFlowable(width="100%", thickness=1, color="#e5e7eb", spaceBefore=4, spaceAfter=8))
 
+    def esc(text):
+        return sanitize(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     if isinstance(items, list):
         for idx, item in enumerate(items, start=1):
             if not isinstance(item, dict):
@@ -3928,6 +4240,11 @@ def save_ai_resource():
         auth_role = current_user.get("role") or "student"
         data["createdById"] = auth_id or data.get("createdById") or "usr-teacher-1"
         data["createdByName"] = auth_name or data.get("createdByName") or "User"
+        # user_role decides the mirrored material's material_type/uploader_role,
+        # so it must come from the session too -- otherwise a stale client role
+        # silently files a teacher's resource as "personal" and the materials
+        # page hides it. Mirrors the attribution rule documented at generate_ai_resource.
+        data["userRole"] = auth_role
         if mode == "quiz":
             if auth_role == "student":
                 data["quizType"] = "student"
@@ -4346,6 +4663,10 @@ def _merge_questions_json(questions, questions_json):
         for key in ("question", "options", "explanation", "topicTag", "bloomsLevel", "difficulty"):
             if q.get(key) in (None, "") and jq.get(key) is not None:
                 q[key] = jq[key]
+        # type: the questions_json copy knows the producer's canonical type (the
+        # quiz_questions rows have no type column), so surface it on the rows.
+        if not q.get("type") and jq.get("type"):
+            q["type"] = jq["type"]
         # correctAnswer: the questions_json copy is authoritative when it holds a
         # multi-answer list; otherwise rows fill gaps for legacy quizzes.
         if isinstance(jq.get("correctAnswer"), list):
@@ -4893,6 +5214,59 @@ def _aggregate_topic_performance(attempts):
 MASTERY_THRESHOLD = 70
 
 
+def _first_match_for_topic(topic):
+    """Best-effort lookups of study content tied to a topic (first match wins).
+
+    Searches the persisted library directly: a quiz whose questions carry the
+    topic tag, a material whose title/description mentions the topic, and any
+    flashcard/reviewer decks whose titles match. Plain dict output (safe for
+    jsonify).
+    """
+    needle = (topic or "").strip().lower()
+
+    def topic_tags(questions):
+        tags = set()
+        for q in questions or []:
+            tags.add((q.get("topicTag") or "General Concepts").strip().lower())
+        return tags
+
+    material = None
+    for mat in MaterialModel.query.all():
+        if needle and (needle in (mat.title or "").lower() or needle in (mat.description or "").lower()):
+            material = mat
+            break
+
+    quiz = None
+    for qz in QuizModel.query.all():
+        try:
+            tags = topic_tags(json.loads(qz.questions_json))
+        except Exception:
+            continue
+        if needle in tags:
+            quiz = qz
+            break
+
+    def ai_match(content_type):
+        for entry in AIGeneratedContentModel.query.filter_by(content_type=content_type).all():
+            if needle in (entry.title or "").lower():
+                return entry
+        return None
+
+    flashcard = ai_match("Flashcard")
+    reviewer = ai_match("Reviewer")
+
+    return {
+        "material": {"id": material.material_id, "title": material.title} if material else None,
+        "flashcardId": flashcard.content_id if flashcard else None,
+        "reviewerId": reviewer.content_id if reviewer else None,
+        "quiz": (
+            {"id": quiz.quiz_id, "title": quiz.title, "difficulty": quiz.difficulty, "subjectId": quiz.subject_id}
+            if quiz else None
+        ),
+        "subjectId": quiz.subject_id if quiz else (material.subject_id if material else None),
+    }
+
+
 def _latest_attempt_percentages(attempts):
     """Return the percentage of the MOST RECENT attempt per quiz.
 
@@ -5023,10 +5397,9 @@ def get_student_progress(student_id):
 def get_student_recommendations(student_id):
     """Personalized learning recommendations, shaped like src/types.ts Recommendation.
 
-    Data-driven: difficulty is derived from the student's actual per-topic accuracy
-    (<50 easy, 50-74 medium, >=75 hard), and each recommendation carries an ordered
-    learning path (review -> flashcard -> reviewer -> adaptive quiz) built from the
-    student's weakest topics.
+    Simple content-driven: each weak topic is paired with the first matching
+    material, flashcard deck, reviewer, and quiz found in the library, with the
+    difficulty derived from the student's actual per-topic accuracy.
     """
     current_user = getattr(request, "current_user", None) or {}
     if not _can_view_student_data(current_user, student_id):
@@ -5047,14 +5420,14 @@ def get_student_recommendations(student_id):
 
     weak_topics = []
     for t, d in topic_map.items():
-        if d["total"] > 0 and d["accuracyPercentage"] < 70:
+        if d["total"] > 0 and d["accuracyPercentage"] < MASTERY_THRESHOLD:
             weak_topics.append(t)
     if not weak_topics:
         weak_topics = stored_weak
 
-    first_quiz = QuizModel.query.first()
-    first_reviewer = AIGeneratedContentModel.query.filter_by(content_type="Reviewer").first()
-    first_deck = AIGeneratedContentModel.query.filter_by(content_type="Flashcard").first()
+    if not weak_topics:
+        return jsonify([])
+
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
     def accuracy_for(topic):
@@ -5067,75 +5440,51 @@ def get_student_recommendations(student_id):
             return "medium"
         return "hard"
 
-    def slug(topic):
-        return topic.lower().replace(" ", "-")[:24]
+    def steps_for(topic, diff, content):
+        mat_target = content["material"]["id"] if content["material"] else content["subjectId"]
+        quiz_target = content["quiz"]["id"] if content["quiz"] else content["subjectId"]
+        return [
+            {"step": 1, "type": "review", "title": f"Quick review: {topic}", "targetId": mat_target, "difficultyTarget": diff},
+            {"step": 2, "type": "flashcard", "title": f"Concept flashcards: {topic}", "targetId": content["flashcardId"], "difficultyTarget": "easy"},
+            {"step": 3, "type": "reviewer", "title": f"Targeted reviewer: {topic}", "targetId": content["reviewerId"], "difficultyTarget": diff},
+            {"step": 4, "type": "quiz", "title": f"Adaptive {diff} quiz on {topic}", "targetId": quiz_target, "difficultyTarget": diff},
+        ]
 
     recommendations = []
-    if weak_topics:
-        for idx, topic in enumerate(weak_topics, start=1):
-            acc = accuracy_for(topic)
-            diff = difficulty_for(acc)
-            recommendations.append({
-                "id": f"rec-{idx}",
-                "studentId": student_id,
-                "weakTopic": topic,
-                "recommendationType": "quiz",
-                "title": f"Adaptive Practice Quiz: {topic}",
-                "description": f"You scored {acc if acc is not None else 'low'}% on {topic}. Retake a targeted {diff} quiz to reinforce these concepts.",
-                "targetId": first_quiz.quiz_id if first_quiz else f"quiz-{slug(topic)}",
-                "difficultyTarget": diff,
-                "accuracyPercentage": acc,
-                "createdAt": now,
-                "steps": [
-                    {"step": 1, "type": "review", "title": f"Review lecture notes on {topic}", "targetId": None, "difficultyTarget": diff},
-                    {"step": 2, "type": "flashcard", "title": f"Concept flashcard drill: {topic}", "targetId": first_deck.content_id if first_deck else f"deck-{idx}", "difficultyTarget": "easy"},
-                    {"step": 3, "type": "reviewer", "title": f"Work through the {topic} reviewer", "targetId": first_reviewer.content_id if first_reviewer else f"rev-{idx}", "difficultyTarget": diff},
-                    {"step": 4, "type": "quiz", "title": f"Adaptive {diff} quiz on {topic}", "targetId": first_quiz.quiz_id if first_quiz else f"quiz-{slug(topic)}", "difficultyTarget": diff},
-                ],
-            })
-            recommendations.append({
-                "id": f"rec-{idx + 10}",
-                "studentId": student_id,
-                "weakTopic": topic,
-                "recommendationType": "reviewer",
-                "title": f"Targeted Reviewer: {topic}",
-                "description": f"Consolidate your understanding of {topic} with this focused reviewer before retaking quizzes.",
-                "targetId": first_reviewer.content_id if first_reviewer else f"rev-{idx}",
-                "difficultyTarget": diff,
-                "accuracyPercentage": acc,
-                "createdAt": now,
-            })
-    else:
-        mastered = []
-        for t, d in topic_map.items():
-            if d["total"] > 0 and d["accuracyPercentage"] >= 75:
-                mastered.append((t, d["accuracyPercentage"]))
-        mastered.sort(key=lambda pair: pair[1])
-        # Truthful empty state: no attempts AND no stored weak topics means we
-        # have nothing to base recommendations on — return none at all rather
-        # than fabricating a canned "General Graph Traversal" quiz.
-        if not mastered and not stored_weak:
-            return jsonify([])
-        topic = mastered[0][0] if mastered else stored_weak[0]
+    for idx, topic in enumerate(weak_topics, start=1):
         acc = accuracy_for(topic)
-        diff = difficulty_for(acc) if acc is not None else "medium"
+        diff = difficulty_for(acc)
+        content = _first_match_for_topic(topic)
+        steps = steps_for(topic, diff, content)
+        quiz_target = content["quiz"]["id"] if content["quiz"] else content["subjectId"]
         recommendations.append({
-            "id": "rec-default-1",
+            "id": f"rec-{idx}",
             "studentId": student_id,
             "weakTopic": topic,
             "recommendationType": "quiz",
             "title": f"Adaptive Practice Quiz: {topic}",
-            "description": "No weak topics detected. Keep your edge sharp with a maintenance quiz at the next difficulty level.",
-            "targetId": first_quiz.quiz_id if first_quiz else f"quiz-{slug(topic)}",
+            "description": f"You scored {acc if acc is not None else 'low'}% on {topic}. Retake a targeted {diff} quiz to reinforce these concepts.",
+            "targetId": quiz_target,
             "difficultyTarget": diff,
             "accuracyPercentage": acc,
             "createdAt": now,
-            "steps": [
-                {"step": 1, "type": "review", "title": f"Quick review: {topic}", "targetId": None, "difficultyTarget": diff},
-                {"step": 2, "type": "quiz", "title": f"Maintenance {diff} quiz on {topic}", "targetId": first_quiz.quiz_id if first_quiz else f"quiz-{slug(topic)}", "difficultyTarget": diff},
-            ],
+            "steps": steps,
+        })
+        recommendations.append({
+            "id": f"rec-{idx + 10}",
+            "studentId": student_id,
+            "weakTopic": topic,
+            "recommendationType": "reviewer",
+            "title": f"Targeted Reviewer: {topic}",
+            "description": f"Consolidate your understanding of {topic} with this focused reviewer before retaking quizzes.",
+            "targetId": content["reviewerId"],
+            "difficultyTarget": diff,
+            "accuracyPercentage": acc,
+            "createdAt": now,
+            "steps": steps,
         })
     return jsonify(recommendations)
+
 
 # --------------------------------------------------
 # TEACHER ANALYTICS & ANNOUNCEMENTS
@@ -5546,7 +5895,7 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
     return summary, 200
 
 @app.route("/api/reports", methods=["GET"])
-@require_roles("teacher", "admin", "student")
+@require_roles("teacher", "admin")
 def handle_reports():
     generated_by = request.args.get("generatedBy", "")
     report_type = request.args.get("reportType", "")
@@ -5566,7 +5915,7 @@ def handle_reports():
     return jsonify([r.to_dict() for r in reports])
 
 @app.route("/api/reports", methods=["POST"])
-@require_roles("teacher", "admin", "student")
+@require_roles("teacher", "admin")
 def create_report():
     data = request.json or {}
     report_type = data.get("reportType") or ""
@@ -5610,7 +5959,7 @@ def create_report():
     return jsonify(report.to_dict()), 201
 
 @app.route("/api/reports/<report_id>", methods=["GET"])
-@require_roles("teacher", "admin", "student")
+@require_roles("teacher", "admin")
 def handle_report_detail(report_id):
     report = db.session.get(ReportModel, report_id)
     if not report:
@@ -5621,7 +5970,7 @@ def handle_report_detail(report_id):
     return jsonify(report.to_dict()), 200
 
 @app.route("/api/reports/<report_id>", methods=["DELETE"])
-@require_roles("teacher", "admin", "student")
+@require_roles("teacher", "admin")
 def delete_report(report_id):
     report = db.session.get(ReportModel, report_id)
     if not report:

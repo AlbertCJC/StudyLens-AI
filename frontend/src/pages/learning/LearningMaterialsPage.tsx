@@ -98,10 +98,6 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
   const [materialPage, setMaterialPage] = useState(1);
   const [showUpload, setShowUpload] = useState(false);
 
-  useEffect(() => {
-    setMaterialPage(1);
-  }, [selectedSubject]);
-
   // Downloaded Tracking State
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(() => {
     try {
@@ -232,6 +228,7 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
       const res = await authFetch(`/api/materials/${id}`, { method: "DELETE" });
       if (res.ok) {
         setMaterials((prev) => prev.filter((m) => m.id !== id));
+        setMaterialPage(1);
         setDeleteConfirmMat(null);
         showToast("Material deleted.");
       } else {
@@ -504,20 +501,30 @@ ${mat.title}
   };
 
   // Filter Logic with Privacy Enforcement
-  const filteredMaterials = materials.filter((m) => {
-    const matchesSubject = selectedSubject === "all" || m.subjectId === selectedSubject;
+  const filteredMaterials = materials
+    .filter((m) => {
+      // A subjectless resource (AI resource or personal note) is not scoped to any
+      // subject, so it stays visible under every subject filter instead of
+      // disappearing the moment a subject is selected.
+      const matchesSubject =
+        selectedSubject === "all" ||
+        m.subjectId === selectedSubject ||
+        (m.subjectId == null && m.materialType === "personal");
 
-    // Privacy Protection: Personal materials/notes are strictly private to the owner who uploaded them.
-    if (m.materialType === "personal") {
-      const isOwner =
-        (m.uploaderId && currentUser?.id && m.uploaderId === currentUser.id) ||
-        (currentUser?.name && m.uploadedBy === currentUser.name) ||
-        (!m.uploaderId && currentUser?.id === "usr-student-1");
-      if (!isOwner && currentUser?.role !== "admin") return false;
-    }
+      // Privacy Protection: Personal materials/notes are strictly private to the owner who uploaded them.
+      if (m.materialType === "personal") {
+        const isOwner =
+          (m.uploaderId && currentUser?.id && m.uploaderId === currentUser.id) ||
+          (currentUser?.name && m.uploadedBy === currentUser.name) ||
+          (!m.uploaderId && currentUser?.id === "usr-student-1");
+        if (!isOwner && currentUser?.role !== "admin") return false;
+      }
 
-    return matchesSubject;
-  });
+      return matchesSubject;
+    })
+    // Newest first: the grid is paginated at 10 per page, so a newly saved
+    // resource must lead or it lands on the last page and looks unsaved.
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
 
   // Derived original-file URL for the current preview (the exact uploaded file).
   const originalFileUrl = previewMaterial ? resolveFileUrl(previewMaterial) : null;
@@ -676,7 +683,10 @@ ${mat.title}
             <Filter className="w-3.5 h-3.5 text-muted-foreground" />
             <select
               value={selectedSubject}
-              onChange={(e) => setSelectedSubject(e.target.value)}
+              onChange={(e) => {
+                setSelectedSubject(e.target.value);
+                setMaterialPage(1);
+              }}
               className="text-xs border border-border rounded-lg px-2.5 py-1.5 bg-muted text-foreground font-medium focus:outline-none"
             >
               <option value="all">All Subjects</option>
@@ -707,6 +717,11 @@ ${mat.title}
                 currentUser?.role === "teacher" &&
                 mat.uploaderId === currentUser?.id &&
                 mat.uploaderRole !== "student";
+              // Any user may delete a material they own - a teacher their own
+              // upload, a student their own generated reviewer/summary. Admins
+              // are read-only on materials, matching the DELETE route.
+              const canDelete =
+                currentUser?.role !== "admin" && mat.uploaderId === currentUser?.id;
 
               return (
                 <div
@@ -717,19 +732,15 @@ ${mat.title}
                 >
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      {mat.subjectName ? (
+                      {mat.subjectName && (
                         <span className="px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold uppercase tracking-wider border border-blue-500/20">
                           {mat.subjectName}
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 font-mono text-[10px] font-bold uppercase tracking-wider border border-amber-500/30">
-                          Unassigned
                         </span>
                       )}
 
                       <div className="flex items-center space-x-1.5">
                         {mat.fileSize && <span className="text-[10px] text-muted-foreground font-mono">{mat.fileSize}</span>}
-                        {(currentUser?.role === "teacher" && mat.uploaderId === currentUser?.id) && (
+                        {canDelete && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -814,8 +825,8 @@ ${mat.title}
                 </div>
                 <div>
                   <div className="flex items-center space-x-2">
-                    {!previewIsAi && (
-                      <span className="text-[11px] text-slate-300 font-semibold">{previewMaterial.subjectName || "Unassigned"}</span>
+                    {!previewIsAi && previewMaterial.subjectName && (
+                      <span className="text-[11px] text-slate-300 font-semibold">{previewMaterial.subjectName}</span>
                     )}
 
                     {previewMaterial.fileType && !previewIsAi && (
@@ -929,10 +940,10 @@ ${mat.title}
                   {/* Paper Page Header */}
                   <div className="border-b border-slate-200 dark:border-slate-800 pb-4 flex justify-between items-end">
                     <div>
-                      {!previewIsAi && (
+                      {!previewIsAi && previewMaterial.subjectName && (
                         <p className="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
-                          {previewMaterial.subjectName || "Unassigned"}
-                          {previewMaterial.fileType ? ` Â· ${previewMaterial.fileType.toUpperCase()}` : ""}
+                          {previewMaterial.subjectName}
+                          {previewMaterial.fileType ? ` · ${previewMaterial.fileType.toUpperCase()}` : ""}
                         </p>
                       )}
 
@@ -1187,9 +1198,9 @@ ${mat.title}
 
             <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 rounded-xl space-y-1 text-xs text-rose-800 dark:text-rose-200">
               <p className="font-bold">Are you sure you want to delete this learning material?</p>
-              <p className="text-[11px] leading-relaxed opacity-90">
-                "{deleteConfirmMat.title}" will be permanently removed from your personal materials repository. This action cannot be undone.
-              </p>
+                <p className="text-[11px] leading-relaxed opacity-90">
+                  "{deleteConfirmMat.title}" will be permanently removed from learning materials. This action cannot be undone.
+                </p>
             </div>
 
             <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">

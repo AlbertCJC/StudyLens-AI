@@ -37,7 +37,7 @@ export interface AIWorkspace {
   sourceText: string;
   selectedMaterialId: string;
   uploadedFileName?: string;
-  quizCount: string;
+  quizCount?: string;
   flashcardCount: string;
   quizRevealAnswers: boolean;
   drafts: Partial<Record<AIMode, AIGeneratedResult | null>>;
@@ -67,7 +67,6 @@ const EMPTY_WORKSPACE: AIWorkspace = {
   prompt: "",
   sourceText: "",
   selectedMaterialId: "",
-  quizCount: "5",
   flashcardCount: "5",
   quizRevealAnswers: true,
   drafts: {},

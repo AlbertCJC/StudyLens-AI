@@ -39,6 +39,12 @@ interface ServerRecommendation {
   steps?: ServerRecommendationStep[];
 }
 
+function stepLabel(type: string): string {
+  if (type === 'review') return 'Read';
+  if (type === 'reviewer') return 'AI Reviewer';
+  return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
 export default function AnalyticsScreen({
   onNavigate,
   onOpenWeakTopic,
@@ -387,7 +393,7 @@ export default function AnalyticsScreen({
                         <Text style={{ color: '#fff', fontSize: 10, fontWeight: '900' }}>{s.step}</Text>
                       </View>
                       <Text style={{ color: colors.foreground, fontSize: 12, flex: 1 }}>
-                        <Text style={{ fontWeight: '800', textTransform: 'capitalize' }}>{s.type}: </Text>
+                        <Text style={{ fontWeight: '800' }}>{stepLabel(s.type)}: </Text>
                         {s.title}
                       </Text>
                     </View>

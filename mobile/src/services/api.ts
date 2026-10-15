@@ -76,8 +76,12 @@ export interface Material {
   id: string;
   title: string;
   description?: string;
-  subjectId: string;
+  /** Null until a teacher files the material under a subject (AI resources and
+   *  personal notes are subjectless by design). */
+  subjectId: string | null;
   subjectName?: string;
+  /** `ai-summary` / `ai-reviewer` / `ai-flashcards` are generated resources with
+   *  no uploaded file - the generated content itself is the document. */
   fileType: string;
   fileUrl?: string;
   fileSize?: string;
@@ -227,6 +231,31 @@ export const setAuthToken = (token: string | null) => {
 
 export const getAuthToken = () => authToken;
 
+// Called when a request bearing a token comes back 401 (expired/revoked
+// session). AuthContext registers this so a dead session bounces to Login.
+let onUnauthorized: (() => void) | null = null;
+let unauthorizedFired = false;
+
+export const setOnUnauthorized = (handler: (() => void) | null) => {
+  onUnauthorized = handler;
+  unauthorizedFired = false;
+};
+
+function handleUnauthorized(res: Response): boolean {
+  if (res.status !== 401 || !authToken) return false;
+  if (unauthorizedFired) return true;
+  unauthorizedFired = true;
+  try {
+    onUnauthorized?.();
+  } catch {
+    // ignore
+  }
+  setTimeout(() => {
+    unauthorizedFired = false;
+  }, 5000);
+  return true;
+}
+
 function buildHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(extra || {}) };
   if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
@@ -273,6 +302,7 @@ async function writeDiskCache(key: string, data: unknown): Promise<void> {
 async function revalidate(path: string, key: string): Promise<void> {
   try {
     const res = await fetch(`${getApiBaseUrl()}${path}`, { headers: buildHeaders() });
+    if (handleUnauthorized(res)) return;
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data) && data.length === 0) return;
@@ -296,6 +326,7 @@ async function getJSON<T>(path: string, fallback: Fallback<T>): Promise<T> {
 
   try {
     const res = await fetch(`${getApiBaseUrl()}${path}`, { headers: buildHeaders() });
+    if (handleUnauthorized(res)) return resolveFallback(fallback);
     if (res.ok) {
       const data = await res.json();
       // Respect the server's answer as the source of truth: an empty list is a
@@ -323,6 +354,7 @@ async function postJSON<T>(path: string, body: unknown, fallback: Fallback<T>, s
       body: JSON.stringify(body),
       signal,
     });
+    if (handleUnauthorized(res)) return resolveFallback(fallback);
     if (res.ok) {
       invalidateApiCache();
       const data = await res.json();
@@ -343,6 +375,7 @@ async function postForm<T>(path: string, form: FormData, fallback: Fallback<T>):
       headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       body: form,
     });
+    if (handleUnauthorized(res)) return resolveFallback(fallback);
     if (res.ok) {
       invalidateApiCache();
       const data = await res.json();
@@ -787,6 +820,7 @@ export async function uploadMaterial(payload: UploadMaterialPayload, endpoint = 
       headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       body: form,
     });
+    if (handleUnauthorized(res)) return fallbackMaterial;
     if (res.ok) {
       const data = await res.json();
       if (data) return data;
@@ -1090,6 +1124,7 @@ export const exportAiPdf = async (input: AiPdfInput): Promise<Uint8Array> => {
     headers: buildHeaders(),
     body: JSON.stringify(input),
   });
+  if (handleUnauthorized(res)) throw new Error('Your session has expired. Please sign in again.');
   if (!res.ok) {
     let msg = 'PDF export failed.';
     try {
@@ -1117,6 +1152,7 @@ export const convertToPdf = async (input: ConvertToPdfInput): Promise<Uint8Array
     headers: buildHeaders(),
     body: JSON.stringify(input),
   });
+  if (handleUnauthorized(res)) throw new Error('Your session has expired. Please sign in again.');
   if (!res.ok) {
     let msg = 'PDF export failed.';
     try {
@@ -1264,7 +1300,14 @@ export const deleteReport = (reportId: string): Promise<{ success: boolean }> =>
 // ----------------------------------------------------------------
 export const FALLBACK_LOGS: ActivityLog[] = [];
 
-export const fetchLogs = (): Promise<ActivityLog[]> => getJSON('/logs', FALLBACK_LOGS);
+export const fetchLogs = async (): Promise<ActivityLog[]> => {
+  const data = await getJSON<unknown>('/logs', FALLBACK_LOGS);
+  if (Array.isArray(data)) return data as ActivityLog[];
+  if (data && typeof data === 'object' && Array.isArray((data as { logs?: unknown }).logs)) {
+    return (data as { logs: ActivityLog[] }).logs;
+  }
+  return FALLBACK_LOGS;
+};
 
 export interface LogInput {
   userId: string;
@@ -1305,6 +1348,9 @@ async function mutateJSON<T>(path: string, method: 'POST' | 'PUT' | 'DELETE', bo
       `Couldn't reach the StudyLens server at ${getApiBaseUrl()}. Check that the backend is running and your phone is on the same network.`
     );
   }
+  if (handleUnauthorized(res)) {
+    throw new Error('Your session has expired. Please sign in again.');
+  }
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error((errBody as { error?: string }).error || `Request to ${path} failed (${res.status}).`);
@@ -1325,6 +1371,7 @@ export interface AdminUserInput {
 export const fetchAdminUsers = async (): Promise<User[]> => {
   try {
     const res = await fetch(`${getApiBaseUrl()}/users`, { headers: buildHeaders() });
+    if (handleUnauthorized(res)) return [];
     if (res.ok) {
       const data = (await res.json()) as User[];
       setJSON(STORAGE_KEYS.adminUsers, data);
@@ -1352,6 +1399,9 @@ export async function uploadAvatar(userId: string, uri: string, name: string, mi
     headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
     body: form,
   });
+  if (handleUnauthorized(res)) {
+    throw new Error('Your session has expired. Please sign in again.');
+  }
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error((errBody as { error?: string }).error || 'Could not upload the profile photo.');
@@ -1376,6 +1426,39 @@ export const updateMaterial = (materialId: string, patch: { title?: string; desc
 
 export const deleteMaterial = (materialId: string): Promise<{ success: boolean }> =>
   mutateJSON(`/materials/${encodeURIComponent(materialId)}`, 'DELETE');
+
+// ----------------------------------------------------------------
+// MATERIAL FLAGGING (admin flags, assigned teacher resolves)
+// ----------------------------------------------------------------
+export type MaterialFlagCategory = 'Wrong file' | 'Wrong subject' | 'Incomplete content' | 'Other';
+
+export interface MaterialFlag {
+  id: string;
+  materialId: string;
+  materialTitle: string;
+  subjectId: string;
+  subjectName: string;
+  flaggedById: string;
+  flaggedByName: string;
+  category: MaterialFlagCategory;
+  note?: string | null;
+  status: 'pending' | 'resolved';
+  createdAt: string;
+  resolvedAt?: string | null;
+  resolvedById?: string | null;
+  resolvedByName?: string | null;
+  resolutionNote?: string | null;
+}
+
+export const FALLBACK_MATERIAL_FLAGS: MaterialFlag[] = [];
+
+export const flagMaterial = (materialId: string, input: { category: MaterialFlagCategory; note?: string }): Promise<MaterialFlag> =>
+  postJSON(`/materials/${encodeURIComponent(materialId)}/flag`, input, { success: false } as unknown as MaterialFlag);
+
+export const fetchMaterialFlags = (): Promise<MaterialFlag[]> => getJSON('/material-flags', FALLBACK_MATERIAL_FLAGS);
+
+export const resolveMaterialFlag = (flagId: string, resolutionNote?: string): Promise<MaterialFlag> =>
+  mutateJSON(`/material-flags/${encodeURIComponent(flagId)}/resolve`, 'POST', { resolutionNote });
 
 export const updateQuiz = (quizId: string, patch: Record<string, unknown>): Promise<Quiz> =>
   mutateJSON(`/quizzes/${encodeURIComponent(quizId)}`, 'PUT', patch);
@@ -1408,6 +1491,9 @@ export const createQuiz = async (input: CreateQuizInput): Promise<Quiz> => {
 
 export const updateFlashcardDeck = (deckId: string, patch: Record<string, unknown>): Promise<FlashcardDeck> =>
   mutateJSON(`/flashcards/${encodeURIComponent(deckId)}`, 'PUT', patch);
+
+export const deleteFlashcardDeck = (deckId: string): Promise<{ success: boolean }> =>
+  mutateJSON(`/flashcards/${encodeURIComponent(deckId)}`, 'DELETE');
 
 export const updateSummary = (summaryId: string, patch: Record<string, unknown>): Promise<StudySummary> =>
   mutateJSON(`/summaries/${encodeURIComponent(summaryId)}`, 'PUT', patch);

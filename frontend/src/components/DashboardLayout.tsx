@@ -7,9 +7,10 @@ import {
 import { motion } from "motion/react";
 import { Button } from "./ui/button";
 import { DarkModeToggle } from "./DarkModeToggle";
-import { useAnnouncements } from "../context/AnnouncementsContext";
+import { useAnnouncements, type BellItem } from "../context/AnnouncementsContext";
 import { useAuth } from "../context/AuthContext";
 import { RelativeTime } from "../utils/time";
+import { authFetch } from "../utils/authFetch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +19,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+
+// Cache materialId -> subjectId so a material-notification tap deep-links to
+// the flagged material's subject without refetching the catalog every time.
+const materialSubjectCache = new Map<string, string | null>();
+
+async function resolveMaterialSubjectId(materialId: string): Promise<string | null> {
+  if (materialSubjectCache.has(materialId)) return materialSubjectCache.get(materialId) ?? null;
+  try {
+    const res = await authFetch("/api/materials");
+    if (!res.ok) return null;
+    const materials = (await res.json()) as { id: string; subjectId?: string | null }[];
+    const subjectId = materials.find((m) => m.id === materialId)?.subjectId || null;
+    materialSubjectCache.set(materialId, subjectId);
+    return subjectId;
+  } catch {
+    return null;
+  }
+}
 
 export interface MenuItem {
   icon: React.ElementType;
@@ -32,6 +51,12 @@ export interface DashboardLayoutProps {
   userRole: "Student" | "Teacher" | "Administrator";
   userName: string;
   activePath?: string;
+  /**
+   * Called when the user activates the nav item for the page they are already
+   * on. That click is a no-op in react-router, so the layout forwards it to the
+   * app to force a remount of the current page.
+   */
+  onNavigateActive?: () => void;
   onLogout?: () => void;
 }
 
@@ -41,6 +66,7 @@ export function DashboardLayout({
   userRole,
   userName,
   activePath,
+  onNavigateActive,
   onLogout,
 }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -111,6 +137,29 @@ export function DashboardLayout({
     }
   };
 
+  const handleNotificationClick = async (item: BellItem) => {
+    if (item.kind !== "notification") {
+      navigate(`/announcements?id=${item.announcementId || item.id}`);
+      return;
+    }
+    markNotificationRead(item.id.replace(/^notif-/, ""));
+    if (item.target && item.target.startsWith("quiz:")) {
+      navigate(`/assessments?quizId=${encodeURIComponent(item.target.slice(5))}`);
+      return;
+    }
+    if (item.target && item.target.startsWith("material:")) {
+      const materialId = item.target.slice(9);
+      const subjectId = await resolveMaterialSubjectId(materialId);
+      navigate(
+        subjectId
+          ? `/subjects/${encodeURIComponent(subjectId)}?tab=materials&material=${encodeURIComponent(materialId)}`
+          : `/subjects?material=${encodeURIComponent(materialId)}`
+      );
+      return;
+    }
+    navigate("/assessments");
+  };
+
   return (
     <div className="h-screen bg-background text-foreground flex overflow-hidden">
       {/* Mobile Backdrop */}
@@ -131,9 +180,11 @@ export function DashboardLayout({
           <div>
             <div className={`flex items-center justify-between mb-6 px-2 ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}>
               <Link to="/" className="flex items-center gap-2.5 group">
-                <div className="h-9 w-9 rounded-xl bg-[#5b51d8] text-white flex items-center justify-center font-bold text-lg shadow-sm group-hover:scale-105 transition-transform">
-                  S
-                </div>
+                <img
+                  src="/studylens.png"
+                  alt="StudyLens"
+                  className="h-9 w-9 rounded-xl object-cover shadow-sm group-hover:scale-105 transition-transform"
+                />
                 <div className={sidebarCollapsed ? "lg:hidden" : ""}>
                   <h1 className="font-bold text-base leading-none tracking-tight text-foreground">
                     StudyLens
@@ -161,7 +212,20 @@ export function DashboardLayout({
                   <Link
                     key={item.path}
                     to={item.path}
-                    onClick={() => setSidebarOpen(false)}
+                    onClick={(e) => {
+                      // Re-clicking the item for the current page must refresh it.
+                      // preventDefault stops the Link from pushing a duplicate
+                      // history entry, which would otherwise make the back
+                      // button need two presses to leave the page. Compared
+                      // exactly, not by the prefix rule used for highlighting
+                      // above: on /subjects/abc the "My Subjects" item is
+                      // highlighted but still has to navigate.
+                      if (currentPath === item.path) {
+                        e.preventDefault();
+                        onNavigateActive?.();
+                      }
+                      setSidebarOpen(false);
+                    }}
                     title={sidebarCollapsed ? item.label : undefined}
                     className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                       isActive
@@ -290,17 +354,7 @@ export function DashboardLayout({
                             key={a.id}
                             onClick={() => {
                               setNotifOpen(false);
-                              if (a.kind === "notification") {
-                                const rawId = a.id.replace(/^notif-/, "");
-                                markNotificationRead(rawId);
-                                if (a.target && a.target.startsWith("quiz:")) {
-                                  navigate(`/assessments?quizId=${encodeURIComponent(a.target.slice(5))}`);
-                                } else {
-                                  navigate("/assessments");
-                                }
-                              } else {
-                                navigate(`/announcements?id=${a.announcementId || a.id}`);
-                              }
+                              void handleNotificationClick(a);
                             }}
                             className={`p-3 rounded-xl border text-xs space-y-2 transition-all cursor-pointer group bg-muted/30 border-border/80 opacity-80 hover:opacity-100 hover:bg-muted/60`}
                           >
@@ -430,17 +484,8 @@ export function DashboardLayout({
                   <div
                     key={`all-${a.id}`}
                     onClick={() => {
-                      if (a.kind === "notification") {
-                        markNotificationRead(a.id.replace(/^notif-/, ""));
-                        if (a.target && a.target.startsWith("quiz:")) {
-                          navigate(`/assessments?quizId=${encodeURIComponent(a.target.slice(5))}`);
-                        } else {
-                          navigate("/assessments");
-                        }
-                      } else {
-                        navigate(`/announcements?id=${a.announcementId || a.id}`);
-                      }
                       setViewAllOpen(false);
+                      void handleNotificationClick(a);
                     }}
                     className="p-3 rounded-xl border text-xs space-y-2 transition-all cursor-pointer group bg-muted/30 border-border/80 hover:bg-muted/60"
                   >

@@ -3,6 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const STORAGE_KEYS = {
   theme: 'studylens_mobile_theme',
   session: 'studylens_mobile_session',
+  pendingEmailVerification: 'studylens_mobile_pending_email_verification',
+  forgotReset: 'studylens_mobile_forgot_reset',
   apiBaseUrl: 'studylens_api_base',
   downloadedMaterials: 'studylens_downloaded_materials',
   readNotifications: (userId: string) => `studylens_read_notifications_${userId}`,

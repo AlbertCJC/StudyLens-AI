@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { apiLogin, apiRegister, apiChangePassword, apiVerifyTwoFactor, apiVerifyEmail, apiResendEmailCode, setAuthToken, invalidateApiCache, updateUser, User, EmailVerificationPending } from '../services/api';
+import { apiLogin, apiRegister, apiChangePassword, apiVerifyTwoFactor, apiVerifyEmail, apiResendEmailCode, setAuthToken, setOnUnauthorized, invalidateApiCache, updateUser, User, EmailVerificationPending } from '../services/api';
 import { STORAGE_KEYS, getJSON, setJSON, removeItem } from '../utils/storage';
 
 export type UserRole = 'student' | 'teacher' | 'admin';
@@ -66,6 +66,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setJSON(STORAGE_KEYS.session, { token: userToken, user });
   }, []);
 
+  // Persists the pending email-verification step (userId + email only, never
+  // the devCode) so the Verify Email screen survives an OS app restart. Cleared
+  // once the step completes, the user bails out, or they sign in.
+  const persistPendingVerification = useCallback(
+    (pending: EmailVerificationPending | null) => {
+      setPendingEmailVerification(pending);
+      if (pending) {
+        setJSON(STORAGE_KEYS.pendingEmailVerification, {
+          userId: pending.userId,
+          email: pending.email,
+          expiresInMinutes: pending.expiresInMinutes,
+        });
+      } else {
+        removeItem(STORAGE_KEYS.pendingEmailVerification);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     getJSON<{ token: string; user: AuthUser }>(STORAGE_KEYS.session).then(async (session) => {
       if (session?.token && session?.user) {
@@ -83,6 +102,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setAuthToken(session.token);
         setCurrentUser(user);
       }
+      const pending = await getJSON<{ userId: string; email: string; expiresInMinutes?: number }>(STORAGE_KEYS.pendingEmailVerification).catch(() => null);
+      if (pending?.userId) {
+        setPendingEmailVerification({
+          requiresEmailVerification: true,
+          userId: pending.userId,
+          email: pending.email,
+          expiresInMinutes: pending.expiresInMinutes ?? 0,
+        });
+      }
       setHydrated(true);
     });
   }, [persistSession]);
@@ -91,7 +119,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     async (email: string, role?: UserRole, password?: string): Promise<AuthUser> => {
       const data = await apiLogin(email, role, undefined, password);
       if ('requiresEmailVerification' in data) {
-        setPendingEmailVerification(data);
+        persistPendingVerification(data);
         throw new EmailVerificationRequiredError(data);
       }
       if ('twoFactorRequired' in data) {
@@ -100,11 +128,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       const user = { ...data.user, role: normalizeRole(data.user.role) };
       setPendingTwoFactor(null);
-      setPendingEmailVerification(null);
+      persistPendingVerification(null);
       persistSession(user, data.token);
       return user;
     },
-    [persistSession]
+    [persistSession, persistPendingVerification]
   );
 
   const verifyTwoFactor = useCallback(
@@ -124,26 +152,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!pendingEmailVerification) throw new Error('No pending email verification.');
       const data = await apiVerifyEmail(pendingEmailVerification.userId, code);
       if ('requiresEmailVerification' in data) {
-        setPendingEmailVerification(data);
+        persistPendingVerification(data);
         throw new EmailVerificationRequiredError(data);
       }
       const user = { ...data.user, role: normalizeRole(data.user.role) };
-      setPendingEmailVerification(null);
+      persistPendingVerification(null);
       persistSession(user, data.token);
       return user;
     },
-    [pendingEmailVerification, persistSession]
+    [pendingEmailVerification, persistPendingVerification, persistSession]
   );
 
   const resendEmailCode = useCallback(async (): Promise<void> => {
     if (!pendingEmailVerification) throw new Error('No pending email verification.');
     const pending = await apiResendEmailCode(pendingEmailVerification.userId);
-    setPendingEmailVerification((prev) => ({ ...(prev || {}), ...pending, userId: pending.userId }));
-  }, [pendingEmailVerification]);
+    persistPendingVerification({ ...(pendingEmailVerification || {}), ...pending, userId: pending.userId });
+  }, [pendingEmailVerification, persistPendingVerification]);
 
   const cancelEmailVerification = useCallback(() => {
-    setPendingEmailVerification(null);
-  }, []);
+    persistPendingVerification(null);
+  }, [persistPendingVerification]);
 
   const cancelTwoFactor = useCallback(() => {
     setPendingTwoFactor(null);
@@ -153,25 +181,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     async (name: string, email: string, role: UserRole, department?: string, password?: string): Promise<AuthUser> => {
       const data = await apiRegister(name, email, role, department, password);
       if ('requiresEmailVerification' in data) {
-        setPendingEmailVerification(data);
+        persistPendingVerification(data);
         throw new EmailVerificationRequiredError(data);
       }
+      persistPendingVerification(null);
       const user = { ...data.user, role: normalizeRole(data.user.role) };
       persistSession(user, data.token);
       return user;
     },
-    [persistSession]
+    [persistSession, persistPendingVerification]
   );
 
   const logout = useCallback(() => {
     setCurrentUser(null);
     setToken(null);
     setAuthToken(null);
-    setPendingEmailVerification(null);
+    persistPendingVerification(null);
     setPendingTwoFactor(null);
     invalidateApiCache();
     removeItem(STORAGE_KEYS.session);
-  }, []);
+  }, [persistPendingVerification]);
+
+  React.useEffect(() => {
+    setOnUnauthorized(logout);
+    return () => setOnUnauthorized(null);
+  }, [logout]);
 
   const changePassword = useCallback(
     async (currentPassword: string, newPassword: string): Promise<void> => {

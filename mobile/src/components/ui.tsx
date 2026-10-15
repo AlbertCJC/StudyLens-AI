@@ -198,7 +198,7 @@ export const SegmentedButtons: React.FC<{
           <TouchableOpacity
             key={opt.key}
             onPress={() => onChange(opt.key)}
-            style={[styles.segmentItem, active ? { backgroundColor: colors.card, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 1 } : null]}
+            style={[styles.segmentItem, active ? { backgroundColor: colors.card, boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)', elevation: 1 } : null]}
           >
             <Text style={{ fontSize: 12, fontWeight: '700', color: active ? colors.foreground : colors.mutedForeground }}>
               {opt.label}
@@ -316,7 +316,7 @@ export const LoadingView: React.FC<{ label?: string }> = ({ label }) => {
 };
 
 const styles = StyleSheet.create({
-  card: { borderRadius: 16, padding: 16, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  card: { borderRadius: 16, padding: 16, boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)', elevation: 2 },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   sectionTitle: { fontSize: 17, fontWeight: '800' },

@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
-import { Building2, Calendar, CheckCircle2, Edit3, Save, Camera, FileBadge, Trash2, Moon, Sun } from 'lucide-react-native';
+import { Building2, Calendar, CheckCircle2, Edit3, Save, Camera, FileBadge, Trash2 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { uploadAvatar, resolveMaterialFileUrl } from '../services/api';
-import { Card, Badge, Field, PrimaryButton, OutlineButton, SectionHeader, Modal } from '../components/ui';
+import { Card, Badge, Field, PrimaryButton, OutlineButton, SectionHeader } from '../components/ui';
 
 export default function ProfileScreen({ onNavigate }: { onNavigate: (tab: string) => void }) {
-  const { colors, isDark, toggleTheme } = useTheme();
-  const { currentUser, updateProfile, logout, changePassword } = useAuth();
+  const { colors } = useTheme();
+  const { currentUser, updateProfile, changePassword } = useAuth();
   const { showToast } = useToast();
 
   const [isEditing, setIsEditing] = useState(false);
@@ -24,7 +24,6 @@ export default function ProfileScreen({ onNavigate }: { onNavigate: (tab: string
 
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [removingAvatar, setRemovingAvatar] = useState(false);
-  const [logoutOpen, setLogoutOpen] = useState(false);
 
   if (!currentUser) return null;
 
@@ -114,15 +113,6 @@ export default function ProfileScreen({ onNavigate }: { onNavigate: (tab: string
     } finally {
       setPasswordSubmitting(false);
     }
-  };
-
-  const confirmLogout = () => {
-    setLogoutOpen(true);
-  };
-
-  const doLogout = () => {
-    setLogoutOpen(false);
-    logout();
   };
 
   const roleBadge = (() => {
@@ -315,15 +305,6 @@ export default function ProfileScreen({ onNavigate }: { onNavigate: (tab: string
         )}
       </Card>
 
-      {/* Appearance */}
-      <Card style={styles.panel}>
-        <TouchableOpacity onPress={toggleTheme} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          {isDark ? <Sun size={17} color={colors.warning} /> : <Moon size={17} color={colors.primary} />}
-          <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700', flex: 1 }}>Toggle Dark / Light Mode</Text>
-          <Badge text={isDark ? 'Dark' : 'Light'} color={isDark ? colors.warning : colors.primary} bg={isDark ? colors.warningSoft : colors.indigoSoft} />
-        </TouchableOpacity>
-      </Card>
-
       {/* About my role */}
       <Card style={styles.panel}>
         <SectionHeader title="About My Role" />
@@ -337,27 +318,13 @@ export default function ProfileScreen({ onNavigate }: { onNavigate: (tab: string
           ))}
         </View>
       </Card>
-
-      <PrimaryButton label="Log Out" color={colors.danger} onPress={confirmLogout} />
-      <Text style={{ color: colors.mutedForeground, fontSize: 10, textAlign: 'center' }}>
-        Logged in as {currentUser.email}
-      </Text>
-
-      <Modal visible={logoutOpen} onClose={() => setLogoutOpen(false)} title="Log out of StudyLens AI?" subtitle="Your session will be cleared from this device.">
-        <View style={{ gap: 12 }}>
-          <View style={styles.btnRow}>
-            <OutlineButton label="Cancel" onPress={() => setLogoutOpen(false)} style={{ flex: 1 }} />
-            <PrimaryButton label="Log Out" color={colors.danger} onPress={doLogout} style={{ flex: 1 }} />
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 32, gap: 14 },
-  banner: { borderRadius: 16, padding: 18, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  banner: { borderRadius: 16, padding: 18, boxShadow: '0 6px 14px rgba(0, 0, 0, 0.12)', elevation: 6 },
   bannerInner: { flexDirection: 'column', gap: 12 },
   avatar: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center' },
   avatarImage: { width: 68, height: 68, borderRadius: 34 },

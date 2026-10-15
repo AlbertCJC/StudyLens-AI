@@ -10,6 +10,7 @@ import {
   Animated,
   PanResponder,
   Dimensions,
+  Image,
 } from 'react-native';
 import {
   Menu,
@@ -17,14 +18,15 @@ import {
   Bell,
   LogOut,
   ChevronRight,
+  ChevronLeft,
   Sun,
   Moon,
-  BookOpen,
 } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth, UserRole } from '../context/AuthContext';
 import { useAnnouncements } from '../context/AnnouncementsContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { bumpRefresh } from '../navigation/navigationRef';
 
 const DRAWER_WIDTH = Math.min(Dimensions.get('window').width * 0.82, 320);
 
@@ -41,10 +43,11 @@ interface DashboardLayoutProps {
   onNavigate: (key: string) => void;
   onQuickNavigate?: (key: string) => void;
   title: string;
+  onBack?: () => void;
   children: React.ReactNode;
 }
 
-export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQuickNavigate, title, children }: DashboardLayoutProps) {
+export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQuickNavigate, title, onBack, children }: DashboardLayoutProps) {
   const { colors, isDark, toggleTheme } = useTheme();
   const { currentUser, logout } = useAuth();
   const { unreadCount } = useAnnouncements();
@@ -96,6 +99,14 @@ export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQu
 
   const handleNavigate = (key: string) => {
     closeDrawer();
+    // Re-tapping the drawer item for the current screen would re-dispatch the
+    // same navigation, which react-navigation ignores. Bump the screen's remount
+    // counter instead so it reloads. activeKey is the one piece of state the
+    // layout already has, so no extra prop is needed.
+    if (key === activeKey) {
+      bumpRefresh(key);
+      return;
+    }
     onNavigate(key);
   };
 
@@ -104,10 +115,16 @@ export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQu
       {/* Topbar */}
       <View style={[styles.topbar, { backgroundColor: colors.topbarBg, borderBottomColor: colors.border, paddingTop: insets.top, height: 56 + insets.top }]}>
         <View style={styles.topbarLeft}>
-          <TouchableOpacity onPress={openDrawer} style={styles.iconBtn}>
-            <Menu size={22} color={colors.foreground} />
-          </TouchableOpacity>
-          <Text style={[styles.topbarTitle, { color: colors.foreground }]}>{title}</Text>
+          {onBack ? (
+            <TouchableOpacity onPress={onBack} style={styles.iconBtn}>
+              <ChevronLeft size={24} color={colors.foreground} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity onPress={openDrawer} style={styles.iconBtn}>
+              <Menu size={22} color={colors.foreground} />
+            </TouchableOpacity>
+          )}
+          <Text style={[styles.topbarTitle, { color: colors.foreground }]} numberOfLines={1}>{title}</Text>
         </View>
         <View style={styles.topbarRight}>
           <TouchableOpacity onPress={toggleTheme} style={styles.iconBtn}>
@@ -143,9 +160,11 @@ export default function DashboardLayout({ menuItems, activeKey, onNavigate, onQu
             <SafeAreaView style={styles.flex}>
               {/* Brand */}
               <View style={[styles.brandRow, { borderBottomColor: colors.border }]}>
-                <View style={[styles.brandLogo, { backgroundColor: colors.primary }]}>
-                  <BookOpen size={20} color="#fff" />
-                </View>
+                <Image
+                  source={require('../../assets/studylens-icon.png')}
+                  style={styles.brandLogo}
+                  resizeMode="contain"
+                />
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.brandTitle, { color: colors.foreground }]}>StudyLens AI</Text>
                   <Text style={{ color: colors.primary, fontSize: 10, fontWeight: '500', marginTop: 2 }}>Learning Platform</Text>
@@ -255,7 +274,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderBottomWidth: 1,
   },
-  brandLogo: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  brandLogo: { width: 38, height: 38 },
   brandTitle: { fontSize: 16, fontWeight: '800', letterSpacing: -0.3 },
   roleBox: { margin: 12, borderRadius: 12, borderWidth: 1, padding: 10, gap: 8 },
   roleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4 },

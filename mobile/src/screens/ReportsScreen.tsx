@@ -1,8 +1,9 @@
 ﻿import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
-import { FileText, BarChart2, Plus, Trash2, Users, GraduationCap, Sparkles, X, Check } from 'lucide-react-native';
+import { FileText, BarChart2, Plus, Trash2, Users, GraduationCap, Sparkles, X, Check, Download } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import {
   GeneratedReport,
   ReportType,
@@ -12,10 +13,12 @@ import {
   fetchAdminUsers,
   fetchQuizzes,
   fetchSubjects,
+  convertToPdf,
   Quiz,
   Subject,
 } from '../services/api';
 import { Card, Badge, Modal, LoadingView, EmptyState, SectionHeader, PrimaryButton, OutlineButton, Field } from '../components/ui';
+import { saveTextFile, saveBytesFile } from '../utils/fileExport';
 
 const REPORT_TYPES: { key: ReportType; icon: React.ReactNode }[] = [
   { key: 'Student Performance', icon: <Users size={18} color="#fff" /> },
@@ -27,8 +30,7 @@ const REPORT_TYPES: { key: ReportType; icon: React.ReactNode }[] = [
 export default function ReportsScreen({ onNavigate }: { onNavigate: (tab: string) => void }) {
   const { colors } = useTheme();
   const { currentUser } = useAuth();
-  const isStudent = currentUser?.role === 'student';
-
+  const { showToast } = useToast();
   const [reports, setReports] = useState<GeneratedReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -44,6 +46,7 @@ export default function ReportsScreen({ onNavigate }: { onNavigate: (tab: string
   const [generating, setGenerating] = useState(false);
 
   const [viewing, setViewing] = useState<GeneratedReport | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
 
   const loadReports = useCallback(async () => {
     try {
@@ -80,9 +83,9 @@ export default function ReportsScreen({ onNavigate }: { onNavigate: (tab: string
     setGenerating(true);
     try {
       const created = await generateReport({
-        reportType: isStudent ? 'Student Performance' : reportType,
+        reportType,
         title: title.trim() || `${reportType} Report`,
-        targetId: isStudent ? currentUser?.id : (targetId || undefined),
+        targetId: targetId || undefined,
         generatedBy: currentUser?.id || 'usr-admin-1',
       });
       if (created && created.id) {
@@ -96,9 +99,44 @@ export default function ReportsScreen({ onNavigate }: { onNavigate: (tab: string
     }
   };
 
-  const removeReport = async (id: string) => {
+const removeReport = async (id: string) => {
     await deleteReport(id);
     setReports((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const exportReportCSV = async (report: GeneratedReport) => {
+    setExportingId(report.id);
+    try {
+      const rows = summaryRows(report);
+      const content =
+        `Report,${report.reportType}\nTitle,${report.title}\nGenerated,${report.generatedAt}\n\n` +
+        rows.map((r) => `"${r.label.replace(/"/g, '""')}","${r.value.replace(/"/g, '""')}"`).join('\n');
+      await saveTextFile(`${report.title.replace(/[^a-z0-9]+/gi, '_') || 'report'}.csv`, content, 'text/csv', report.title);
+      showToast('Report exported as CSV.');
+    } catch (err) {
+      showToast((err as Error).message || 'Could not export the report.', 'error');
+    } finally {
+      setExportingId(null);
+    }
+  };
+
+  const exportReportPDF = async (report: GeneratedReport) => {
+    setExportingId(report.id);
+    try {
+      const rows = summaryRows(report);
+      const items = rows.map((r) => ({ question: r.label, answer: r.value }));
+      const bytes = await convertToPdf({
+        title: report.title,
+        metaLine: `${report.reportType} · Generated ${report.generatedAt}`,
+        items,
+      });
+      await saveBytesFile(`${report.title.replace(/[^a-z0-9]+/gi, '_') || 'report'}.pdf`, bytes, 'application/pdf', report.title);
+      showToast('Report exported as PDF.');
+    } catch (err) {
+      showToast((err as Error).message || 'Could not export the report.', 'error');
+    } finally {
+      setExportingId(null);
+    }
   };
 
   const summaryRows = (report: GeneratedReport): { label: string; value: string }[] => {
@@ -144,7 +182,7 @@ export default function ReportsScreen({ onNavigate }: { onNavigate: (tab: string
 
       <SectionHeader title="Generate a Report" subtitle="Choose a report type to compile" />
       <View style={styles.grid}>
-        {REPORT_TYPES.filter((rt) => !isStudent || rt.key === 'Student Performance').map((rt) => (
+        {REPORT_TYPES.map((rt) => (
           <TouchableOpacity
             key={rt.key}
             onPress={() => openGenerate(rt.key)}
@@ -177,9 +215,15 @@ export default function ReportsScreen({ onNavigate }: { onNavigate: (tab: string
                   <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: '800' }}>{r.title}</Text>
                   <Text style={{ color: colors.mutedForeground, fontSize: 10, fontFamily: 'monospace' }}>{r.generatedAt}</Text>
                 </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+<View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <TouchableOpacity onPress={() => setViewing(r)} style={[styles.iconBtn, { backgroundColor: colors.indigoSoft }]}>
                     <BarChart2 size={16} color={colors.primary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => exportReportCSV(r)} disabled={exportingId === r.id} style={[styles.iconBtn, { backgroundColor: colors.successSoft, opacity: exportingId === r.id ? 0.5 : 1 }]}>
+                    <Download size={16} color={colors.success} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => exportReportPDF(r)} disabled={exportingId === r.id} style={[styles.iconBtn, { backgroundColor: colors.warningSoft, opacity: exportingId === r.id ? 0.5 : 1 }]}>
+                    <FileText size={16} color={colors.warning} />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => removeReport(r.id)} style={[styles.iconBtn, { backgroundColor: 'rgba(239,68,68,0.12)' }]}>
                     <Trash2 size={16} color={colors.danger} />
@@ -203,30 +247,22 @@ export default function ReportsScreen({ onNavigate }: { onNavigate: (tab: string
 
           {reportType === 'Student Performance' && (
             <View>
-              {isStudent ? (
-                <Text style={{ color: colors.mutedForeground, fontSize: 12, lineHeight: 19 }}>
-                  This report is generated from your own quiz attempts, scores, and progress.
-                </Text>
-              ) : (
-                <View>
-                  <Text style={{ color: colors.mutedForeground, fontSize: 11, fontWeight: '700', marginBottom: 6 }}>Target Student</Text>
-                  {students.length === 0 && (
-                    <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No students enrolled in your subjects yet.</Text>
-                  )}
-                  <View style={styles.pickerWrap}>
-                    {students.map((s) => (
-                      <TouchableOpacity
-                        key={s.id}
-                        onPress={() => setTargetId(s.id)}
-                        style={[styles.optionRow, targetId === s.id ? { backgroundColor: colors.primary, borderColor: colors.primary } : { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
-                      >
-                        <Check size={14} color={targetId === s.id ? '#fff' : 'transparent'} />
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: targetId === s.id ? '#fff' : colors.foreground, flex: 1 }}>{s.name}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
+              <Text style={{ color: colors.mutedForeground, fontSize: 11, fontWeight: '700', marginBottom: 6 }}>Target Student</Text>
+              {students.length === 0 && (
+                <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No students enrolled in your subjects yet.</Text>
               )}
+              <View style={styles.pickerWrap}>
+                {students.map((s) => (
+                  <TouchableOpacity
+                    key={s.id}
+                    onPress={() => setTargetId(s.id)}
+                    style={[styles.optionRow, targetId === s.id ? { backgroundColor: colors.primary, borderColor: colors.primary } : { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+                  >
+                    <Check size={14} color={targetId === s.id ? '#fff' : 'transparent'} />
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: targetId === s.id ? '#fff' : colors.foreground, flex: 1 }}>{s.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           )}
 
@@ -294,8 +330,16 @@ export default function ReportsScreen({ onNavigate }: { onNavigate: (tab: string
                 <Text style={{ color: colors.mutedForeground, fontSize: 12, flex: 1.5, textAlign: 'right' }}>{row.value}</Text>
               </View>
             ))
-          )}
-          <PrimaryButton label="Close" onPress={() => setViewing(null)} />
+)}
+          <View style={styles.modalActions}>
+            {viewing && (
+              <>
+                <OutlineButton label="CSV" onPress={() => exportReportCSV(viewing)} disabled={exportingId === viewing.id} style={{ flex: 1 }} />
+                <OutlineButton label="PDF" color={colors.primary} onPress={() => exportReportPDF(viewing)} disabled={exportingId === viewing.id} style={{ flex: 1 }} />
+              </>
+            )}
+            <PrimaryButton label="Close" onPress={() => setViewing(null)} style={{ flex: 1 }} />
+          </View>
         </View>
       </Modal>
     </ScrollView>

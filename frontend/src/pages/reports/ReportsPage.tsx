@@ -27,7 +27,6 @@ export const ReportsPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { showToast } = useToast();
   const isTeacher = currentUser?.role === "teacher";
-  const isStudent = currentUser?.role === "student";
   const [reports, setReports] = useState<GeneratedReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -174,9 +173,9 @@ export const ReportsPage: React.FC = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          reportType: isStudent ? "Student Performance" : reportType,
+          reportType,
           title: title.trim() || `${reportType} Report`,
-          targetId: isStudent ? currentUser?.id : (targetId || undefined),
+          targetId: targetId || undefined,
           generatedBy: currentUser?.id || "usr-admin-1",
           teacherId: isTeacher ? currentUser?.id : undefined,
           userRole: currentUser?.role || "student",
@@ -466,7 +465,7 @@ export const ReportsPage: React.FC = () => {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>Choose a report type</DropdownMenuLabel>
-            {REPORT_TYPES.filter((t) => !isStudent || t === "Student Performance").map((type) => {
+            {REPORT_TYPES.map((type) => {
               const Icon = REPORT_ICONS[type];
               return (
                 <DropdownMenuItem key={type} onClick={() => openGenerate(type)} className="gap-2.5">
@@ -646,28 +645,22 @@ export const ReportsPage: React.FC = () => {
 
               {reportType === "Student Performance" && (
                 <div>
-                  <label className="block text-xs font-bold text-foreground mb-1">{isStudent ? "Report Scope" : "Target Student"}</label>
-                  {isStudent ? (
-                    <p className="text-[11px] text-muted-foreground bg-muted/30 border border-border rounded-xl p-3">
-                      This report is generated from your own quiz attempts, scores, and progress.
-                    </p>
-                  ) : (
-                    <select
-                      value={targetId}
-                      onChange={(e) => setTargetId(e.target.value)}
-                      required
-                      className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                    >
-                      <option value="">
-                        {loadingStudents
-                          ? "Loading students..."
-                          : students.length === 0
-                            ? "No students enrolled in your subjects yet"
-                            : "Select a student..."}
-                      </option>
-                      {students.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                  )}
+                  <label className="block text-xs font-bold text-foreground mb-1">Target Student</label>
+                  <select
+                    value={targetId}
+                    onChange={(e) => setTargetId(e.target.value)}
+                    required
+                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">
+                      {loadingStudents
+                        ? "Loading students..."
+                        : students.length === 0
+                          ? "No students enrolled in your subjects yet"
+                          : "Select a student..."}
+                    </option>
+                    {students.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
                 </div>
               )}
 

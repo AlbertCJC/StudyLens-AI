@@ -39,7 +39,7 @@ export default function AnnouncementsScreen({ onNavigate }: { onNavigate: (tab: 
   const isStaff = currentUser?.role === 'teacher' || currentUser?.role === 'admin';
   const userId = currentUser?.id;
 
-  const canManage = (a: Announcement) => isStaff;
+  const canManage = (a: Announcement) => !!userId && userId === a.authorId;
 
   const handleComposeSave = async () => {
     if (!compose) return;
@@ -273,11 +273,6 @@ export default function AnnouncementsScreen({ onNavigate }: { onNavigate: (tab: 
       </Modal>
     </ScrollView>
   );
-
-  function isStaffOrOther(a: Announcement) {
-    if (currentUser?.role === 'admin') return false;
-    return !a.authorId || a.authorId !== userId;
-  }
 }
 
 const styles = StyleSheet.create({

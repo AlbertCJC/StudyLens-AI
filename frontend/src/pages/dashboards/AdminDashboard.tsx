@@ -33,6 +33,8 @@ const ACTION_LABELS: Record<string, string> = {
   MATERIAL_UPDATE: "Material updated",
   MATERIAL_DELETE: "Material deleted",
   MATERIAL_AI_SAVE: "AI material saved",
+  MATERIAL_FLAG: "Material flagged for review",
+  MATERIAL_FLAG_RESOLVED: "Material flag resolved",
   QUIZ_CREATE: "Quiz created",
   QUIZ_UPDATE: "Quiz updated",
   QUIZ_DELETE: "Quiz deleted",
@@ -81,6 +83,8 @@ const ACTION_CATEGORY: Record<string, { group: string; badge: string }> = {
   MATERIAL_UPDATE: { group: "Learning Materials", badge: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" },
   MATERIAL_DELETE: { group: "Learning Materials", badge: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" },
   MATERIAL_AI_SAVE: { group: "Learning Materials", badge: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" },
+  MATERIAL_FLAG: { group: "Learning Materials", badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
+  MATERIAL_FLAG_RESOLVED: { group: "Learning Materials", badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
   QUIZ_CREATE: { group: "Quizzes & Assessments", badge: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
   QUIZ_UPDATE: { group: "Quizzes & Assessments", badge: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
   QUIZ_DELETE: { group: "Quizzes & Assessments", badge: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
@@ -121,7 +125,7 @@ const ACTION_GROUPS: { group: string; codes: string[] }[] = [
   },
   {
     group: "Learning Materials",
-    codes: ["MATERIAL_UPLOAD", "MATERIAL_UPDATE", "MATERIAL_DELETE", "MATERIAL_AI_SAVE"],
+    codes: ["MATERIAL_UPLOAD", "MATERIAL_UPDATE", "MATERIAL_DELETE", "MATERIAL_AI_SAVE", "MATERIAL_FLAG", "MATERIAL_FLAG_RESOLVED"],
   },
   {
     group: "Quizzes & Assessments",

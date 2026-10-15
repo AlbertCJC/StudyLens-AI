@@ -5,6 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
+    "icon": "./assets/studylens-icon.png",
     "splash": {
       "backgroundColor": "#0f172a"
     },
@@ -15,7 +16,8 @@
       "package": "com.studylens.mobile"
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "favicon": "./assets/studylens-icon.png"
     }
   }
 }

@@ -31,9 +31,13 @@ export interface LearningMaterial {
   id: string;
   title: string;
   description: string;
-  subjectId: string;
+  /** Null until a teacher files the material under a subject (AI resources and
+   *  personal notes are subjectless by design). */
+  subjectId: string | null;
   subjectName: string;
-  fileType: "pdf" | "docx" | "pptx" | "txt";
+  /** `ai-summary` / `ai-reviewer` / `ai-flashcards` are generated resources with
+   *  no uploaded file - the generated content itself is the document. */
+  fileType: "pdf" | "docx" | "pptx" | "txt" | `ai-${string}`;
   fileUrl?: string;
   fileSize?: string;
   extractedText: string;
@@ -42,6 +46,24 @@ export interface LearningMaterial {
   uploaderId?: string;
   materialType?: "course" | "personal";
   createdAt: string;
+}
+
+export interface MaterialFlag {
+  id: string;
+  materialId: string;
+  materialTitle: string;
+  subjectId?: string | null;
+  subjectName?: string | null;
+  flaggedById: string;
+  flaggedByName?: string | null;
+  category: string;
+  note?: string | null;
+  status: "pending" | "resolved";
+  createdAt: string;
+  resolvedAt?: string | null;
+  resolvedById?: string | null;
+  resolvedByName?: string | null;
+  resolutionNote?: string | null;
 }
 
 export type BloomsTaxonomy =

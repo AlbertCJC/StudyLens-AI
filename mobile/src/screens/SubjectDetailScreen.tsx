@@ -28,10 +28,11 @@ import {
   Megaphone,
   ShieldCheck,
   UserCheck,
-  ChevronRight,
+ChevronRight,
   Play,
   BarChart2,
   RotateCw,
+  Flag,
 } from 'lucide-react-native';
 import {
   fetchMaterials,
@@ -39,16 +40,21 @@ import {
   fetchSubjectStudents,
   fetchSubjectGrades,
   fetchAdminUsers,
+  fetchMaterialFlags,
+  flagMaterial,
+  resolveMaterialFlag,
   assignStudentsToSubject,
   removeStudentsFromSubject,
   resolveMaterialFileUrl,
   updateMaterial,
   deleteMaterial,
   updateQuiz,
-deleteQuiz,
-createAnnouncement,
-convertToPdf,
+  deleteQuiz,
+  createAnnouncement,
+  convertToPdf,
   Material,
+  MaterialFlag,
+  MaterialFlagCategory,
   Quiz,
   QuizAttempt,
   Subject,
@@ -170,6 +176,16 @@ export default function SubjectDetailScreen({
   const [quizVisible, setQuizVisible] = useState(15);
   const [annVisible, setAnnVisible] = useState(15);
 
+  const [materialFlags, setMaterialFlags] = useState<MaterialFlag[]>([]);
+  const [flagTarget, setFlagTarget] = useState<Material | null>(null);
+  const [flagCategory, setFlagCategory] = useState<MaterialFlagCategory>('Wrong file');
+  const [flagNote, setFlagNote] = useState('');
+  const [flagBusy, setFlagBusy] = useState(false);
+  const [showFlagsModal, setShowFlagsModal] = useState(false);
+  const [resolveTarget, setResolveTarget] = useState<MaterialFlag | null>(null);
+  const [resolutionNote, setResolutionNote] = useState('');
+  const [resolvingFlag, setResolvingFlag] = useState(false);
+
   const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
   const [eqTitle, setEqTitle] = useState('');
   const [eqDescription, setEqDescription] = useState('');
@@ -207,8 +223,9 @@ export default function SubjectDetailScreen({
       fetchSubjectStudents(subject.id),
       fetchSubjectGrades(subject.id),
       getQuizProgresses(uid),
+      fetchMaterialFlags(),
     ])
-      .then(([mats, qs, stus, grds, progs]) => {
+      .then(([mats, qs, stus, grds, progs, flags]) => {
         if (!active) return;
         setMaterials(mats.filter((m) => m.subjectId === subject.id));
         const qlist = qs.filter((q) => q.subjectId === subject.id);
@@ -220,6 +237,7 @@ export default function SubjectDetailScreen({
           map[p.quizId] = p;
         });
         setSavedMap(map);
+        setMaterialFlags(Array.isArray(flags) ? flags.filter((f) => f.subjectId === subject.id) : []);
         setLoading(false);
       })
       .catch(() => {
@@ -381,7 +399,7 @@ export default function SubjectDetailScreen({
     }
   };
 
-  const confirmDeleteMaterial = (m: Material) => {
+const confirmDeleteMaterial = (m: Material) => {
     Alert.alert('Delete Material', `Delete "${m.title}"? This cannot be undone.`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -397,6 +415,43 @@ export default function SubjectDetailScreen({
         },
       },
     ]);
+  };
+
+  const pendingFlagFor = (m: Material) => materialFlags.find((f) => f.materialId === m.id && f.status === 'pending');
+
+  const submitFlag = async () => {
+    if (!flagTarget) return;
+    setFlagBusy(true);
+    try {
+      await flagMaterial(flagTarget.id, { category: flagCategory, note: flagNote.trim() || undefined });
+      showToast(`Flagged "${flagTarget.title}" for review. The teacher has been notified.`);
+      setFlagTarget(null);
+      setFlagNote('');
+      setFlagCategory('Wrong file');
+      const flags = await fetchMaterialFlags();
+      setMaterialFlags(Array.isArray(flags) ? flags.filter((f) => f.subjectId === subject.id) : []);
+    } catch (err) {
+      showToast((err as Error).message || 'Could not flag the material.', 'error');
+    } finally {
+      setFlagBusy(false);
+    }
+  };
+
+  const submitResolve = async () => {
+    if (!resolveTarget) return;
+    setResolvingFlag(true);
+    try {
+      await resolveMaterialFlag(resolveTarget.id, resolutionNote.trim() || undefined);
+      showToast('Flag resolved.');
+      setResolveTarget(null);
+      setResolutionNote('');
+      const flags = await fetchMaterialFlags();
+      setMaterialFlags(Array.isArray(flags) ? flags.filter((f) => f.subjectId === subject.id) : []);
+    } catch (err) {
+      showToast((err as Error).message || 'Could not resolve the flag.', 'error');
+    } finally {
+      setResolvingFlag(false);
+    }
   };
 
   const togglePublish = async (q: Quiz) => {
@@ -678,13 +733,28 @@ export default function SubjectDetailScreen({
 
       {/* ===== Materials ===== */}
       {tab === 'materials' && (
-        <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Text style={[styles.panelTitle, { color: colors.foreground }]}>
-            {isStaff ? 'Manage Materials' : 'View Materials'}
-          </Text>
-          <Text style={{ color: colors.mutedForeground, fontSize: 11, marginBottom: 12 }}>
-            {materials.length} document(s)
-          </Text>
+<View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.panelTitle, { color: colors.foreground }]}>
+                {isStaff ? 'Manage Materials' : 'View Materials'}
+              </Text>
+              <Text style={{ color: colors.mutedForeground, fontSize: 11, marginBottom: 8 }}>
+                {materials.length} document(s)
+              </Text>
+            </View>
+            {isStaff && materialFlags.length > 0 && (
+              <TouchableOpacity
+                onPress={() => setShowFlagsModal(true)}
+                style={[styles.flagChip, { backgroundColor: colors.warningSoft }]}
+              >
+                <Flag size={14} color={colors.warning} />
+                <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '800' }}>
+                  {materialFlags.filter((f) => f.status === 'pending').length} Pending
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
           {materials.length === 0 ? (
             <EmptyState
               icon={<FileText size={36} color={colors.mutedForeground} />}
@@ -731,9 +801,22 @@ export default function SubjectDetailScreen({
                           <Text style={{ color: colors.primary, fontSize: 10, fontWeight: '800' }}>...</Text>
                         ) : isRenderable(m) ? (
                           <Eye size={15} color={colors.primary} />
-                        ) : (
+) : (
                           <Download size={15} color={colors.primary} />
                         )}
+                      </TouchableOpacity>
+                    )}
+{currentUser?.role === 'admin' && (
+                      <TouchableOpacity
+                        onPress={() => {
+                          setFlagTarget(m);
+                          setFlagCategory('Wrong file');
+                          setFlagNote('');
+                        }}
+                        disabled={!!pendingFlagFor(m)}
+                        style={[styles.iconBtn, { backgroundColor: pendingFlagFor(m) ? colors.successSoft : colors.dangerSoft, opacity: pendingFlagFor(m) ? 0.7 : 1 }]}
+                      >
+                        <Flag size={15} color={pendingFlagFor(m) ? colors.success : colors.danger} />
                       </TouchableOpacity>
                     )}
 {canManage && (
@@ -1357,6 +1440,116 @@ export default function SubjectDetailScreen({
         )}
       </Modal>
 
+      {/* Flag a material (admin only) */}
+      <Modal
+        visible={!!flagTarget}
+        onClose={() => setFlagTarget(null)}
+        title="Flag Material for Review"
+        subtitle={flagTarget ? flagTarget.title : ''}
+      >
+        <View style={{ gap: 12 }}>
+          <Text style={{ color: colors.mutedForeground, fontSize: 12, lineHeight: 18 }}>
+            Flagging asks the assigning teacher to review this material for correctness.
+          </Text>
+          <View>
+            <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>Category</Text>
+            <View style={styles.chipRow}>
+              {(['Wrong file', 'Wrong subject', 'Incomplete content', 'Other'] as MaterialFlagCategory[]).map((c) => (
+                <TouchableOpacity
+                  key={c}
+                  onPress={() => setFlagCategory(c)}
+                  style={[styles.filterChip, { backgroundColor: flagCategory === c ? colors.primary : colors.surfaceAlt }]}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: flagCategory === c ? '#fff' : colors.foreground }}>{c}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          <Field label="Note (optional)" value={flagNote} onChangeText={setFlagNote} placeholder="What should be reviewed?" multiline />
+          <View style={styles.modalActions}>
+            <OutlineButton label="Cancel" onPress={() => setFlagTarget(null)} style={styles.flexBtn} />
+            <PrimaryButton label="Submit Flag" onPress={submitFlag} loading={flagBusy} style={styles.flexBtn} />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Resolve a flag (assigned teacher / admin) */}
+      <Modal
+        visible={!!resolveTarget}
+        onClose={() => setResolveTarget(null)}
+        title="Resolve Flag"
+        subtitle={resolveTarget ? resolveTarget.materialTitle : ''}
+      >
+        {resolveTarget && (
+          <View style={{ gap: 12 }}>
+            <View style={styles.rowBadges}>
+              <Badge text={resolveTarget.category} color={colors.warning} bg={colors.warningSoft} />
+              <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>
+                Flagged by {resolveTarget.flaggedByName} · {new Date(resolveTarget.createdAt).toLocaleDateString()}
+              </Text>
+            </View>
+            {resolveTarget.note ? <Text style={{ color: colors.foreground, fontSize: 12, lineHeight: 18 }}>{resolveTarget.note}</Text> : null}
+            <Field label="Resolution note (optional)" value={resolutionNote} onChangeText={setResolutionNote} placeholder="e.g. File was corrected." multiline />
+            <View style={styles.modalActions}>
+              <OutlineButton label="Cancel" onPress={() => setResolveTarget(null)} style={styles.flexBtn} />
+              <PrimaryButton label="Mark Resolved" onPress={submitResolve} loading={resolvingFlag} style={styles.flexBtn} />
+            </View>
+          </View>
+        )}
+      </Modal>
+
+      {/* Flags history (staff) */}
+      <Modal visible={showFlagsModal} onClose={() => setShowFlagsModal(false)} title="Material Flags" subtitle={`${materialFlags.filter((f) => f.status === 'pending').length} pending for this subject`}>
+        {materialFlags.length === 0 ? (
+          <EmptyState icon={<Flag size={30} color={colors.mutedForeground} />} title="No flags" subtitle="No materials have been flagged for this subject." />
+        ) : (
+          <ScrollView style={{ maxHeight: 380 }}>
+            <View style={{ gap: 10 }}>
+              {materialFlags.map((f) => (
+                <View key={f.id} style={[styles.rowCard, { borderColor: f.status === 'pending' ? colors.warning : colors.border, alignItems: 'flex-start' }]}>
+                  <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
+                    <View style={styles.rowBadges}>
+                      <Badge
+                        text={f.status === 'pending' ? 'Pending' : 'Resolved'}
+                        color={f.status === 'pending' ? colors.warning : colors.success}
+                        bg={f.status === 'pending' ? colors.warningSoft : colors.successSoft}
+                      />
+                      <Badge text={f.category} color={colors.primary} bg={colors.indigoSoft} />
+                    </View>
+                    <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '700' }} numberOfLines={1}>{f.materialTitle}</Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: 11 }}>
+                      {f.flaggedByName} · {new Date(f.createdAt).toLocaleDateString()}
+                    </Text>
+                    {f.note ? <Text style={{ color: colors.mutedForeground, fontSize: 11, lineHeight: 16 }} numberOfLines={3}>{f.note}</Text> : null}
+                    {f.status === 'resolved' && (
+                      <Text style={{ color: colors.success, fontSize: 11 }}>
+                        Resolved by {f.resolvedByName}
+                        {f.resolutionNote ? ` — ${f.resolutionNote}` : ''}
+                      </Text>
+                    )}
+                  </View>
+                  {f.status === 'pending' && (canManage || currentUser?.role === 'admin') && (
+                    <TouchableOpacity
+                      onPress={() => {
+                        setResolveTarget(f);
+                        setResolutionNote('');
+                        setShowFlagsModal(false);
+                      }}
+                      style={[styles.iconBtn, { backgroundColor: colors.successSoft }]}
+                    >
+                      <CheckCircle2 size={16} color={colors.success} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        )}
+        <View style={styles.modalActions}>
+          <PrimaryButton label="Close" onPress={() => setShowFlagsModal(false)} style={styles.flexBtn} />
+        </View>
+      </Modal>
+
     </ScrollView>
   );
 }
@@ -1385,7 +1578,8 @@ const styles = StyleSheet.create({
   fileIconTile: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   previewPaper: { borderRadius: 12, padding: 14 },
   previewTitle: { fontSize: 16, fontWeight: '800' },
-  iconBtn: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+iconBtn: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  flagChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 99 },
   chipBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 },
   annCard: { borderRadius: 12, borderWidth: 1, padding: 12, gap: 6 },
   annTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },

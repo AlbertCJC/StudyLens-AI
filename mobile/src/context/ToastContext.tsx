@@ -65,7 +65,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      <View style={styles.overlay} pointerEvents="box-none">
+      <View style={[styles.overlay, { pointerEvents: 'box-none' }]}>
         {toasts.map((t) => (
           <Animated.View
             key={t.id}
@@ -108,10 +108,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     maxWidth: '94%',
-    shadowColor: '#000',
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    boxShadow: '0 4px 10px rgba(0, 0, 0, 0.18)',
     elevation: 6,
   },
   message: { flex: 1, fontSize: 12.5, fontWeight: '600' },
