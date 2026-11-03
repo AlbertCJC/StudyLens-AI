@@ -741,6 +741,22 @@ export const submitQuizAttempt = (
     completedAt: new Date().toISOString(),
   }));
 
+export interface QuizHintResponse {
+  hint: string;
+}
+
+export const fetchQuizHint = (
+  question: string,
+  options: string[] = [],
+  questionType?: string,
+  topicTag?: string
+): Promise<QuizHintResponse> =>
+  postJSON(
+    '/hint',
+    { question, options, questionType, topicTag },
+    () => ({ hint: '' })
+  );
+
 // Resolve a material's file URL to an absolute URL the device can open.
 // Relative /uploads/... paths are prefixed with the backend base URL; cloud
 // URLs (Cloudinary/Firebase) are returned unchanged.

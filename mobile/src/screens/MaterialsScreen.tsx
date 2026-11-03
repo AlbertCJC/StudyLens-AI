@@ -8,8 +8,7 @@ import {
   Platform,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { File, Paths } from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
+import { downloadBlobOnWeb, saveTextFile, saveBytesFile } from '../utils/fileExport';
 import { FileText, Download, UploadCloud, CheckCircle2, X } from 'lucide-react-native';
 import { fetchMaterials, fetchSubjects, uploadMaterial, updateMaterialSubject, convertToPdf, Material, Subject } from '../services/api';
 import { useTheme } from '../theme/ThemeContext';
@@ -129,11 +128,9 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
       if (Platform.OS === 'web') {
         downloadBlobOnWeb(new Blob([text], { type: 'text/plain;charset=utf-8' }), `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.txt`);
       } else {
-        const file = new File(Paths.cache, `${m.title.replace(/[^\w\s]/g, '').slice(0, 40)}.txt`);
-        file.write(text);
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(file.uri, { mimeType: 'text/plain' });
-        }
+        const name = `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.txt`;
+        const outcome = await saveTextFile(name, text, 'text/plain', m.title);
+        if (outcome === 'saved') showToast(`Saved ${name} to the selected folder.`, 'success');
       }
       await addToStringSet(STORAGE_KEYS.downloadedMaterials, m.id);
       setDownloadedIds((prev) => {
@@ -174,13 +171,9 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
         content: m.extractedText || m.description || m.title,
         items: [],
       });
-      const file = new File(Paths.cache, `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.pdf`);
-      file.write(bytes);
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(file.uri, { mimeType: 'application/pdf', dialogTitle: m.title });
-      } else {
-        showToast(`PDF saved: ${file.uri}`, 'success');
-      }
+      const name = `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.pdf`;
+      const outcome = await saveBytesFile(name, bytes, 'application/pdf', m.title);
+      if (outcome === 'saved') showToast(`Saved ${name} to the selected folder.`, 'success');
       await addToStringSet(STORAGE_KEYS.downloadedMaterials, m.id);
       setDownloadedIds((prev) => {
         const next = new Set(prev);
@@ -490,18 +483,6 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
 
 function isAiMaterial(m: Material | null): boolean {
   return !!m && (m.fileType || '').toLowerCase().startsWith('ai-');
-}
-
-function downloadBlobOnWeb(blob: Blob, filename: string) {
-  if (typeof document === 'undefined') return;
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 const styles = StyleSheet.create({

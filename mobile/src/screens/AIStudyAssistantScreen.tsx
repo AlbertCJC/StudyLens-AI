@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Platform } from 'react-native';
-import { File, Paths } from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
+import { saveBytesFile } from '../utils/fileExport';
 import * as DocumentPicker from 'expo-document-picker';
 import {
   CheckSquare,
@@ -296,13 +295,9 @@ export default function AIStudyAssistantScreen({
         return;
       }
       const bytes = await exportAiPdf({ mode: type, title, subjectName, data: data as unknown as Record<string, unknown> });
-      const file = new File(Paths.cache, `${title.replace(/[^\w\s-]/g, '').slice(0, 40) || 'studylens'}.pdf`);
-      file.write(bytes);
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(file.uri, { mimeType: 'application/pdf', dialogTitle: title });
-      } else {
-        showToast(`PDF saved: ${file.uri}`, 'success');
-      }
+      const name = `${title.replace(/[^\w\s-]/g, '').slice(0, 40) || 'studylens'}.pdf`;
+      const outcome = await saveBytesFile(name, bytes, 'application/pdf', title);
+      if (outcome === 'saved') showToast(`Saved ${name} to the selected folder.`, 'success');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Could not export the PDF.', 'error');
     }

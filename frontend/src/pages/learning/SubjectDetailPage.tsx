@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -38,11 +38,9 @@ import type {
   LearningMaterial,
   MaterialFlag,
   Quiz,
-  QuizQuestion,
-  DifficultyLevel,
-  BloomsTaxonomy,
   SubjectGrades,
 } from "../../types";
+import { QuizCreateModal } from "../../components/QuizCreateModal";
 
 interface EnrolledStudent {
   id: string;
@@ -61,21 +59,6 @@ interface AdminUser {
 }
 
 type TabKey = "people" | "materials" | "quizzes" | "announcements" | "grades";
-
-const QUESTION_TYPES = ["multiple_choice", "true_false", "identification", "short_answer"] as const;
-const BLOOMS_LEVELS: BloomsTaxonomy[] = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"];
-
-interface DraftQuestion {
-  localId: string;
-  question: string;
-  type: (typeof QUESTION_TYPES)[number];
-  options: string[];
-  correctAnswer: string;
-  explanation: string;
-  difficulty: DifficultyLevel;
-  bloomsLevel: BloomsTaxonomy;
-  topicTag: string;
-}
 
 export const SubjectDetailPage: React.FC = () => {
   const { subjectId } = useParams<{ subjectId: string }>();
@@ -149,17 +132,9 @@ export const SubjectDetailPage: React.FC = () => {
   const [editRawText, setEditRawText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
-  // Create Quiz Modal
+  // Create / Edit Quiz Modal
   const [showQuizModal, setShowQuizModal] = useState(false);
   const [quizToEdit, setQuizToEdit] = useState<Quiz | null>(null);
-  const [quizTitle, setQuizTitle] = useState("");
-  const [quizDescription, setQuizDescription] = useState("");
-  const [quizDifficulty, setQuizDifficulty] = useState<DifficultyLevel>("medium");
-  const [quizTimeLimit, setQuizTimeLimit] = useState(15);
-  const [quizPassPercentage, setQuizPassPercentage] = useState(70);
-  const [quizPublished, setQuizPublished] = useState(true);
-  const [draftQuestions, setDraftQuestions] = useState<DraftQuestion[]>([]);
-  const [creatingQuiz, setCreatingQuiz] = useState(false);
 
   // Post Announcement Modal
   const [showAnnounceModal, setShowAnnounceModal] = useState(false);
@@ -507,156 +482,9 @@ export const SubjectDetailPage: React.FC = () => {
     }
   };
 
-  const addDraftQuestion = () => {
-    setDraftQuestions((prev) => [
-      ...prev,
-      {
-        localId: `q-${Date.now()}-${prev.length}`,
-        question: "",
-        type: "multiple_choice",
-        options: ["", "", "", ""],
-        correctAnswer: "",
-        explanation: "",
-        difficulty: "medium",
-        bloomsLevel: "Analyzing",
-        topicTag: "Core Concepts",
-      },
-    ]);
-  };
-
-  const updateDraftQuestion = (localId: string, patch: Partial<DraftQuestion>) => {
-    setDraftQuestions((prev) => prev.map((q) => (q.localId === localId ? { ...q, ...patch } : q)));
-  };
-
-  const updateDraftOption = (localId: string, index: number, value: string) => {
-    setDraftQuestions((prev) =>
-      prev.map((q) => {
-        if (q.localId !== localId) return q;
-        const options = [...q.options];
-        options[index] = value;
-        return { ...q, options };
-      })
-    );
-  };
-
-  const removeDraftQuestion = (localId: string) => {
-    setDraftQuestions((prev) => prev.filter((q) => q.localId !== localId));
-  };
-
   const openEditQuiz = (quiz: Quiz) => {
     setQuizToEdit(quiz);
-    setQuizTitle(quiz.title);
-    setQuizDescription(quiz.description || "");
-    setQuizDifficulty(quiz.difficulty);
-    setQuizTimeLimit(quiz.timeLimitMinutes || 15);
-    setQuizPassPercentage(quiz.passPercentage);
-    setQuizPublished(quiz.isPublished);
-    setDraftQuestions(
-      (quiz.questions || []).map((q) => {
-        const options =
-          q.type === "multiple_choice" && q.options && q.options.length
-            ? [...q.options]
-            : ["", "", "", ""];
-        return {
-          localId: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          question: q.question,
-          type: q.type,
-          options,
-          correctAnswer:
-            typeof q.correctAnswer === "number"
-              ? (options[q.correctAnswer] ?? "")
-              : String(q.correctAnswer ?? ""),
-          explanation: q.explanation,
-          difficulty: q.difficulty,
-          bloomsLevel: q.bloomsLevel,
-          topicTag: q.topicTag || "Core Concepts",
-        };
-      })
-    );
     setShowQuizModal(true);
-  };
-
-  const buildQuizQuestions = (): QuizQuestion[] =>
-    draftQuestions.map((q) => ({
-      id: q.localId,
-      question: q.question,
-      type: q.type,
-      options: q.type === "multiple_choice" ? q.options.filter((o) => o.trim() !== "") : undefined,
-      correctAnswer:
-        q.type === "multiple_choice"
-          ? q.options.findIndex((o) => o.trim() === q.correctAnswer.trim())
-          : q.correctAnswer,
-      explanation: q.explanation,
-      bloomsLevel: q.bloomsLevel,
-      difficulty: q.difficulty,
-      topicTag: q.topicTag || "Core Concepts",
-    }));
-
-  const handleCreateQuiz = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!subject || !quizTitle.trim()) return;
-    setCreatingQuiz(true);
-    try {
-      const questions = buildQuizQuestions();
-      const payload = {
-        title: quizTitle.trim(),
-        description: quizDescription || `Official Course Assessment for ${subject.code}`,
-        subjectId: subject.id,
-        subjectName: `${subject.code} - ${subject.name}`,
-        questions,
-        createdById: currentUser?.id || "usr-teacher-1",
-        createdByName: currentUser?.name || "Faculty Instructor",
-        quizType: "teacher",
-        isPublished: quizPublished,
-        timeLimitMinutes: quizTimeLimit,
-        passPercentage: quizPassPercentage,
-        difficulty: quizDifficulty,
-      };
-
-      if (quizToEdit) {
-        const res = await authFetch(`/api/quizzes/${quizToEdit.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          const updated = (await res.json()) as Quiz;
-          setQuizzes((prev) => prev.map((q) => (q.id === updated.id ? updated : q)));
-          setQuizToEdit(null);
-          setQuizTitle("");
-          setQuizDescription("");
-          setDraftQuestions([]);
-          setShowQuizModal(false);
-          showToast("Quiz updated successfully.");
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          showToast(errData.error || "Could not update the quiz.", "error");
-        }
-      } else {
-        const res = await authFetch("/api/quizzes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          const created = (await res.json()) as Quiz;
-          setQuizzes((prev) => [created, ...prev]);
-          setQuizTitle("");
-          setQuizDescription("");
-          setDraftQuestions([]);
-          setShowQuizModal(false);
-          showToast("Quiz created successfully.");
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          showToast(errData.error || "Could not create the quiz.", "error");
-        }
-      }
-    } catch (err) {
-      console.error("Save quiz error:", err);
-      showToast("Could not save the quiz. Please try again.", "error");
-    } finally {
-      setCreatingQuiz(false);
-    }
   };
 
   const handleToggleQuizPublish = async (quiz: Quiz) => {
@@ -933,11 +761,11 @@ export const SubjectDetailPage: React.FC = () => {
                   {slicePage(students, peoplePage).map((s) => (
                     <tr key={s.id} className="border-b border-border/60 last:border-0">
                       <td className="py-2.5 pr-4 font-bold text-foreground">{s.name}</td>
-                      <td className="py-2.5 pr-4 font-mono text-muted-foreground">{s.studentId || "—"}</td>
+                      <td className="py-2.5 pr-4 font-mono text-muted-foreground">{s.studentId || "â€”"}</td>
                       <td className="py-2.5 text-muted-foreground">
                         <span className="flex items-center space-x-1">
                           <Mail className="w-3 h-3 shrink-0" />
-                          <span className="truncate">{s.email || "—"}</span>
+                          <span className="truncate">{s.email || "â€”"}</span>
                         </span>
                       </td>
                     </tr>
@@ -1089,12 +917,12 @@ export const SubjectDetailPage: React.FC = () => {
                         <div className="min-w-0">
                           {pendingFlag ? (
                             <p className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 leading-snug">
-                              Pending review · {pendingFlag.category}
-                              {pendingFlag.note ? ` — "${pendingFlag.note}"` : ""}
+                              Pending review Â· {pendingFlag.category}
+                              {pendingFlag.note ? ` â€” "${pendingFlag.note}"` : ""}
                             </p>
                           ) : (
                             <p className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 leading-snug">
-                              Resolved · {resolvedFlags.length} flag{resolvedFlags.length > 1 ? "s" : ""} addressed
+                              Resolved Â· {resolvedFlags.length} flag{resolvedFlags.length > 1 ? "s" : ""} addressed
                             </p>
                           )}
                           <p className="text-[10px] text-muted-foreground">
@@ -1158,9 +986,6 @@ export const SubjectDetailPage: React.FC = () => {
               <button
                 onClick={() => {
                   setQuizToEdit(null);
-                  setQuizTitle("");
-                  setQuizDescription("");
-                  setDraftQuestions([]);
                   setShowQuizModal(true);
                 }}
                 className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
@@ -1730,279 +1555,31 @@ export const SubjectDetailPage: React.FC = () => {
         </div>
       )}
 
-      {/* ===== Create Quiz Modal ===== */}
       {showQuizModal && (
-        <div
-          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setShowQuizModal(false);
+        <QuizCreateModal
+          open={showQuizModal}
+          onClose={() => setShowQuizModal(false)}
+          onSaved={(saved) => {
+            setQuizzes((prev) =>
+              prev.some((q) => q.id === saved.id)
+                ? prev.map((q) => (q.id === saved.id ? saved : q))
+                : [saved, ...prev]
+            );
+            setQuizToEdit(null);
           }}
-        >
-          <div className="bg-card rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-start justify-between">
-              <h3 className="text-lg font-bold text-foreground">
-                {quizToEdit ? "Edit Quiz" : "Create Quiz"}
-              </h3>
-              <button
-                onClick={() => setShowQuizModal(false)}
-                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <form onSubmit={handleCreateQuiz} className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="sm:col-span-2">
-                  <label className="block font-semibold text-foreground mb-1">Quiz Title</label>
-                  <input
-                    type="text"
-                    value={quizTitle}
-                    onChange={(e) => setQuizTitle(e.target.value)}
-                    placeholder="e.g., Midterm Exam - Data Structures"
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
-                    required
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block font-semibold text-foreground mb-1">Description</label>
-                  <input
-                    type="text"
-                    value={quizDescription}
-                    onChange={(e) => setQuizDescription(e.target.value)}
-                    placeholder="Optional description or instructions..."
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-foreground mb-1">Difficulty</label>
-                  <select
-                    value={quizDifficulty}
-                    onChange={(e) => setQuizDifficulty(e.target.value as DifficultyLevel)}
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="easy">Easy</option>
-                    <option value="medium">Medium</option>
-                    <option value="hard">Hard</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-foreground mb-1">Time Limit (minutes)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={quizTimeLimit}
-                    onChange={(e) => setQuizTimeLimit(Number(e.target.value))}
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-foreground mb-1">Pass Percentage</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={quizPassPercentage}
-                    onChange={(e) => setQuizPassPercentage(Number(e.target.value))}
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div className="flex items-end pb-1">
-                  <label className="flex items-center space-x-2 text-xs font-semibold text-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={quizPublished}
-                      onChange={(e) => setQuizPublished(e.target.checked)}
-                      className="accent-blue-600 w-4 h-4 cursor-pointer"
-                    />
-                    <span>Publish immediately</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="border-t border-border pt-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-bold text-foreground">
-                    Questions ({draftQuestions.length})
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={addDraftQuestion}
-                    className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[10px] font-bold hover:bg-blue-500/20 transition-all cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                    <span>Add Question</span>
-                  </button>
-                </div>
-
-                {draftQuestions.length === 0 && (
-                  <p className="text-[11px] text-muted-foreground text-center py-3">
-                    No questions yet. Add questions or leave empty for a title-only quiz.
-                  </p>
-                )}
-
-                {draftQuestions.map((q, qi) => (
-                  <div key={q.localId} className="border border-border rounded-xl p-3 space-y-2 bg-muted/20">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase">Question {qi + 1}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeDraftQuestion(q.localId)}
-                        className="p-1 text-rose-600 hover:bg-rose-500/10 rounded cursor-pointer"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <input
-                      type="text"
-                      value={q.question}
-                      onChange={(e) => updateDraftQuestion(q.localId, { question: e.target.value })}
-                      placeholder="Enter the question..."
-                      className="w-full px-3 py-2 border border-border bg-card text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"
-                      required
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <select
-                        value={q.type}
-                        onChange={(e) =>
-                          updateDraftQuestion(q.localId, { type: e.target.value as DraftQuestion["type"] })
-                        }
-                        className="px-2.5 py-1.5 border border-border bg-card text-foreground rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {QUESTION_TYPES.map((t) => (
-                          <option key={t} value={t}>
-                            {t.replace("_", " ")}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={q.difficulty}
-                        onChange={(e) =>
-                          updateDraftQuestion(q.localId, { difficulty: e.target.value as DifficultyLevel })
-                        }
-                        className="px-2.5 py-1.5 border border-border bg-card text-foreground rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="easy">Easy</option>
-                        <option value="medium">Medium</option>
-                        <option value="hard">Hard</option>
-                      </select>
-                    </div>
-
-                    {q.type === "multiple_choice" && (
-                      <div className="space-y-1.5">
-                        {q.options.map((opt, oi) => (
-                          <div key={oi} className="flex items-center space-x-1.5">
-                            <span className="w-5 h-5 rounded-full bg-muted text-[10px] font-bold text-muted-foreground flex items-center justify-center shrink-0">
-                              {String.fromCharCode(65 + oi)}
-                            </span>
-                            <input
-                              type="text"
-                              value={opt}
-                              onChange={(e) => updateDraftOption(q.localId, oi, e.target.value)}
-                              placeholder={`Option ${String.fromCharCode(65 + oi)}`}
-                              className="flex-1 px-2.5 py-1.5 border border-border bg-card text-foreground rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                        ))}
-                        <select
-                          value={q.correctAnswer}
-                          onChange={(e) => updateDraftQuestion(q.localId, { correctAnswer: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-border bg-card text-foreground rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">Select correct answer...</option>
-                          {q.options
-                            .map((opt, oi) => ({ opt, oi }))
-                            .filter((o) => o.opt.trim() !== "")
-                            .map((o) => (
-                              <option key={o.oi} value={o.opt}>
-                                {String.fromCharCode(65 + o.oi)} - {o.opt}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                    )}
-
-                    {q.type === "true_false" && (
-                      <div className="flex space-x-2">
-                        {["True", "False"].map((tf) => (
-                          <button
-                            key={tf}
-                            type="button"
-                            onClick={() => updateDraftQuestion(q.localId, { correctAnswer: tf })}
-                            className={`flex-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
-                              q.correctAnswer === tf
-                                ? "bg-blue-600 text-white border-blue-600"
-                                : "border-border bg-card text-muted-foreground hover:bg-muted"
-                            }`}
-                          >
-                            {tf}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {(q.type === "identification" || q.type === "short_answer") && (
-                      <input
-                        type="text"
-                        value={q.correctAnswer}
-                        onChange={(e) => updateDraftQuestion(q.localId, { correctAnswer: e.target.value })}
-                        placeholder="Correct answer..."
-                        className="w-full px-2.5 py-1.5 border border-border bg-card text-foreground rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    )}
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <select
-                        value={q.bloomsLevel}
-                        onChange={(e) =>
-                          updateDraftQuestion(q.localId, { bloomsLevel: e.target.value as BloomsTaxonomy })
-                        }
-                        className="px-2.5 py-1.5 border border-border bg-card text-foreground rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {BLOOMS_LEVELS.map((b) => (
-                          <option key={b} value={b}>
-                            {b}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        value={q.topicTag}
-                        onChange={(e) => updateDraftQuestion(q.localId, { topicTag: e.target.value })}
-                        placeholder="Topic tag (e.g., Arrays)"
-                        className="px-2.5 py-1.5 border border-border bg-card text-foreground rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                    <input
-                      type="text"
-                      value={q.explanation}
-                      onChange={(e) => updateDraftQuestion(q.localId, { explanation: e.target.value })}
-                      placeholder="Explanation (shown after answering)"
-                      className="w-full px-2.5 py-1.5 border border-border bg-card text-foreground rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                ))}
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-border">
-                <button
-                  type="button"
-                  onClick={() => setShowQuizModal(false)}
-                  className="px-4 py-2 border border-border rounded-xl font-semibold text-muted-foreground hover:bg-muted cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={creatingQuiz}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
-                >
-                  {creatingQuiz ? "Saving..." : quizToEdit ? "Save Changes" : "Create Quiz"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+          subjects={subject ? [subject] : []}
+          currentUserId={currentUser?.id}
+          currentUserName={currentUser?.name}
+          canManageCourseQuizzes={canManage}
+          defaultScope="teacher"
+          lockSubject
+          initialSubjectId={subject?.id}
+          initialSubjectName={subject ? `${subject.code} - ${subject.name}` : undefined}
+          quizToEdit={quizToEdit}
+          onOpenAI={() => navigate("/ai-assistant")}
+        />
       )}
+
 
       <AnnouncementComposer
         open={showAnnounceModal}
@@ -2078,7 +1655,7 @@ export const SubjectDetailPage: React.FC = () => {
                       </div>
                     </div>
                     <span className="text-[10px] font-mono font-bold text-muted-foreground bg-muted px-2 py-1 rounded-lg shrink-0">
-                      {s.studentId || "—"}
+                      {s.studentId || "â€”"}
                     </span>
                   </label>
                 ))
@@ -2410,11 +1987,11 @@ export const SubjectDetailPage: React.FC = () => {
                       </div>
                       <h3 className="text-base font-bold text-foreground mt-1">{pq.title}</h3>
                       <p className="text-xs text-muted-foreground">
-                        {pq.questions?.length || 0} Questions · {pq.timeLimitMinutes || 15} min · Pass {pq.passPercentage || 70}% · {pq.difficulty || "medium"}
-                        {pq.deadline && ` · Due ${new Date(pq.deadline).toLocaleString()}`}
+                        {pq.questions?.length || 0} Questions Â· {pq.timeLimitMinutes || 15} min Â· Pass {pq.passPercentage || 70}% Â· {pq.difficulty || "medium"}
+                        {pq.deadline && ` Â· Due ${new Date(pq.deadline).toLocaleString()}`}
                         {pqIsCourseQuiz && (
                           <span className={pqExhausted ? " text-rose-600 font-semibold" : ""}>
-                            {" · "}
+                            {" Â· "}
                             {(pq.attemptsAllowed || 0) > 0
                               ? `${pq.attemptsUsed || 0}/${pq.attemptsAllowed} attempts`
                               : "Unlimited attempts"}
@@ -2689,7 +2266,7 @@ export const SubjectDetailPage: React.FC = () => {
                             : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                         }`}
                       >
-                        {flag.status === "pending" ? "Pending" : "Resolved"} · {flag.category}
+                        {flag.status === "pending" ? "Pending" : "Resolved"} Â· {flag.category}
                       </span>
                       <span className="text-[10px] text-muted-foreground font-mono">
                         {new Date(flag.createdAt).toLocaleString()}
@@ -2700,7 +2277,7 @@ export const SubjectDetailPage: React.FC = () => {
                     {flag.status === "resolved" && (
                       <div className="pt-2 border-t border-border space-y-1">
                         <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
-                          Resolved by: {flag.resolvedByName || flag.resolvedById || "—"}
+                          Resolved by: {flag.resolvedByName || flag.resolvedById || "â€”"}
                         </p>
                         {flag.resolutionNote && (
                           <p className="text-[11px] text-muted-foreground">Resolution note: "{flag.resolutionNote}"</p>
@@ -2764,7 +2341,7 @@ export const SubjectDetailPage: React.FC = () => {
             <div className="p-3 bg-muted/40 border border-border rounded-xl space-y-0.5">
               <p className="text-xs font-bold text-foreground">
                 {resolvingFlag.category}
-                {resolvingFlag.note ? ` — "${resolvingFlag.note}"` : ""}
+                {resolvingFlag.note ? ` â€” "${resolvingFlag.note}"` : ""}
               </p>
               <p className="text-[10px] text-muted-foreground">
                 Flagged by {resolvingFlag.flaggedByName || "Admin"} on {new Date(resolvingFlag.createdAt).toLocaleString()}

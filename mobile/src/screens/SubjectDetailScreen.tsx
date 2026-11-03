@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { File, Directory, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import { saveTextFile, saveBytesFile } from '../utils/fileExport';
 import {
   ArrowLeft,
   Users,
@@ -335,11 +336,9 @@ export default function SubjectDetailScreen({
       if (Platform.OS === 'web') {
         showToast(`Downloading ${m.title}...`, 'info');
       } else {
-        const file = new File(Paths.cache, `${m.title.replace(/[^\w\s]/g, '').slice(0, 40)}.txt`);
-        file.write(text);
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(file.uri, { mimeType: 'text/plain' });
-        }
+        const name = `${m.title.replace(/[^\w\s]/g, '').slice(0, 40)}.txt`;
+        const outcome = await saveTextFile(name, text, 'text/plain', m.title);
+        if (outcome === 'saved') showToast(`Saved ${name} to the selected folder.`, 'success');
       }
     } catch {
       showToast('Could not export the file.', 'error');
@@ -359,13 +358,9 @@ export default function SubjectDetailScreen({
         content: m.extractedText || m.description || m.title,
         items: [],
       });
-      const file = new File(Paths.cache, `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.pdf`);
-      file.write(bytes);
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(file.uri, { mimeType: 'application/pdf', dialogTitle: m.title });
-      } else {
-        showToast(`PDF saved: ${file.uri}`, 'success');
-      }
+      const name = `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.pdf`;
+      const outcome = await saveBytesFile(name, bytes, 'application/pdf', m.title);
+      if (outcome === 'saved') showToast(`Saved ${name} to the selected folder.`, 'success');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Could not export the PDF.', 'error');
     } finally {

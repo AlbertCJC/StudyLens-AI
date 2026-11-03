@@ -1716,39 +1716,77 @@ def explain_answer_with_groq(question: str, options: list, correct_index: int, s
     }
 
 
-def generate_hint_with_groq(question: str, options: list) -> str:
-    """Generates a subtle 1-2 sentence educational hint for a quiz question.
+def _question_hint_fallback(topic: str, options: list) -> str:
+    """Question-anchored fallback used only when the AI hint cannot be generated."""
+    topic = str(topic or "").strip()
+    if topic:
+        return (
+            f"Focus on how '{topic}' is defined and applied in this exact question; "
+            "identify the key term or relationship it tests."
+        )
+    if isinstance(options, list) and options:
+        return (
+            "Focus on the exact relationship the question asks about, then eliminate "
+            "options that describe a different concept."
+        )
+    return (
+        "Focus on the key term and relationship being tested in this exact question, "
+        "not the broader quiz topic."
+    )
 
-    Never raises: on any failure (offline, rate limited, invalid response) it returns
-    a generic study hint so the student-facing UI always has something useful.
+
+def generate_hint_with_groq(question: str, options: list, question_type: str = "", topic: str = "") -> str:
+    """Generates a subtle 1-2 sentence hint for exactly one quiz question.
+
+    The hint is deliberately anchored to the supplied question so students never
+    receive a quiz-wide or topic-wide hint. Never raises: on any failure (offline,
+    rate limited, invalid response) it returns a question-aware fallback.
     """
     question = str(question or "").strip()
+    question_type = str(question_type or "").strip()
+    topic = str(topic or "").strip()
     if not question:
         return "Review the core definitions and key terms covered in this topic."
 
     system_prompt = (
         "You are StudyLens AI Hint Assistant powered by Groq Inference (GPT-OSS-120B). "
-        "Give a subtle, helpful 1-2 sentence educational hint without revealing the correct answer."
+        "Write a hint for exactly one quiz question. The hint must be specific to that "
+        "question, not to the quiz or subject in general. Do not give generic study advice. "
+        "Do not reveal, quote, or name the correct answer. Mention a key term, comparison, "
+        "or reasoning step from the question. Write 1-2 sentences."
+    )
+    options_block = (
+        f"Options: {json.dumps(options)}\n"
+        if isinstance(options, list) and options
+        else ""
     )
     prompt = (
-        "Provide a subtle, helpful 1-2 sentence educational hint for this question "
-        "without directly revealing which option is correct:\n"
+        "Write a subtle, helpful 1-2 sentence hint for THIS exact question only.\n"
+        f"Question type: {question_type or 'unknown'}\n"
+        f"Topic: {topic or 'not provided'}\n"
         f"Question: {question}\n"
-        f"{('Options: ' + json.dumps(options)) if isinstance(options, list) and options else ''}"
+        f"{options_block}"
+        "\nRules:\n"
+        "- Do not summarize the quiz or give broad topic advice.\n"
+        "- Do not reveal or quote the correct answer.\n"
+        "- For multiple choice, explain what to compare or eliminate without naming the correct option.\n"
+        "- For true/false, name the principle to check without saying whether it is true.\n"
+        "- For identification, describe the category or definition without giving the exact term.\n"
+        "- Anchor the hint in a specific term or relationship from the question."
     )
 
     try:
         raw = call_groq_ai(prompt, system_prompt=system_prompt, temperature=0.4)
     except GroqOfflineError as e:
         mark_offline_fallback(e.code or "OFFLINE_USED")
-        return "Focus on the core definitions and key concepts involved in this question."
+        return _question_hint_fallback(topic, options)
     except GroqAPIError:
-        return "Focus on the core definitions and key concepts involved in this question."
+        return _question_hint_fallback(topic, options)
 
     hint = str(raw or "").strip().strip('"')
     if hint:
         return hint[:300]
-    return "Focus on the core definitions and key concepts involved in this question."
+    return _question_hint_fallback(topic, options)
 
 
 def generate_recommendations_with_groq(profile: dict) -> dict:

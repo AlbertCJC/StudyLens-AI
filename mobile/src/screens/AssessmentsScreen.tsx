@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import {
   CheckSquare,
   ChevronLeft,
@@ -15,7 +15,7 @@ import {
   Trash2,
   Pencil,
 } from 'lucide-react-native';
-import { fetchQuizzes, fetchSubjects, submitQuizAttempt, updateQuiz, deleteQuiz, createQuiz, Quiz, QuizQuestion, Subject, DifficultyLevel, QuizAttempt } from '../services/api';
+import { fetchQuizzes, fetchSubjects, submitQuizAttempt, updateQuiz, deleteQuiz, createQuiz, fetchQuizHint, Quiz, QuizQuestion, Subject, DifficultyLevel, QuizAttempt } from '../services/api';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -104,7 +104,9 @@ export default function AssessmentsScreen({
   const [answers, setAnswers] = useState<Record<number, AnswerValue>>({});
   const answersRef = useRef<Record<number, AnswerValue>>({});
   const [textInput, setTextInput] = useState<Record<number, string>>({});
-  const [hint, setHint] = useState<string | null>(null);
+  const [hintsByQuestion, setHintsByQuestion] = useState<Record<string, string>>({});
+  const [hintErrorsByQuestion, setHintErrorsByQuestion] = useState<Record<string, string>>({});
+  const [hintLoadingFor, setHintLoadingFor] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [autoFinishPending, setAutoFinishPending] = useState(false);
   const [quizFinished, setQuizFinished] = useState(false);
@@ -121,6 +123,7 @@ export default function AssessmentsScreen({
   const [eqLimitAttempts, setEqLimitAttempts] = useState(false);
   const [eqAttempts, setEqAttempts] = useState(3);
   const [eqRevealAnswers, setEqRevealAnswers] = useState(true);
+  const [eqDeadline, setEqDeadline] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
   const isStaff = currentUser?.role === 'teacher';
@@ -132,10 +135,10 @@ export default function AssessmentsScreen({
   const [cqTime, setCqTime] = useState(15);
   const [cqTopic, setCqTopic] = useState('');
   const [cqDifficulty, setCqDifficulty] = useState<DifficultyLevel>('medium');
-  const [cqPassPct, setCqPassPct] = useState(70);
   const [cqLimitAttempts, setCqLimitAttempts] = useState(false);
   const [cqAttempts, setCqAttempts] = useState(3);
   const [cqReveal, setCqReveal] = useState(true);
+  const [cqDeadline, setCqDeadline] = useState('');
   const [cqQuestions, setCqQuestions] = useState<QuizQuestion[]>([]);
   const [savingCreate, setSavingCreate] = useState(false);
   const [createMsg, setCreateMsg] = useState<string | null>(null);
@@ -238,6 +241,7 @@ export default function AssessmentsScreen({
     setEqLimitAttempts((q.attemptsAllowed || 0) > 0);
     setEqAttempts(q.attemptsAllowed || 3);
     setEqRevealAnswers(q.revealAnswers !== false);
+    setEqDeadline(toDateInputValue(q.deadline));
   };
 
   const saveEditQuiz = async () => {
@@ -252,6 +256,7 @@ export default function AssessmentsScreen({
         passPercentage: eqPassPct,
         attemptsAllowed: eqLimitAttempts ? eqAttempts : 0,
         revealAnswers: eqRevealAnswers,
+        deadline: toDeadlineISO(eqDeadline) ?? null,
       });
       setQuizzes((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setEditingQuiz(null);
@@ -289,10 +294,10 @@ export default function AssessmentsScreen({
     setCqTime(15);
     setCqTopic('');
     setCqDifficulty('medium');
-    setCqPassPct(70);
     setCqLimitAttempts(false);
     setCqAttempts(3);
     setCqReveal(true);
+    setCqDeadline('');
     setCqQuestions([]);
     setCreateMsg(null);
     setShowCreate(true);
@@ -300,15 +305,12 @@ export default function AssessmentsScreen({
 
   const saveQuestionDraft = () => {
     if (!dq) return;
-    if (!dq.question.trim()) {
-      setDqError('Question text is required.');
+    const error = validateDraftQuestion(dq);
+    if (error) {
+      setDqError(error);
       return;
     }
     if (dq.type === 'identification') {
-      if (!dq.identAnswer.trim()) {
-        setDqError('Provide the exact answer for the identification question.');
-        return;
-      }
       const q: QuizQuestion = {
         id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         question: dq.question.trim(),
@@ -317,6 +319,8 @@ export default function AssessmentsScreen({
         correctAnswer: dq.identAnswer.trim(),
         difficulty: cqDifficulty,
         topicTag: cqTopic.trim() || undefined,
+        bloomsLevel: dq.bloomsLevel || undefined,
+        explanation: dq.explanation.trim() || undefined,
       };
       setCqQuestions((prev) => {
         if (dq.index !== undefined && dq.index >= 0 && dq.index < prev.length) {
@@ -330,21 +334,17 @@ export default function AssessmentsScreen({
       setDqError(null);
       return;
     }
-    const options = dq.options.map((o) => o.trim()).filter(Boolean);
-    if (options.length < 2) {
-      setDqError('Provide at least two answer options.');
-      return;
-    }
-    const correctValue = dq.options[dq.correct]?.trim() || options[0];
-    const correctIdx = Math.max(options.indexOf(correctValue), 0);
+    const options = dq.options.map((o) => o.trim());
     const q: QuizQuestion = {
       id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       question: dq.question.trim(),
       type: dq.type,
       options,
-      correctAnswer: correctIdx,
+      correctAnswer: dq.correct,
       difficulty: cqDifficulty,
       topicTag: cqTopic.trim() || undefined,
+      bloomsLevel: dq.bloomsLevel || undefined,
+      explanation: dq.explanation.trim() || undefined,
     };
     setCqQuestions((prev) => {
       if (dq.index !== undefined && dq.index >= 0 && dq.index < prev.length) {
@@ -371,6 +371,13 @@ export default function AssessmentsScreen({
       setCreateMsg('Add at least one question, or use the AI Quiz Generator instead.');
       return;
     }
+    for (let i = 0; i < cqQuestions.length; i++) {
+      const error = validateQuizQuestion(cqQuestions[i]);
+      if (error) {
+        setCreateMsg(`Question ${i + 1}: ${error}`);
+        return;
+      }
+    }
     setSavingCreate(true);
     setCreateMsg(null);
     try {
@@ -384,10 +391,11 @@ export default function AssessmentsScreen({
         questions: cqQuestions,
         isPublished: cqType === 'teacher',
         timeLimitMinutes: cqTime,
-        passPercentage: cqPassPct,
-        difficulty: cqDifficulty,
+        passPercentage: 75,
+        difficulty: 'medium',
         attemptsAllowed: cqLimitAttempts ? cqAttempts : 0,
         revealAnswers: cqReveal,
+        deadline: toDeadlineISO(cqDeadline),
         userRole: currentUser?.role as 'student' | 'teacher' | 'admin',
         createdById: currentUser?.id,
         createdByName: currentUser?.name,
@@ -431,6 +439,12 @@ export default function AssessmentsScreen({
   const activeQuestions = activeQuiz?.questions || [];
   const totalQuestions = activeQuestions.length;
   const question: QuizQuestion | undefined = activeQuestions[currentIndex];
+  const questionHintKey = question
+    ? `${activeQuiz?.id ?? 'quiz'}:${question.id || currentIndex}`
+    : '';
+  const currentHint = questionHintKey ? hintsByQuestion[questionHintKey] : undefined;
+  const currentHintError = questionHintKey ? hintErrorsByQuestion[questionHintKey] : undefined;
+  const isCurrentHintLoading = questionHintKey !== '' && hintLoadingFor === questionHintKey;
 
   const attemptsExhausted = (q: Quiz): boolean => {
     const allowed = q.attemptsAllowed || 0;
@@ -468,7 +482,9 @@ export default function AssessmentsScreen({
     setActiveQuiz(q);
     setQuizFinished(false);
     setResult(null);
-    setHint(null);
+    setHintsByQuestion({});
+    setHintErrorsByQuestion({});
+    setHintLoadingFor(null);
     setAutoSubmitted(false);
     setAutoFinishPending(false);
     if (resumeFrom) {
@@ -748,13 +764,11 @@ export default function AssessmentsScreen({
     setAutoSubmitted(auto);
     setResult(finalResult);
     setQuizFinished(true);
-    setHint(null);
   };
 
   const goPrev = () => {
     if (currentIndex > 0) {
       setCurrentIndex((i) => i - 1);
-      setHint(null);
     }
   };
 
@@ -763,15 +777,41 @@ export default function AssessmentsScreen({
       finishQuiz(false);
     } else {
       setCurrentIndex((i) => i + 1);
-      setHint(null);
     }
   };
 
-  const getHint = () => {
+  const getHint = async () => {
     if (!question) return;
-    setHint(
-      `Study focus: re-read the core definition behind "${question.topicTag || 'this topic'}". Identify the key term that directly answers before selecting.`
-    );
+    const key = questionHintKey;
+    setHintLoadingFor(key);
+    setHintErrorsByQuestion((prev) => {
+      if (!(key in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[key];
+      return copy;
+    });
+
+    try {
+      const data = await fetchQuizHint(
+        question.question,
+        question.options || [],
+        question.type,
+        question.topicTag
+      );
+      const hint = typeof data.hint === 'string' ? data.hint.trim() : '';
+      if (!hint) {
+        throw new Error('Hint response was empty');
+      }
+      setHintsByQuestion((prev) => ({ ...prev, [key]: hint }));
+    } catch (err) {
+      console.warn('[Mobile] Hint request failed', err);
+      setHintErrorsByQuestion((prev) => ({
+        ...prev,
+        [key]: 'Could not generate a hint for this question right now. Please try again.',
+      }));
+    } finally {
+      setHintLoadingFor((prev) => (prev === key ? null : prev));
+    }
   };
 
   const exitQuiz = () => {
@@ -930,19 +970,30 @@ export default function AssessmentsScreen({
               )}
 
               <View style={styles.hintZone}>
-                {hint ? (
+                {currentHint ? (
                   <View style={[styles.hintBox, { backgroundColor: colors.warningSoft, borderColor: colors.warning }]}>
                     <Lightbulb size={15} color={colors.warning} />
-                    <Text style={{ color: colors.warning, fontSize: 12, lineHeight: 17, flex: 1 }}>{hint}</Text>
+                    <Text style={{ color: colors.warning, fontSize: 12, lineHeight: 17, flex: 1 }}>{currentHint}</Text>
                   </View>
-                ) : (
-                  activeQuiz.quizType !== 'teacher' && (
-                    <TouchableOpacity onPress={getHint} style={styles.hintBtn}>
+                ) : activeQuiz.quizType !== 'teacher' ? (
+                  <View>
+                    <TouchableOpacity
+                      onPress={getHint}
+                      disabled={isCurrentHintLoading}
+                      style={[styles.hintBtn, isCurrentHintLoading && { opacity: 0.5 }]}
+                    >
                       <Sparkles size={14} color={colors.primary} />
-                      <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '600' }}>Get a Hint</Text>
+                      <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '600' }}>
+                        {isCurrentHintLoading ? 'Getting hint...' : 'Get a Hint'}
+                      </Text>
                     </TouchableOpacity>
-                  )
-                )}
+                    {currentHintError ? (
+                      <Text style={{ color: colors.danger, fontSize: 11, lineHeight: 15, marginTop: 4 }}>
+                        {currentHintError}
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
             </View>
           )}
@@ -1270,6 +1321,7 @@ export default function AssessmentsScreen({
         <View style={{ gap: 12 }}>
           <Field label="Title" value={eqTitle} onChangeText={setEqTitle} placeholder="Quiz title" />
           <Field label="Description" value={eqDescription} onChangeText={setEqDescription} placeholder="Short description" multiline />
+          <Field label="Deadline (optional)" value={eqDeadline} onChangeText={setEqDeadline} placeholder="YYYY-MM-DD" />
           <View style={{ gap: 6 }}>
             <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>Difficulty</Text>
             <View style={styles.filterChipRow}>
@@ -1401,8 +1453,9 @@ export default function AssessmentsScreen({
         title="Create Quiz"
         subtitle={isStaff ? 'Publish a course quiz or build a personal practice drill.' : 'Build your own practice quiz.'}
       >
-        <ScrollView style={{ maxHeight: 420 }}>
-          <View style={{ gap: 14 }}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ gap: 10, paddingBottom: 60 }}>
+            <View style={{ gap: 10 }}>
           {createMsg && <Text style={{ color: colors.danger, fontSize: 12, fontWeight: '600' }}>{createMsg}</Text>}
           <Field label="Quiz title" value={cqTitle} onChangeText={setCqTitle} placeholder="e.g. Photosynthesis Basics" />
           {isStaff && (
@@ -1452,36 +1505,7 @@ export default function AssessmentsScreen({
               <Field label="Topic tag (optional)" value={cqTopic} onChangeText={setCqTopic} placeholder="e.g. Cells" />
             </View>
           </View>
-          <View style={{ gap: 6 }}>
-            <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>Difficulty</Text>
-            <View style={styles.filterChipRow}>
-              {(['easy', 'medium', 'hard'] as const).map((d) => (
-                <TouchableOpacity
-                  key={d}
-                  onPress={() => setCqDifficulty(d)}
-                  style={[styles.filterChip, cqDifficulty === d ? { backgroundColor: colors.primary } : { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
-                >
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: cqDifficulty === d ? '#fff' : colors.foreground }}>
-                    {d[0].toUpperCase() + d.slice(1)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-          <View style={{ gap: 6 }}>
-            <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>Pass percentage</Text>
-            <View style={styles.filterChipRow}>
-              {[50, 60, 70, 75, 80].map((p) => (
-                <TouchableOpacity
-                  key={p}
-                  onPress={() => setCqPassPct(p)}
-                  style={[styles.filterChip, cqPassPct === p ? { backgroundColor: colors.primary } : { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
-                >
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: cqPassPct === p ? '#fff' : colors.foreground }}>{p}%</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
+          <Field label="Deadline (optional)" value={cqDeadline} onChangeText={setCqDeadline} placeholder="YYYY-MM-DD" />
           <View style={{ gap: 6 }}>
             <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>Limit attempts per user</Text>
             <View style={styles.filterChipRow}>
@@ -1537,14 +1561,7 @@ export default function AssessmentsScreen({
                   </Text>
                   <TouchableOpacity
                     onPress={() => {
-                      setDq({
-                        index: i,
-                        question: q.question,
-                        type: (q.type as QuizQuestion['type']) || 'multiple_choice',
-                        options: q.options && q.options.length ? [...q.options] : ['', '', '', ''],
-                        correct: typeof q.correctAnswer === 'number' ? q.correctAnswer : 0,
-                        identAnswer: typeof q.correctAnswer === 'string' ? q.correctAnswer : '',
-                      });
+                      setDq(toDraftQuestion(q, i));
                       setDqError(null);
                     }}
                   >
@@ -1564,7 +1581,15 @@ export default function AssessmentsScreen({
             <OutlineButton
               label="Add Question"
               onPress={() => {
-                setDq({ question: '', type: 'multiple_choice', options: ['', '', '', ''], correct: 0, identAnswer: '' });
+                setDq({
+                  question: '',
+                  type: 'multiple_choice',
+                  options: ['', '', '', ''],
+                  correct: -1,
+                  identAnswer: '',
+                  bloomsLevel: 'Understanding',
+                  explanation: '',
+                });
                 setDqError(null);
               }}
             />
@@ -1575,6 +1600,7 @@ export default function AssessmentsScreen({
           </View>
           </View>
         </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1598,12 +1624,12 @@ export default function AssessmentsScreen({
                   key={o.value}
                   onPress={() => {
                     if (!dq) return;
-                    setDq({
-                      ...dq,
-                      type: o.value,
-                      options: o.value === 'true_false' ? ['True', 'False'] : dq.options.length >= 2 ? dq.options : ['', '', '', ''],
-                      correct: o.value === 'true_false' ? 0 : dq.correct,
-                    });
+                    const options = o.value === 'true_false' ? ['True', 'False'] : [...dq.options];
+                    if (o.value === 'multiple_choice') {
+                      while (options.length < 4) options.push('');
+                    }
+                    setDq({ ...dq, type: o.value, options, correct: -1 });
+                    setDqError(null);
                   }}
                   style={[styles.filterChip, dq?.type === o.value ? { backgroundColor: colors.primary } : { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
                 >
@@ -1612,6 +1638,27 @@ export default function AssessmentsScreen({
               ))}
             </View>
           </View>
+          <View style={{ gap: 6 }}>
+            <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>Bloom's level</Text>
+            <View style={styles.filterChipRow}>
+              {BLOOMS_OPTIONS.map((b) => (
+                <TouchableOpacity
+                  key={b}
+                  onPress={() => dq && setDq({ ...dq, bloomsLevel: b })}
+                  style={[styles.filterChip, dq?.bloomsLevel === b ? { backgroundColor: colors.primary } : { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: dq?.bloomsLevel === b ? '#fff' : colors.foreground }}>{b}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          <Field
+            label="Explanation (optional)"
+            value={dq?.explanation || ''}
+            onChangeText={(t) => dq && setDq({ ...dq, explanation: t })}
+            placeholder="Why this is the correct answer"
+            multiline
+          />
           {dq?.type === 'identification' ? (
             <Field label="Exact answer" value={dq.identAnswer} onChangeText={(t) => dq && setDq({ ...dq, identAnswer: t })} placeholder="Type the exact answer students must enter" />
           ) : (
@@ -1662,8 +1709,117 @@ interface DraftQuestion {
   question: string;
   type: QuizQuestion['type'];
   options: string[];
+  // -1 means no correct answer has been selected yet.
   correct: number;
   identAnswer: string;
+  bloomsLevel: string;
+  explanation: string;
+}
+
+function validateDraftQuestion(dq: DraftQuestion): string | null {
+  if (!dq.question.trim()) return 'Question text is required.';
+  if (dq.type === 'identification') {
+    return dq.identAnswer.trim()
+      ? null
+      : 'Provide the exact answer for the identification question.';
+  }
+  if (dq.type === 'true_false') {
+    return dq.correct === 0 || dq.correct === 1
+      ? null
+      : 'Select whether the correct answer is True or False.';
+  }
+  const options = dq.options.map((o) => o.trim());
+  if (options.length < 4 || options.some((o) => !o)) {
+    return 'Fill in all four answer options (A–D).';
+  }
+  return dq.correct >= 0 && dq.correct < options.length
+    ? null
+    : 'Select which option is the correct answer.';
+}
+
+function validateQuizQuestion(q: QuizQuestion): string | null {
+  if (!q.question.trim()) return 'Question text is required.';
+  if (q.type === 'identification' || q.type === 'short_answer') {
+    return typeof q.correctAnswer === 'string' && q.correctAnswer.trim()
+      ? null
+      : 'Provide the exact answer for the identification question.';
+  }
+  if (q.type === 'true_false') {
+    const tf = Number(q.correctAnswer);
+    return tf === 0 || tf === 1
+      ? null
+      : 'Select whether the correct answer is True or False.';
+  }
+  const options = (q.options || []).map((o) => String(o).trim());
+  if (options.length < 4 || options.some((o) => !o)) {
+    return 'Fill in all four answer options (A–D).';
+  }
+  if (Array.isArray(q.correctAnswer)) {
+    if (q.correctAnswer.length === 0) return 'Select at least one correct answer.';
+    const invalid = q.correctAnswer.some((value) => {
+      const idx = Number(value);
+      return !Number.isInteger(idx) || idx < 0 || idx >= options.length;
+    });
+    return invalid ? 'Select a valid correct answer.' : null;
+  }
+  const idx = Number(q.correctAnswer);
+  return Number.isInteger(idx) && idx >= 0 && idx < options.length
+    ? null
+    : 'Select which option is the correct answer.';
+}
+
+function toDraftQuestion(q: QuizQuestion, index: number): DraftQuestion {
+  const isMultipleChoice = q.type === 'multiple_choice';
+  const options =
+    q.type === 'true_false'
+      ? ['True', 'False']
+      : [...(q.options || [])];
+  if (isMultipleChoice) {
+    while (options.length < 4) options.push('');
+  }
+
+  let correct = -1;
+  if (q.type === 'true_false') {
+    const tf = Number(q.correctAnswer);
+    correct = tf === 1 ? 1 : tf === 0 ? 0 : -1;
+  } else if (isMultipleChoice) {
+    if (Array.isArray(q.correctAnswer)) {
+      const first = Number(q.correctAnswer[0]);
+      correct = Number.isInteger(first) ? first : -1;
+    } else if (typeof q.correctAnswer === 'number') {
+      correct = q.correctAnswer;
+    } else if (typeof q.correctAnswer === 'string') {
+      const answerText = q.correctAnswer.toLowerCase().trim();
+      correct = options.findIndex((option) => option.trim().toLowerCase() === answerText);
+    }
+  }
+
+  return {
+    index,
+    question: q.question,
+    type: q.type || 'multiple_choice',
+    options,
+    correct,
+    identAnswer: typeof q.correctAnswer === 'string' ? q.correctAnswer : '',
+    bloomsLevel: q.bloomsLevel || 'Understanding',
+    explanation: q.explanation || '',
+  };
+}
+
+const BLOOMS_OPTIONS = ['Remembering', 'Understanding', 'Applying', 'Analyzing', 'Evaluating', 'Creating'];
+
+function toDeadlineISO(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = new Date(`${trimmed}T23:59:59`);
+  return isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
+function toDateInputValue(iso?: string | null): string {
+  if (!iso) return '';
+  const parsed = new Date(iso);
+  if (isNaN(parsed.getTime())) return '';
+  return parsed.toISOString().slice(0, 10);
 }
 
 const QUESTION_TYPE_OPTIONS: { value: QuizQuestion['type']; label: string }[] = [

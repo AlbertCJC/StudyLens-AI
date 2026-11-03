@@ -277,8 +277,9 @@ function RoleTabs() {
           backgroundColor: isDark ? colors.card : colors.topbarBg,
           borderTopColor: colors.border,
         },
-        tabBarLabelStyle: { fontSize: 10, fontWeight: '600' },
-        tabBarIconStyle: { marginTop: 2 },
+        tabBarIconStyle: { display: 'none' },
+        tabBarLabelPosition: 'beside-icon',
+        tabBarLabelStyle: { fontSize: 12, fontWeight: '700', marginStart: 0, marginEnd: 0 },
       }}
       screenListeners={({ route, navigation }) => ({
         tabPress: (e) => {

@@ -4314,8 +4314,12 @@ def explain_answer_ai_alias():
 def ai_quiz_hint():
     """Generates a subtle educational hint for a quiz question without revealing the answer."""
     data = request.json or {}
-    question = data.get("question") or ""
+    question = str(data.get("question") or "").strip()
     options = data.get("options") or []
+    if not isinstance(options, list):
+        options = []
+    question_type = str(data.get("questionType") or data.get("type") or "").strip()
+    topic = str(data.get("topicTag") or data.get("topic") or "").strip()
 
     if not question:
         return jsonify({"error": "No question provided.", "code": "EMPTY_TEXT"}), 400
@@ -4324,7 +4328,7 @@ def ai_quiz_hint():
     if rate_err:
         return rate_err
 
-    hint = generate_hint_with_groq(question, options)
+    hint = generate_hint_with_groq(question, options, question_type=question_type, topic=topic)
     return jsonify({"hint": hint}), 200
 
 @app.route("/api/ai/recommendations", methods=["POST"])

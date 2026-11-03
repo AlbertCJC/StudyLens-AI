@@ -296,6 +296,7 @@ export const SubjectsPage: React.FC = () => {
     isAdmin || (currentUser?.role === "teacher" && currentUser.id === sub.teacherId);
 
   const filteredSubjects = subjects.filter((sub) => {
+    if (!isAdmin) return true;
     const q = subjectQuery.trim().toLowerCase();
     const matchesQuery =
       !q ||
@@ -364,49 +365,51 @@ export const SubjectsPage: React.FC = () => {
         )}
       </div>
 
-      {/* Subject Search & Filters */}
-      <div className="bg-card p-3 rounded-2xl border border-border grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="relative lg:col-span-1">
-          <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-2.5" />
-          <input
-            type="text"
-            value={subjectQuery}
-            onChange={(e) => setSubjectQuery(e.target.value)}
-            placeholder="Search name, code, or keyword..."
-            className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
-          />
+      {/* Subject Search & Filters (Admin only) */}
+      {isAdmin && (
+        <div className="bg-card p-3 rounded-2xl border border-border grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="relative lg:col-span-1">
+            <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-2.5" />
+            <input
+              type="text"
+              value={subjectQuery}
+              onChange={(e) => setSubjectQuery(e.target.value)}
+              placeholder="Search name, code, or keyword..."
+              className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+            />
+          </div>
+          <select
+            value={semesterFilter}
+            onChange={(e) => setSemesterFilter(e.target.value)}
+            className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground font-semibold focus:outline-none"
+          >
+            <option value="all">All Semesters</option>
+            {DEFAULT_SEMESTERS.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select
+            value={courseFilter}
+            onChange={(e) => setCourseFilter(e.target.value)}
+            className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground font-semibold focus:outline-none"
+          >
+            <option value="all">All Courses</option>
+            {DEFAULT_COURSES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select
+            value={teacherFilter}
+            onChange={(e) => setTeacherFilter(e.target.value)}
+            className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground font-semibold focus:outline-none"
+          >
+            <option value="all">All Teachers</option>
+            {teachers.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
         </div>
-        <select
-          value={semesterFilter}
-          onChange={(e) => setSemesterFilter(e.target.value)}
-          className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground font-semibold focus:outline-none"
-        >
-          <option value="all">All Semesters</option>
-          {DEFAULT_SEMESTERS.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-        <select
-          value={courseFilter}
-          onChange={(e) => setCourseFilter(e.target.value)}
-          className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground font-semibold focus:outline-none"
-        >
-          <option value="all">All Courses</option>
-          {DEFAULT_COURSES.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        <select
-          value={teacherFilter}
-          onChange={(e) => setTeacherFilter(e.target.value)}
-          className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground font-semibold focus:outline-none"
-        >
-          <option value="all">All Teachers</option>
-          {teachers.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
-      </div>
+      )}
 
       {filteredSubjects.length === 0 ? (
         <div className="bg-card p-10 rounded-2xl border border-border shadow-xs text-center space-y-2">

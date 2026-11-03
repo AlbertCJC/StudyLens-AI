@@ -23,6 +23,118 @@ interface StudentOption { id: string; name: string; }
 interface QuizOption { id: string; title: string; subjectName: string; subjectId?: string; }
 interface SubjectOption { id: string; name: string; }
 
+interface DateQueryResult {
+  date: Date;
+  granularity: "day" | "month" | "year";
+  yearOnly?: boolean;
+}
+
+const MONTH_MAP: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+function parseDateQuery(q: string): DateQueryResult | null {
+  const trimmed = q.trim();
+  if (!trimmed) return null;
+  // Don't treat a bare 4-digit year as a full date (e.g. "2026" should match
+  // all reports from that year, not January 1 of that year).
+  if (!/^\d{4}$/.test(trimmed)) {
+    const direct = new Date(trimmed);
+    if (!isNaN(direct.getTime())) {
+      return { date: direct, granularity: "day" };
+    }
+  }
+  const lower = trimmed.toLowerCase();
+
+  // "January 15 2026", "Jan 15 2026", "January 15, 2026"
+  const m1 = lower.match(/^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)\s+(\d{1,2})[,\s]+\s*(\d{4})$/);
+  if (m1) {
+    const month = MONTH_MAP[m1[1].slice(0, 3)];
+    const day = parseInt(m1[2], 10);
+    const year = parseInt(m1[4], 10);
+    const d = new Date(year, month, day);
+    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getDate() === day && d.getFullYear() === year) {
+      return { date: d, granularity: "day" };
+    }
+  }
+
+  // "15 January 2026", "15 Jan 2026"
+  const m2 = lower.match(/^(\d{1,2})\s+(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)[,\s]+\s*(\d{4})$/);
+  if (m2) {
+    const day = parseInt(m2[1], 10);
+    const month = MONTH_MAP[m2[2].slice(0, 3)];
+    const year = parseInt(m2[4], 10);
+    const d = new Date(year, month, day);
+    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getDate() === day && d.getFullYear() === year) {
+      return { date: d, granularity: "day" };
+    }
+  }
+
+  // "January 2026", "Jan 2026" -> month + year
+  const m3 = lower.match(/^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)[,\s]+\s*(\d{4})$/);
+  if (m3) {
+    const month = MONTH_MAP[m3[1].slice(0, 3)];
+    const year = parseInt(m3[3], 10);
+    const d = new Date(year, month, 1);
+    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getFullYear() === year) {
+      return { date: d, granularity: "month" };
+    }
+  }
+
+  // "September", "Sep", "Sept" -> month only (any year)
+  const m7 = lower.match(/^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)$/);
+  if (m7) {
+    const month = MONTH_MAP[m7[1].slice(0, 3)];
+    const d = new Date(2000, month, 1);
+    if (!isNaN(d.getTime()) && d.getMonth() === month) {
+      return { date: d, granularity: "month", yearOnly: false };
+    }
+  }
+
+  // "2026" -> year only
+  const m4 = lower.match(/^(\d{4})$/);
+  if (m4) {
+    const year = parseInt(m4[1], 10);
+    const d = new Date(year, 0, 1);
+    if (!isNaN(d.getTime()) && d.getFullYear() === year) {
+      return { date: d, granularity: "year" };
+    }
+  }
+
+  // "2026-01-15", "2026-1-5" (ISO date only)
+  const m5 = lower.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m5) {
+    const year = parseInt(m5[1], 10);
+    const month = parseInt(m5[2], 10) - 1;
+    const day = parseInt(m5[3], 10);
+    const d = new Date(year, month, day);
+    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getDate() === day && d.getFullYear() === year) {
+      return { date: d, granularity: "day" };
+    }
+  }
+
+  // "01/15/2026", "1/15/2026" (MM/DD/YYYY)
+  const m6 = lower.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m6) {
+    const month = parseInt(m6[1], 10) - 1;
+    const day = parseInt(m6[2], 10);
+    const year = parseInt(m6[3], 10);
+    const d = new Date(year, month, day);
+    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getDate() === day && d.getFullYear() === year) {
+      return { date: d, granularity: "day" };
+    }
+  }
+
+  return null;
+}
+
+function parseReportDate(dateStr: string): Date | null {
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) return d;
+  return null;
+}
+
 export const ReportsPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { showToast } = useToast();
@@ -52,8 +164,6 @@ export const ReportsPage: React.FC = () => {
   // Filters
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
 
   const fetchReports = useCallback(async () => {
     try {
@@ -283,18 +393,40 @@ export const ReportsPage: React.FC = () => {
     }
   };
 
-  const filteredReports = reports.filter((r) => {
+    const filteredReports = reports.filter((r) => {
     if (typeFilter !== "all" && r.reportType !== typeFilter) return false;
     if (searchTerm) {
-      const q = searchTerm.toLowerCase();
-      if (!r.title.toLowerCase().includes(q) && !r.reportType.toLowerCase().includes(q)) return false;
+      const q = searchTerm.trim().toLowerCase();
+      const parsedQuery = parseDateQuery(q);
+      const reportDate = parseReportDate(r.generatedAt);
+
+      const matchesTitleType =
+        r.title.toLowerCase().includes(q) ||
+        r.reportType.toLowerCase().includes(q);
+
+      if (parsedQuery && reportDate) {
+        const qYear = parsedQuery.date.getFullYear();
+        const qMonth = parsedQuery.date.getMonth();
+        const qDay = parsedQuery.date.getDate();
+        const rYear = reportDate.getFullYear();
+        const rMonth = reportDate.getMonth();
+        const rDay = reportDate.getDate();
+
+        let matches = false;
+        if (parsedQuery.granularity === "day") {
+          matches = qYear === rYear && qMonth === rMonth && qDay === rDay;
+        } else if (parsedQuery.granularity === "month") {
+          // yearOnly === false means "September" (any year); otherwise match month+year
+          matches = qMonth === rMonth && (parsedQuery.yearOnly === false ? true : qYear === rYear);
+        } else if (parsedQuery.granularity === "year") {
+          matches = qYear === rYear;
+        }
+        if (!matches && !matchesTitleType) return false;
+      } else {
+        const matchesDate = r.generatedAt.toLowerCase().includes(q);
+        if (!matchesTitleType && !matchesDate) return false;
+      }
     }
-    // Compare parsed timestamps (generatedAt may be a display-formatted string).
-    const generated = new Date(r.generatedAt).getTime();
-    const fromTs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
-    const toTs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
-    if (fromTs && !(generated >= fromTs)) return false;
-    if (toTs && !(generated <= toTs)) return false;
     return true;
   });
 
@@ -445,11 +577,9 @@ export const ReportsPage: React.FC = () => {
   const clearFilters = () => {
     setSearchTerm("");
     setTypeFilter("all");
-    setDateFrom("");
-    setDateTo("");
   };
 
-  const hasFilters = searchTerm !== "" || typeFilter !== "all" || dateFrom !== "" || dateTo !== "";
+  const hasFilters = searchTerm !== "" || typeFilter !== "all";
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -514,20 +644,6 @@ export const ReportsPage: React.FC = () => {
               <option value="all">All types</option>
               {REPORT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              title="Generated on or after"
-              className="p-1.5 bg-muted/40 border border-border rounded-xl text-xs text-foreground focus:outline-none"
-            />
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              title="Generated on or before"
-              className="p-1.5 bg-muted/40 border border-border rounded-xl text-xs text-foreground focus:outline-none"
-            />
             {hasFilters && (
               <button
                 onClick={clearFilters}

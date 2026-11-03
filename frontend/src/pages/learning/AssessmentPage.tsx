@@ -11,8 +11,6 @@ import {
   Play,
   RotateCw,
   Plus,
-  User,
-  GraduationCap,
   X,
   Pencil,
   Check,
@@ -24,6 +22,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { authFetch } from "../../utils/authFetch";
 import type { Quiz, QuizQuestion, QuizAttempt, Subject, QuizFeedbackItem, QuestionType } from "../../types";
 import { Pagination, slicePage } from "../../components/Pagination";
+import { QuizCreateModal } from "../../components/QuizCreateModal";
 
 const AI_DEFAULT_QUIZ_DESCRIPTION = "Automated Bloom's Taxonomy Quiz generated via Groq Inference (GPT-OSS-120B).";
 
@@ -164,7 +163,9 @@ function normalizeQuestionForEdit(q: QuizQuestion): QuizQuestion {
   const type = canonicalQuestionType(q);
   const base = { ...q, type };
   if (type === "multiple_choice") {
-    const options = Array.isArray(base.options) && base.options.length > 0 ? base.options : ["Option A", "Option B"];
+    const source = Array.isArray(base.options) && base.options.length > 0 ? base.options : ["Option A", "Option B"];
+    const options = source.map((o) => String(o));
+    while (options.length < 4) options.push("");
     const normalized = { ...base, options };
     if (Array.isArray(base.correctAnswer)) {
       const resolved = base.correctAnswer
@@ -183,6 +184,51 @@ function normalizeQuestionForEdit(q: QuizQuestion): QuizQuestion {
     return { ...base, options: [], correctAnswer: typeof base.correctAnswer === "string" ? base.correctAnswer : String(base.correctAnswer ?? "") };
   }
   return base;
+}
+
+// Returns a human-readable reason why a question is not ready to be saved, or
+// null when it is complete. Manual entry passes requireAllOptions so every
+// visible multiple-choice field must be filled, while legacy quizzes may keep
+// the number of options they were originally stored with.
+function validateQuizQuestion(
+  q: QuizQuestion,
+  opts: { requireAllOptions?: boolean } = {}
+): string | null {
+  if (!q.question || !q.question.trim()) return "Question prompt is required.";
+  const type = canonicalQuestionType(q);
+  if (type === "identification") {
+    if (typeof q.correctAnswer !== "string" || !q.correctAnswer.trim()) {
+      return "Enter the exact answer for this identification question.";
+    }
+    return null;
+  }
+  if (type === "true_false") {
+    const tf = Number(q.correctAnswer);
+    if (tf !== 0 && tf !== 1) return "Select whether the correct answer is True or False.";
+    return null;
+  }
+
+  const options = Array.isArray(q.options) ? q.options.map((o) => String(o).trim()) : [];
+  const minOptions = opts.requireAllOptions ? 4 : 2;
+  if (options.length < minOptions) {
+    return opts.requireAllOptions
+      ? "Fill in all four answer options (A–D)."
+      : "Provide at least two answer options.";
+  }
+  if (options.some((o) => !o)) return "Answer options cannot be left blank.";
+
+  if (Array.isArray(q.correctAnswer)) {
+    if (q.correctAnswer.length === 0) return "Select at least one correct answer.";
+    const invalid = q.correctAnswer.some((value) => {
+      const idx = Number(value);
+      return !Number.isInteger(idx) || idx < 0 || idx >= options.length;
+    });
+    return invalid ? "Select a valid correct answer." : null;
+  }
+
+  return resolveOptionIndex(q.correctAnswer as string | number, options) >= 0
+    ? null
+    : "Select which option is the correct answer.";
 }
 
 interface AssessmentPageProps {
@@ -222,32 +268,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     setQuizPage(1);
   }, [selectedSubjectFilter]);
 
+  // Unified Quiz Creator (shared with the Subject page) — course quizzes for teachers.
   // Create Quiz Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newQuizTitle, setNewQuizTitle] = useState("");
-  const [newQuizSubjectId, setNewQuizSubjectId] = useState("");
-  const [newQuizTopic, setNewQuizTopic] = useState("");
-  const [newQuizType, setNewQuizType] = useState<"teacher" | "student">("teacher");
-  const [newQuizTimeLimit, setNewQuizTimeLimit] = useState<number>(15);
-  const [newQuizLimitAttempts, setNewQuizLimitAttempts] = useState(false);
-  const [newQuizAttempts, setNewQuizAttempts] = useState<number>(3);
-  const [newQuizRevealAnswers, setNewQuizRevealAnswers] = useState(true);
-  const [newQuizDeadline, setNewQuizDeadline] = useState<string>("");
-  const [newQuizQuestions, setNewQuizQuestions] = useState<QuizQuestion[]>([]);
-  const [isCreatingQuiz, setIsCreatingQuiz] = useState(false);
 
-  // Manual Question Entry State (for Create/Edit)
-  const [manualQType, setManualQType] = useState<QuestionType>("multiple_choice");
-  const [manualQText, setManualQText] = useState("");
-  const [manualQOpt0, setManualQOpt0] = useState("");
-  const [manualQOpt1, setManualQOpt1] = useState("");
-  const [manualQOpt2, setManualQOpt2] = useState("");
-  const [manualQOpt3, setManualQOpt3] = useState("");
-  const [manualQCorrect, setManualQCorrect] = useState<number>(0);
-  const [manualQMulti, setManualQMulti] = useState(false);
-  const [manualQMultiCorrect, setManualQMultiCorrect] = useState<number[]>([]);
-  const [manualQIdentAnswer, setManualQIdentAnswer] = useState("");
-  const [manualQExplanation, setManualQExplanation] = useState("");
 
   // Quiz Deletion Modal
   const [quizToDelete, setQuizToDelete] = useState<Quiz | null>(null);
@@ -292,8 +316,9 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
   const [userAnswers, setUserAnswers] = useState<Record<string, unknown>>({});
   const [timeLeft, setTimeLeft] = useState<number>(15 * 60); // 15 mins in seconds
   const [targetEndTime, setTargetEndTime] = useState<number | null>(null);
-  const [hint, setHint] = useState<string | null>(null);
-  const [loadingHint, setLoadingHint] = useState(false);
+  const [hintsByQuestion, setHintsByQuestion] = useState<Record<string, string>>({});
+  const [hintErrorsByQuestion, setHintErrorsByQuestion] = useState<Record<string, string>>({});
+  const [hintLoadingFor, setHintLoadingFor] = useState<string | null>(null);
 
   // Saved Progresses Map (quizId -> SavedQuizProgress) initialized lazily from localStorage
   const [savedProgresses, setSavedProgresses] = useState<Record<string, SavedQuizProgress>>(() => {
@@ -346,7 +371,6 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
         if (sRes.ok && isSubscribed) {
           const sData = await sRes.json();
           setSubjects(sData);
-          if (sData.length > 0) setNewQuizSubjectId(sData[0].id);
         }
       } catch (err) {
         console.error("Fetch catalog data error:", err);
@@ -529,7 +553,9 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     }
 
     setCompletedAttempt(null);
-    setHint(null);
+    setHintsByQuestion({});
+    setHintErrorsByQuestion({});
+    setHintLoadingFor(null);
     setSubmitError(null);
   };
 
@@ -544,199 +570,67 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
     });
   };
 
+  const hintKeyFor = (questionId: string | undefined) =>
+    `${activeQuiz?.id ?? "quiz"}:${questionId || currentQIndex}`;
+
+  const clearHintFor = (key: string) => {
+    setHintsByQuestion((prev) => {
+      if (!(key in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[key];
+      return copy;
+    });
+    setHintErrorsByQuestion((prev) => {
+      if (!(key in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[key];
+      return copy;
+    });
+  };
+
   const handleSelectAnswer = (qId: string, answer: unknown) => {
-    setHint(null);
+    clearHintFor(hintKeyFor(qId));
     setUserAnswers({ ...userAnswers, [qId]: answer });
   };
 
   const handleFetchHint = async (question: QuizQuestion) => {
-    setLoadingHint(true);
-    setHint(null);
+    const key = hintKeyFor(question.id);
+    setHintLoadingFor(key);
+    setHintErrorsByQuestion((prev) => {
+      if (!(key in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[key];
+      return copy;
+    });
+
     try {
       const res = await authFetch("/api/hint", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: question.question,
-          options: question.options,
+          options: question.options || [],
+          questionType: question.type,
+          topicTag: question.topicTag,
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setHint(data.hint);
+      if (!res.ok) {
+        throw new Error(`Hint request failed with status ${res.status}`);
       }
+      const data = await res.json();
+      const hint = typeof data?.hint === "string" ? data.hint.trim() : "";
+      if (!hint) {
+        throw new Error("Hint response was empty");
+      }
+      setHintsByQuestion((prev) => ({ ...prev, [key]: hint }));
     } catch (err) {
       console.error("Fetch hint error:", err);
+      setHintErrorsByQuestion((prev) => ({
+        ...prev,
+        [key]: "Could not generate a hint for this question right now. Please try again.",
+      }));
     } finally {
-      setLoadingHint(false);
-    }
-  };
-
-  const handleAddManualQuestion = () => {
-    if (!manualQText.trim()) return;
-
-    let newQ: QuizQuestion;
-    if (manualQType === "identification") {
-      newQ = {
-        id: `manual-q-${Date.now()}`,
-        question: manualQText.trim(),
-        type: "identification",
-        options: [],
-        correctAnswer: manualQIdentAnswer.trim(),
-        explanation: manualQExplanation.trim() || `Correct key term: "${manualQIdentAnswer.trim()}"`,
-        bloomsLevel: "Remembering",
-        difficulty: FIXED_DIFFICULTY,
-        topicTag: newQuizTopic || "Identification",
-      };
-    } else if (manualQType === "true_false") {
-      newQ = {
-        id: `manual-q-${Date.now()}`,
-        question: manualQText.trim(),
-        type: "true_false",
-        options: ["True", "False"],
-        correctAnswer: manualQCorrect,
-        explanation: manualQExplanation.trim() || "Standard answer explanation.",
-        bloomsLevel: "Understanding",
-        difficulty: FIXED_DIFFICULTY,
-        topicTag: newQuizTopic || "True/False",
-      };
-    } else {
-      newQ = {
-        id: `manual-q-${Date.now()}`,
-        question: manualQText.trim(),
-        type: "multiple_choice",
-        options: [
-          manualQOpt0 || "Option A",
-          manualQOpt1 || "Option B",
-          manualQOpt2 || "Option C",
-          manualQOpt3 || "Option D",
-        ],
-        correctAnswer: manualQMulti ? manualQMultiCorrect : manualQCorrect,
-        explanation: manualQExplanation.trim() || "Standard answer explanation.",
-        bloomsLevel: "Understanding",
-        difficulty: FIXED_DIFFICULTY,
-        topicTag: newQuizTopic || "Core Concepts",
-      };
-    }
-
-    setNewQuizQuestions((prev) => [...prev, newQ]);
-    setManualQText("");
-    setManualQOpt0("");
-    setManualQOpt1("");
-    setManualQOpt2("");
-    setManualQOpt3("");
-    setManualQIdentAnswer("");
-    setManualQExplanation("");
-    setManualQMulti(false);
-    setManualQMultiCorrect([]);
-  };
-
-  const handleCreatePersonalQuiz = async () => {
-    if (!newQuizTitle.trim()) return;
-    setIsCreatingQuiz(true);
-    try {
-      const selectedSubject = newQuizSubjectId
-        ? subjects.find((s) => s.id === newQuizSubjectId)
-        : undefined;
-      const isTeacher = currentUser?.role === "teacher";
-      
-      const shuffleMcOptions = (q: QuizQuestion): QuizQuestion => {
-        if (q.type !== "multiple_choice" || !q.options || q.options.length < 2) return q;
-        const shuffled = [...q.options].sort(() => Math.random() - 0.5);
-        if (Array.isArray(q.correctAnswer)) {
-          const correctTexts = q.correctAnswer
-            .map((i) => q.options![Number(i)])
-            .filter((t): t is string => typeof t === "string");
-          return {
-            ...q,
-            options: shuffled,
-            correctAnswer: correctTexts.map((t) => shuffled.indexOf(t)).filter((i) => i >= 0),
-          };
-        }
-        const correctIndex = Number(q.correctAnswer) || 0;
-        const correctText = q.options[correctIndex];
-        return { ...q, options: shuffled, correctAnswer: shuffled.indexOf(correctText) };
-      };
-
-      const defaultQuestions: QuizQuestion[] = [
-        {
-          id: `q-${Date.now()}-1`,
-          question: `Question 1 (${newQuizTopic || newQuizTitle}): Which algorithm strategy minimizes step complexity?`,
-          type: "multiple_choice",
-          options: ["Divide and Conquer", "Greedy Approach", "Dynamic Programming", "Brute Force Search"],
-          correctAnswer: 0,
-          explanation: "Divide and conquer divides large problems into smaller independent subproblems.",
-          bloomsLevel: "Understanding",
-          difficulty: FIXED_DIFFICULTY,
-          topicTag: newQuizTopic || "Core Concepts",
-        },
-        {
-          id: `q-${Date.now()}-2`,
-          question: `Question 2 (${newQuizTopic || newQuizTitle}): True or False: Space complexity analysis accounts for auxiliary memory used during execution.`,
-          type: "true_false",
-          options: ["True", "False"],
-          correctAnswer: 0,
-          explanation: "True. Auxiliary space measures memory required by the algorithm excluding input size.",
-          bloomsLevel: "Remembering",
-          difficulty: FIXED_DIFFICULTY,
-          topicTag: newQuizTopic || "Core Concepts",
-        },
-        {
-          id: `q-${Date.now()}-3`,
-          question: `Question 3 (${newQuizTopic || newQuizTitle}): What is the primary benefit of modular decomposition in course material study?`,
-          type: "multiple_choice",
-          options: ["Reduces cognitive load", "Eliminates variable scope", "Increases runtime latency", "Suppresses compiler warnings"],
-          correctAnswer: 0,
-          explanation: "Modularizing material allows focused mastery of individual concept blocks.",
-          bloomsLevel: "Analyzing",
-          difficulty: FIXED_DIFFICULTY,
-          topicTag: newQuizTopic || "Core Concepts",
-        },
-      ].map(shuffleMcOptions);
-
-      const finalQuestions = newQuizQuestions.length > 0 ? newQuizQuestions : defaultQuestions;
-
-      const quizRes = await authFetch("/api/quizzes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: newQuizTitle,
-          description: isTeacher
-            ? `Official Course Assessment on ${newQuizTopic || newQuizTitle}`
-            : `Self-study practice quiz on ${newQuizTopic || newQuizTitle}`,
-          subjectId: selectedSubject ? selectedSubject.id : (isTeacher ? "" : "personal"),
-          questions: finalQuestions,
-          createdById: currentUser?.id || (isTeacher ? "usr-teacher-1" : ""),
-          createdByName: currentUser?.name || (isTeacher ? "Faculty Instructor" : "Student User"),
-          quizType: newQuizType,
-          uploaderRole: currentUser?.role || "student",
-          isPublished: newQuizType === "teacher" ? !!selectedSubject : true,
-          timeLimitMinutes: newQuizTimeLimit,
-          passPercentage: FIXED_PASS_PERCENTAGE,
-          difficulty: FIXED_DIFFICULTY,
-          attemptsAllowed: newQuizLimitAttempts ? newQuizAttempts : 0,
-          revealAnswers: newQuizRevealAnswers,
-          deadline: newQuizDeadline ? new Date(newQuizDeadline).toISOString() : null,
-        }),
-      });
-
-      if (quizRes.ok) {
-        const created = await quizRes.json();
-        setQuizzes((prev) => [created, ...prev]);
-        setShowCreateModal(false);
-        setNewQuizTitle("");
-        setNewQuizTopic("");
-        setNewQuizQuestions([]);
-        setNewQuizLimitAttempts(false);
-        setNewQuizAttempts(3);
-      } else {
-        const body = await quizRes.json().catch(() => null);
-        showToast(typeof body?.error === "string" ? body.error : "Could not create the quiz. Please try again.", "error");
-      }
-    } catch (err) {
-      console.error("Create quiz error:", err);
-    } finally {
-      setIsCreatingQuiz(false);
+      setHintLoadingFor((prev) => (prev === key ? null : prev));
     }
   };
 
@@ -757,6 +651,13 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
   const handleSaveEditQuiz = async () => {
     if (!editingQuiz) return;
+    for (let i = 0; i < editQuestions.length; i++) {
+      const error = validateQuizQuestion(editQuestions[i], { requireAllOptions: true });
+      if (error) {
+        showToast(`Question ${i + 1}: ${error}`, "error");
+        return;
+      }
+    }
     try {
       // Practice drills cannot move subjects or change scope: omit those keys
       // entirely so the backend ownership guard accepts the update.
@@ -905,6 +806,13 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
       {/* 1. ACTIVE QUIZ TAKING INTERFACE */}
       {activeQuiz && !completedAttempt && (() => {
         const isTeacherQuiz = (activeQuiz.quizType || (activeQuiz.createdById?.startsWith("usr-teacher") ? "teacher" : "student")) === "teacher";
+        const currentQuestion = activeQuiz.questions[currentQIndex];
+        const currentHintKey = currentQuestion
+          ? `${activeQuiz.id}:${currentQuestion.id || currentQIndex}`
+          : "";
+        const currentHint = currentHintKey ? hintsByQuestion[currentHintKey] : undefined;
+        const currentHintError = currentHintKey ? hintErrorsByQuestion[currentHintKey] : undefined;
+        const isCurrentHintLoading = currentHintKey !== "" && hintLoadingFor === currentHintKey;
 
         return (
           <div className="bg-card rounded-2xl border border-border shadow-xs overflow-hidden space-y-0">
@@ -1020,29 +928,36 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
                   {/* Study Hint Section - DISABLED FOR TEACHER QUIZZES */}
                   <div className="pt-2">
-                    {!isTeacherQuiz && hint ? (
+                    {!isTeacherQuiz && currentHint ? (
                       <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-800 dark:text-amber-200 space-y-1">
                         <span className="font-bold flex items-center justify-between gap-2 text-amber-600 dark:text-amber-400">
                           <span>Study Hint</span>
                           <button
                             type="button"
-                            onClick={() => setHint(null)}
+                            onClick={() => clearHintFor(currentHintKey)}
                             aria-label="Dismiss hint"
                             className="p-0.5 rounded hover:bg-amber-500/20 cursor-pointer"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
                         </span>
-                        <p className="leading-relaxed">{hint}</p>
+                        <p className="leading-relaxed">{currentHint}</p>
                       </div>
                     ) : !isTeacherQuiz ? (
-                      <button
-                        onClick={() => handleFetchHint(activeQuiz.questions[currentQIndex])}
-                        disabled={loadingHint}
-                        className="px-3 py-1.5 bg-muted hover:bg-amber-500/10 text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400 rounded-lg text-xs font-semibold transition-all flex items-center space-x-1.5 cursor-pointer"
-                      >
-                        <span>{loadingHint ? "Fetching hint..." : "Get a hint"}</span>
-                      </button>
+                      <div className="space-y-1">
+                        <button
+                          onClick={() => currentQuestion && handleFetchHint(currentQuestion)}
+                          disabled={isCurrentHintLoading}
+                          className="px-3 py-1.5 bg-muted hover:bg-amber-500/10 text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400 rounded-lg text-xs font-semibold transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-60"
+                        >
+                          <span>{isCurrentHintLoading ? "Fetching hint..." : "Get a hint"}</span>
+                        </button>
+                        {currentHintError && (
+                          <p className="text-[11px] text-rose-600 dark:text-rose-400 leading-relaxed">
+                            {currentHintError}
+                          </p>
+                        )}
+                      </div>
                     ) : null}
                   </div>
                 </div>
@@ -1057,10 +972,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
               {/* Stepper Navigation */}
               <div className="flex items-center justify-between pt-4 border-t border-border">
                 <button
-                  onClick={() => {
-                    setHint(null);
-                    setCurrentQIndex((prev) => Math.max(0, prev - 1));
-                  }}
+                  onClick={() => setCurrentQIndex((prev) => Math.max(0, prev - 1))}
                   disabled={currentQIndex === 0}
                   className="px-4 py-2 border border-border text-foreground rounded-xl text-xs font-bold disabled:opacity-40 cursor-pointer"
                 >
@@ -1069,10 +981,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
                 {currentQIndex < activeQuiz.questions.length - 1 ? (
                   <button
-                    onClick={() => {
-                      setHint(null);
-                      setCurrentQIndex((prev) => prev + 1);
-                    }}
+                    onClick={() => setCurrentQIndex((prev) => prev + 1)}
                     className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs cursor-pointer"
                   >
                     Next Question →
@@ -1175,33 +1084,6 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
       {/* 3. CATALOG OF QUIZZES & ASSESSMENT TYPES */}
       {!activeQuiz && (
         <div className="space-y-6">
-          {/* Slim toolbar */}
-          <div className="flex items-center justify-end gap-3 flex-wrap">
-            <div className="flex items-center space-x-2 shrink-0">
-              <button
-                onClick={() => {
-                    if (!canManageCourseQuizzes) {
-                      setNewQuizType("student");
-                    }
-                    setNewQuizDeadline("");
-                    setShowCreateModal(true);
-                  }}
-                className="px-3.5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Create Quiz</span>
-              </button>
-
-              <button
-                onClick={() => onNavigate("ai-assistant")}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4 text-amber-300" />
-                <span>AI Quiz Generator</span>
-              </button>
-            </div>
-          </div>
-
           {/* Unfinished Quiz Resume Alert Banner */}
           {Object.keys(savedProgresses).length > 0 && (
             <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1260,12 +1142,33 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                 >
                   <option value="all">All Subjects Filter</option>
                   {subjects.map((sub) => (
-                          <option key={sub.id} value={sub.id}>
-                            {sub.code} - {sub.name}
-                          </option>
-                        ))}
+                    <option key={sub.id} value={sub.id}>
+                      {sub.code} - {sub.name}
+                    </option>
+                  ))}
                 </select>
               </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                onClick={() => {
+                    setShowCreateModal(true);
+                  }}
+                className="px-3.5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Create Quiz</span>
+              </button>
+
+              <button
+                onClick={() => onNavigate("ai-assistant")}
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4 text-amber-300" />
+                <span>AI Quiz Generator</span>
+              </button>
             </div>
           </div>
 
@@ -2269,471 +2172,18 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           </div>
         </div>
       )}
-
-      {/* CREATE QUIZ MODAL */}
-      {showCreateModal && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setShowCreateModal(false);
-          }}
-        >
-          <div className="bg-card border border-border p-6 rounded-2xl max-w-5xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div className="flex items-center space-x-2">
-                <div className={`p-2 rounded-xl ${
-                  canManageCourseQuizzes
-                    ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                    : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
-                }`}>
-                  {canManageCourseQuizzes ? (
-                    <GraduationCap className="w-5 h-5" />
-                  ) : (
-                    <User className="w-5 h-5" />
-                  )}
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-foreground">
-                    {canManageCourseQuizzes
-                      ? "Create Course Quiz / Examination"
-                      : "Create Student Practice Quiz"}
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    {canManageCourseQuizzes
-                      ? "Faculty Assessment Portal - Manual or Generated Questions"
-                      : "Private self-study practice assessment"}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="p-1 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="lg:grid lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-5 lg:items-start space-y-4 lg:space-y-0 text-xs">
-              {/* Settings column */}
-              <div className="space-y-4 lg:bg-muted/20 lg:border lg:border-border lg:rounded-2xl lg:p-4">
-              {/* Row 1: Quiz Scope (staff only — students always create personal drills) */}
-              {canManageCourseQuizzes ? (
-                <div>
-                  <label className="block font-bold text-foreground mb-1">Quiz Scope</label>
-                  <select
-                    value={newQuizType}
-                    onChange={(e) => setNewQuizType(e.target.value as "teacher" | "student")}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary font-semibold"
-                  >
-                    <option value="teacher">Course Subject Quiz (For Enrolled Class Students)</option>
-                    <option value="student">Personal Practice Drill (Private to Yourself)</option>
-                  </select>
-                </div>
-              ) : (
-                <p className="text-[11px] text-muted-foreground bg-muted/30 border border-border rounded-xl p-3">
-                  This quiz will be saved as a <strong className="text-foreground">Personal Practice Drill</strong> that
-                  only you can see and take.
-                </p>
-              )}
-
-              {/* Row 2: Title and (Conditional) Associated Subject */}
-              <div className={`grid gap-3 ${newQuizType === "teacher" ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}>
-                <div>
-                  <label className="block font-bold text-foreground mb-1">Quiz Title</label>
-                  <input
-                    type="text"
-                    value={newQuizTitle}
-                    onChange={(e) => setNewQuizTitle(e.target.value)}
-                    placeholder={
-                      newQuizType === "teacher"
-                        ? "e.g. Data Structures Midterm Examination"
-                        : "e.g. Graph Algorithms Self-Test"
-                    }
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-
-                {newQuizType === "teacher" && (
-                  <div className="animate-in fade-in zoom-in-95">
-                    <label className="block font-bold text-foreground mb-1">Associated Course Subject</label>
-                    <select
-                      value={newQuizSubjectId}
-                      onChange={(e) => setNewQuizSubjectId(e.target.value)}
-                      className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                    >
-                      <option value="">Select a subject (optional)</option>
-                      {subjects
-                        .filter((sub) => currentUser?.role !== "teacher" || sub.teacherId === currentUser.id)
-                        .map((sub) => (
-                          <option key={sub.id} value={sub.id}>
-                            {sub.code} - {sub.name}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              {/* Row 3: Parameters */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-foreground mb-1">Time (Mins)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={newQuizTimeLimit}
-                    onChange={(e) => setNewQuizTimeLimit(Number(e.target.value))}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-foreground mb-1">Topic Tag</label>
-                  <input
-                    type="text"
-                    value={newQuizTopic}
-                    onChange={(e) => setNewQuizTopic(e.target.value)}
-                    placeholder="e.g. Core Concepts"
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-              </div>
-
-              {/* Row 3b: Attempt Limit */}
-              {newQuizType === "teacher" && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="create-limit-attempts"
-                    checked={newQuizLimitAttempts}
-                    onChange={(e) => setNewQuizLimitAttempts(e.target.checked)}
-                    className="w-4 h-4 accent-primary cursor-pointer"
-                  />
-                  <label htmlFor="create-limit-attempts" className="font-bold text-foreground text-xs cursor-pointer">
-                    Limit attempts per student
-                  </label>
-                </div>
-                {newQuizLimitAttempts && (
-                  <div className="animate-in fade-in zoom-in-95">
-                    <label className="block font-bold text-foreground mb-1">Max Attempts</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={99}
-                      value={newQuizAttempts}
-                      onChange={(e) => setNewQuizAttempts(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
-                      className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                  </div>
-                )}
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="create-reveal-answers"
-                    checked={newQuizRevealAnswers}
-                    onChange={(e) => setNewQuizRevealAnswers(e.target.checked)}
-                    className="w-4 h-4 accent-primary cursor-pointer"
-                  />
-                  <label htmlFor="create-reveal-answers" className="font-bold text-foreground text-xs cursor-pointer">
-                    Students can see correct answers after submitting
-                  </label>
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block font-bold text-foreground mb-1">Deadline (Optional)</label>
-                  <input
-                    type="datetime-local"
-                    value={newQuizDeadline}
-                    onChange={(e) => setNewQuizDeadline(e.target.value)}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    After this date students can no longer submit. Unattempted quizzes are marked Missing (0%) in grades.
-                  </p>
-                </div>
-              </div>
-              )}
-
-              </div>
-
-              {/* Manual Question Builder */}
-              <div className="p-4 bg-muted/20 border border-border rounded-2xl space-y-3 lg:max-h-[calc(100vh-18rem)] lg:overflow-y-auto">
-                <div className="flex items-center justify-between pb-2 border-b border-border">
-                  <div>
-                    <h4 className="font-bold text-foreground text-xs">Manual Question Builder</h4>
-                    <p className="text-[11px] text-muted-foreground">{newQuizQuestions.length} Question(s) Added</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleAddManualQuestion}
-                    className="px-3.5 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1 shadow-xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Question</span>
-                  </button>
-                </div>
-
-                <div className="space-y-3 pt-1">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-bold text-muted-foreground mb-1">Question Prompt</label>
-                      <input
-                        type="text"
-                        value={manualQText}
-                        onChange={(e) => setManualQText(e.target.value)}
-                        placeholder="e.g. What algorithm traverses a graph level by level?"
-                        className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-muted-foreground mb-1">Question Type</label>
-                      <select
-                        value={manualQType}
-                        onChange={(e) => setManualQType(e.target.value as QuestionType)}
-                        className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary font-semibold"
-                      >
-                        <option value="multiple_choice">Multiple Choice</option>
-                        <option value="identification">Identification / Direct Answer</option>
-                        <option value="true_false">True / False</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Dynamic Options/Answers Input based on Question Type */}
-                  {manualQType === "identification" ? (
-                    <div className="p-3 bg-card border border-border rounded-xl space-y-1.5">
-                      <label className="block text-[11px] font-bold text-primary">Exact Identification Answer / Key Term:</label>
-                      <input
-                        type="text"
-                        value={manualQIdentAnswer}
-                        onChange={(e) => setManualQIdentAnswer(e.target.value)}
-                        placeholder="e.g. Breadth-First Search (case-insensitive grading)"
-                        className="w-full p-2 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary font-semibold"
-                      />
-                      <p className="text-[10px] text-muted-foreground">Students will be asked to type this key term during assessment.</p>
-                    </div>
-                  ) : manualQType === "true_false" ? (
-                    <div className="p-3 bg-card border border-border rounded-xl space-y-1.5">
-                      <label className="block text-[11px] font-bold text-primary">Correct True/False Answer:</label>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                        {["True", "False"].map((tf, tfIdx) => (
-                          <button
-                            key={tf}
-                            type="button"
-                            onClick={() => setManualQCorrect(tfIdx)}
-                            className={`p-2.5 rounded-xl border text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
-                              manualQCorrect === tfIdx
-                                ? CORRECT_ANSWER_CARD_CLASS
-                                : "bg-muted/40 border-border text-foreground hover:bg-muted"
-                            }`}
-                          >
-                            <span>
-                              <span className="font-bold mr-2">{tfIdx === 0 ? "A." : "B."}</span>
-                              {tf}
-                            </span>
-                            {manualQCorrect === tfIdx && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <label className="flex items-center space-x-2 text-[11px] font-bold text-muted-foreground cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={manualQMulti}
-                          onChange={(e) => {
-                            setManualQMulti(e.target.checked);
-                            setManualQMultiCorrect(e.target.checked ? [0] : []);
-                          }}
-                          className="accent-primary"
-                        />
-                        <span>Multiple correct answers (students select all that apply)</span>
-                      </label>
-                      <label className="block text-[11px] font-bold text-muted-foreground">Multiple Choice Options:</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          value={manualQOpt0}
-                          onChange={(e) => setManualQOpt0(e.target.value)}
-                          placeholder="Option A"
-                          className="p-2 bg-card border border-border rounded-xl text-xs"
-                        />
-                        <input
-                          type="text"
-                          value={manualQOpt1}
-                          onChange={(e) => setManualQOpt1(e.target.value)}
-                          placeholder="Option B"
-                          className="p-2 bg-card border border-border rounded-xl text-xs"
-                        />
-                        <input
-                          type="text"
-                          value={manualQOpt2}
-                          onChange={(e) => setManualQOpt2(e.target.value)}
-                          placeholder="Option C"
-                          className="p-2 bg-card border border-border rounded-xl text-xs"
-                        />
-                        <input
-                          type="text"
-                          value={manualQOpt3}
-                          onChange={(e) => setManualQOpt3(e.target.value)}
-                          placeholder="Option D"
-                          className="p-2 bg-card border border-border rounded-xl text-xs"
-                        />
-                      </div>
-                      {manualQMulti ? (
-                        <div>
-                          <label className="text-[11px] font-bold text-muted-foreground">Correct Answers (select all):</label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
-                            {[
-                              { label: "Option A", value: manualQOpt0, idx: 0 },
-                              { label: "Option B", value: manualQOpt1, idx: 1 },
-                              { label: "Option C", value: manualQOpt2, idx: 2 },
-                              { label: "Option D", value: manualQOpt3, idx: 3 },
-                            ].map((opt) => {
-                              const isCorrect = manualQMultiCorrect.includes(opt.idx);
-                              return (
-                                <div
-                                  key={opt.idx}
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() =>
-                                    setManualQMultiCorrect((prev) =>
-                                      prev.includes(opt.idx)
-                                        ? prev.filter((i) => i !== opt.idx)
-                                        : [...prev, opt.idx]
-                                    )
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault();
-                                      e.currentTarget.click();
-                                    }
-                                  }}
-                                  className={`flex items-center p-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-                                    isCorrect
-                                      ? CORRECT_ANSWER_CARD_CLASS
-                                      : "bg-muted/40 border-border text-muted-foreground hover:bg-muted"
-                                  }`}
-                                >
-                                  <span className={`w-5 h-5 rounded-full ${CORRECT_ANSWER_CHIP_CLASS} text-[10px] font-bold flex items-center justify-center shrink-0 mr-2`}>
-                                    {String.fromCharCode(65 + opt.idx)}
-                                  </span>
-                                  <span className="truncate flex-1">{opt.value || opt.label}</span>
-                                  {isCorrect && <CheckSquare className="w-4 h-4 text-green-500 shrink-0" />}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : (
-                        <div>
-                          <label className="text-[11px] font-bold text-muted-foreground">Correct Answer Option:</label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
-                            {[
-                              { label: "Option A", value: manualQOpt0, idx: 0 },
-                              { label: "Option B", value: manualQOpt1, idx: 1 },
-                              { label: "Option C", value: manualQOpt2, idx: 2 },
-                              { label: "Option D", value: manualQOpt3, idx: 3 },
-                            ].map((opt) => {
-                              const isCorrect = manualQCorrect === opt.idx;
-                              return (
-                                <div
-                                  key={opt.idx}
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() => setManualQCorrect(opt.idx)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault();
-                                      e.currentTarget.click();
-                                    }
-                                  }}
-                                  className={`flex items-center p-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-                                    isCorrect
-                                      ? CORRECT_ANSWER_CARD_CLASS
-                                      : "bg-muted/40 border-border text-muted-foreground hover:bg-muted"
-                                  }`}
-                                >
-                                  <span className={`w-5 h-5 rounded-full ${CORRECT_ANSWER_CHIP_CLASS} text-[10px] font-bold flex items-center justify-center shrink-0 mr-2`}>
-                                    {String.fromCharCode(65 + opt.idx)}
-                                  </span>
-                                  <span className="truncate flex-1">{opt.value || opt.label}</span>
-                                  {isCorrect && <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-muted-foreground mb-1">Explanation / Solution Notes</label>
-                    <input
-                      type="text"
-                      value={manualQExplanation}
-                      onChange={(e) => setManualQExplanation(e.target.value)}
-                      placeholder="Brief explanation for why this answer is correct..."
-                      className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* Added Questions List */}
-                {newQuizQuestions.length > 0 && (
-                  <div className="space-y-2 pt-3 border-t border-border">
-                    <p className="text-[11px] font-bold text-foreground">Questions Included in Quiz:</p>
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                      {newQuizQuestions.map((q, i) => (
-                        <div key={i} className="flex items-center justify-between p-2.5 bg-card border border-border rounded-xl text-xs">
-                          <div className="flex items-center space-x-2 truncate pr-2">
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/10 text-primary uppercase">
-                              {questionTypeLabel(q)}
-                            </span>
-                            <span className="truncate font-medium">{i + 1}. {q.question}</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setNewQuizQuestions(newQuizQuestions.filter((_, idx) => idx !== i))}
-                            className="text-rose-600 hover:text-rose-700 p-1 rounded hover:bg-rose-500/10 cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 bg-muted text-foreground rounded-xl text-xs font-bold cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreatePersonalQuiz}
-                disabled={isCreatingQuiz || !newQuizTitle.trim()}
-                className="px-5 py-2 bg-primary hover:bg-primary/90 disabled:opacity-50 text-primary-foreground font-bold rounded-xl text-xs shadow-md cursor-pointer flex items-center space-x-1.5"
-              >
-                {isCreatingQuiz ? (
-                  <span>Saving Quiz...</span>
-                ) : (
-                  <>
-                    <Plus className="w-4 h-4" />
-                    <span>Create & Save Quiz</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <QuizCreateModal
+        open={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSaved={(saved) => setQuizzes((prev) => [saved, ...prev])}
+        subjects={subjects.filter(
+          (sub) => currentUser?.role !== 'teacher' || sub.teacherId === currentUser.id
+        )}
+        currentUserId={currentUser?.id}
+        currentUserName={currentUser?.name}
+        canManageCourseQuizzes={canManageCourseQuizzes}
+        defaultScope={canManageCourseQuizzes ? 'teacher' : 'student'}
+      />
     </div>
   );
 };
