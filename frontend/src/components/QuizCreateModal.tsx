@@ -1,15 +1,15 @@
 import { Plus, X, Sparkles, CheckCircle2, User, GraduationCap } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { authFetch } from "../utils/authFetch";
 import { useToast } from "../context/ToastContext";
 import type { Quiz, QuizQuestion, Subject, DifficultyLevel, BloomsTaxonomy } from "../types";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 const FIXED_PASS_PERCENTAGE = 75;
 const FIXED_DIFFICULTY: DifficultyLevel = "medium";
 
 const CORRECT_ANSWER_CARD_CLASS =
   "bg-green-500/10 border-green-500 text-green-700 dark:text-green-400 shadow-xs ring-1 ring-green-500";
-const CORRECT_ANSWER_CHIP_CLASS = "bg-green-500/10 dark:bg-green-500/20 text-green-700 dark:text-green-400";
 
 const QUESTION_TYPES: { value: "multiple_choice" | "true_false" | "identification"; label: string }[] = [
   { value: "multiple_choice", label: "Multiple Choice" },
@@ -158,6 +158,58 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
 
   const isPractice = scope === "student";
 
+  // Discard confirmation when leaving with unsaved work.
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const pendingActionRef = useRef<(() => void) | null>(null);
+  const markDirty = useCallback(() => setDirty(true), []);
+
+  const confirmDiscard = useCallback(() => {
+    const after = pendingActionRef.current;
+    pendingActionRef.current = null;
+    setDiscardOpen(false);
+    onClose();
+    after?.();
+  }, [onClose]);
+
+  const cancelDiscard = useCallback(() => {
+    pendingActionRef.current = null;
+    setDiscardOpen(false);
+  }, []);
+
+  const requestClose = useCallback((afterClose?: () => void) => {
+    if (dirty) {
+      pendingActionRef.current = afterClose ?? null;
+      setDiscardOpen(true);
+      return;
+    }
+    onClose();
+    afterClose?.();
+  }, [dirty, onClose]);
+
+  // Escape key closes the discard dialog, or the whole modal when clean.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (discardOpen) { setDiscardOpen(false); return; }
+      requestClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, discardOpen, requestClose]);
+
+  // Native unsaved-changes prompt on browser refresh / close tab.
+  useEffect(() => {
+    if (!open || !dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [open, dirty]);
+
   const addDraftQuestion = useCallback(() => {
     const draft: CreateDraft = {
       localId: `q-${Date.now()}`,
@@ -184,11 +236,13 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
     setDraftExplanation("");
     setDraftOpts(["", "", "", ""]);
     setDraftError(null);
-  }, [draftQuestion, draftType, draftCorrect, draftExplanation, draftOpts, topicTag]);
+    markDirty();
+  }, [draftQuestion, draftType, draftCorrect, draftExplanation, draftOpts, topicTag, markDirty]);
 
   const removeDraftQuestion = useCallback((localId: string) => {
     setDraftQuestions((prev) => prev.filter((q) => q.localId !== localId));
-  }, []);
+    markDirty();
+  }, [markDirty]);
 
   const buildQuizQuestions = useCallback((): QuizQuestion[] =>
     draftQuestions.map((q) => ({
@@ -305,12 +359,13 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-start justify-center p-4 overflow-y-auto"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
+    <>
+      <div
+        className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-start justify-center p-4 overflow-y-auto"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) requestClose();
+        }}
+      >
       <div className="bg-card border border-border rounded-2xl max-w-5xl w-full shadow-xl my-6 px-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between border-b border-border pt-4 pb-6">
           <div className="flex items-center space-x-2 flex-1 min-w-0">
@@ -339,7 +394,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={() => requestClose()}
             className="p-2 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -349,10 +404,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
         {onOpenAI && (
           <button
             type="button"
-            onClick={() => {
-              onClose();
-              onOpenAI();
-            }}
+            onClick={() => requestClose(onOpenAI)}
             className="w-full inline-flex items-center justify-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5" />
@@ -371,7 +423,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                 </div>
                 <select
                   value={scope}
-                  onChange={(e) => setScope(e.target.value as "teacher" | "student")}
+                  onChange={(e) => {
+                    setScope(e.target.value as "teacher" | "student");
+                    markDirty();
+                  }}
                   className="w-full p-2 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary font-semibold"
                 >
                   <option value="teacher">Course Subject Quiz (For Enrolled Class Students)</option>
@@ -393,7 +448,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                 <input
                   type="text"
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    markDirty();
+                  }}
                   placeholder={
                     scope === "teacher"
                       ? "e.g. Data Structures Midterm Examination"
@@ -413,7 +471,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                   ) : (
                     <select
                       value={subjectId}
-                      onChange={(e) => setSubjectId(e.target.value)}
+                      onChange={(e) => {
+                    setSubjectId(e.target.value);
+                    markDirty();
+                  }}
                       className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     >
                       <option value="">Select a subject (optional)</option>
@@ -438,7 +499,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                   type="number"
                   min={1}
                   value={timeLimit}
-                  onChange={(e) => setTimeLimit(Number(e.target.value))}
+                  onChange={(e) => {
+                    setTimeLimit(Number(e.target.value));
+                    markDirty();
+                  }}
                   className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
@@ -448,7 +512,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                 <input
                   type="text"
                   value={topicTag}
-                  onChange={(e) => setTopicTag(e.target.value)}
+                  onChange={(e) => {
+                    setTopicTag(e.target.value);
+                    markDirty();
+                  }}
                   placeholder="e.g. Core Concepts"
                   className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                 />
@@ -463,7 +530,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                     type="checkbox"
                     id="create-limit-attempts"
                     checked={limitAttempts}
-                    onChange={(e) => setLimitAttempts(e.target.checked)}
+                    onChange={(e) => {
+                      setLimitAttempts(e.target.checked);
+                      markDirty();
+                    }}
                     className="w-4 h-4 accent-primary cursor-pointer"
                   />
                   <label htmlFor="create-limit-attempts" className="font-bold text-foreground text-xs cursor-pointer">
@@ -478,7 +548,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                       min={1}
                       max={99}
                       value={attempts}
-                      onChange={(e) => setAttempts(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
+                      onChange={(e) => {
+                      setAttempts(Math.max(1, Math.min(99, Number(e.target.value) || 1)));
+                      markDirty();
+                    }}
                       className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                   </div>
@@ -488,7 +561,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                     type="checkbox"
                     id="create-reveal-answers"
                     checked={revealAnswers}
-                    onChange={(e) => setRevealAnswers(e.target.checked)}
+                    onChange={(e) => {
+                      setRevealAnswers(e.target.checked);
+                      markDirty();
+                    }}
                     className="w-4 h-4 accent-primary cursor-pointer"
                   />
                   <label htmlFor="create-reveal-answers" className="font-bold text-foreground text-xs cursor-pointer">
@@ -500,7 +576,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                   <input
                     type="datetime-local"
                     value={deadline}
-                    onChange={(e) => setDeadline(e.target.value)}
+                    onChange={(e) => {
+                      setDeadline(e.target.value);
+                      markDirty();
+                    }}
                     className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                   <p className="text-[11px] text-muted-foreground mt-1">
@@ -536,7 +615,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                   <input
                     type="text"
                     value={draftQuestion}
-                    onChange={(e) => setDraftQuestion(e.target.value)}
+                    onChange={(e) => {
+                      setDraftQuestion(e.target.value);
+                      markDirty();
+                    }}
                     placeholder="Type the question..."
                     className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
                   />
@@ -545,7 +627,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                   <label className="block text-[11px] font-bold text-muted-foreground mb-1">Question Type</label>
                   <select
                     value={draftType}
-                    onChange={(e) => setDraftType(e.target.value as CreateDraft["type"])}
+                    onChange={(e) => {
+                      setDraftType(e.target.value as CreateDraft["type"]);
+                      markDirty();
+                    }}
                     className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
                   >
                     {QUESTION_TYPES.map((t) => (
@@ -572,49 +657,58 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                 <div>
                   <label className="block text-[11px] font-bold text-muted-foreground mb-1">Correct Answer</label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
-                    {[0, 1].map((tfIdx) => (
-                      <div
-                        key={tfIdx}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => {
-                          setDraftCorrect(tfIdx === 0 ? "True" : "False");
-                          setDraftError(null);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            e.currentTarget.click();
-                          }
-                        }}
-                        className={`flex items-center p-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-                          draftCorrect === (tfIdx === 0 ? "True" : "False")
-                            ? CORRECT_ANSWER_CARD_CLASS
-                            : "bg-muted/40 border-border text-muted-foreground hover:bg-muted"
-                        }`}
-                      >
-                        <span className={`w-5 h-5 rounded-full ${CORRECT_ANSWER_CHIP_CLASS} text-[10px] font-bold flex items-center justify-center shrink-0 mr-2`}>
-                          {tfIdx === 0 ? "True" : "False"}
-                        </span>
-                        <span className="truncate flex-1">{tfIdx === 0 ? "True" : "False"}</span>
-                        {draftCorrect === (tfIdx === 0 ? "True" : "False") && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                      </div>
-                    ))}
+                    {[0, 1].map((tfIdx) => {
+                      const label = tfIdx === 0 ? "True" : "False";
+                      return (
+                        <div key={tfIdx} className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              setDraftCorrect(label);
+                              setDraftError(null);
+                              markDirty();
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                e.currentTarget.click();
+                              }
+                            }}
+                            className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 cursor-pointer transition-all ${draftCorrect === label ? CORRECT_ANSWER_CARD_CLASS : "bg-muted/40 border-border text-muted-foreground hover:bg-muted"}`}
+                          >
+                            {draftCorrect === label ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : null}
+                          </button>
+                          <input
+                            type="text"
+                            value={label}
+                            disabled
+                            readOnly
+                            className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
                 <>
                   <div>
-                    <label className="text-[11px] font-bold text-muted-foreground">Correct Answer Option:</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
-                      {[...Array(4)].map((_, i) => (
-                        <div
-                          key={i}
+                    <label className="block text-[11px] font-bold text-muted-foreground mb-1">Answer Options</label>
+                    <p className="text-[10px] text-muted-foreground mt-1">Tap the correct answer letter.</p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <button
+                          type="button"
                           role="button"
                           tabIndex={0}
                           onClick={() => {
                             setDraftCorrect(i);
                             setDraftError(null);
+                            markDirty();
                           }}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
@@ -622,46 +716,27 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                               e.currentTarget.click();
                             }
                           }}
-                          className={`flex items-center p-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${draftCorrect === i ? CORRECT_ANSWER_CARD_CLASS : "bg-muted/40 border-border text-muted-foreground hover:bg-muted"}`}
+                          className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 cursor-pointer transition-all ${draftCorrect === i ? CORRECT_ANSWER_CARD_CLASS : "bg-muted/40 border-border text-muted-foreground hover:bg-muted"}`}
                         >
-                          <span className={`w-5 h-5 rounded-full ${CORRECT_ANSWER_CHIP_CLASS} text-[10px] font-bold flex items-center justify-center shrink-0 mr-2`}>
-                            {String.fromCharCode(65 + i)}
+                          <span className="text-[10px] font-bold">
+                            {draftCorrect === i ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> : String.fromCharCode(65 + i)}
                           </span>
-                          <span className="truncate flex-1">Option {String.fromCharCode(65 + i)}</span>
-                          {draftCorrect === i && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-muted-foreground mb-1">Option Inputs</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {[
-                        { label: "Option A", value: draftOpts[0], idx: 0 },
-                        { label: "Option B", value: draftOpts[1], idx: 1 },
-                        { label: "Option C", value: draftOpts[2], idx: 2 },
-                        { label: "Option D", value: draftOpts[3], idx: 3 },
-                      ].map((opt) => (
-                        <div key={opt.idx}>
-                          <label className="block text-[10px] font-bold text-muted-foreground mb-1">
-                            {opt.label}
-                          </label>
-                          <input
-                            type="text"
-                            value={opt.value}
-                            onChange={(e) => {
-                              const updated = [...draftOpts];
-                              updated[opt.idx] = e.target.value;
-                              setDraftOpts(updated);
-                              setDraftError(null);
-                            }}
-                            placeholder={`Enter ${opt.label.toLowerCase()}`}
-                            className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
-                          />
-                        </div>
-                      ))}
-                    </div>
+                        </button>
+                        <input
+                          type="text"
+                          value={draftOpts[i]}
+                          onChange={(e) => {
+                            const updated = [...draftOpts];
+                            updated[i] = e.target.value;
+                            setDraftOpts(updated);
+                            setDraftError(null);
+                            markDirty();
+                          }}
+                          placeholder={`Option ${String.fromCharCode(65 + i)}`}
+                          className="flex-1 min-w-0 p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
+                        />
+                      </div>
+                    ))}
                   </div>
                 </>
               )}
@@ -671,7 +746,10 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                 <input
                   type="text"
                   value={draftExplanation}
-                  onChange={(e) => setDraftExplanation(e.target.value)}
+                    onChange={(e) => {
+                      setDraftExplanation(e.target.value);
+                      markDirty();
+                    }}
                   placeholder="Brief explanation for why this answer is correct..."
                   className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
                 />
@@ -707,7 +785,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
 
           <div className="flex items-center justify-end space-x-2 pt-2 pb-8 border-t border-border">
             <button
-              onClick={onClose}
+              onClick={() => requestClose()}
               className="px-4 py-2 bg-muted text-foreground rounded-xl text-xs font-bold cursor-pointer"
             >
               Cancel
@@ -730,5 +808,17 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
         </form>
       </div>
     </div>
+
+      <ConfirmDialog
+        open={discardOpen}
+        title={quizToEdit ? "Discard changes?" : "Discard this quiz?"}
+        message={quizToEdit ? "Your unsaved changes to this quiz will be lost if you leave." : "You have entered quiz details or questions that have not been saved. If you leave now, all inputs will be lost."}
+        confirmLabel="Discard & Leave"
+        cancelLabel="Keep Editing"
+        destructive
+        onConfirm={confirmDiscard}
+        onCancel={cancelDiscard}
+      />
+    </>
   );
 }

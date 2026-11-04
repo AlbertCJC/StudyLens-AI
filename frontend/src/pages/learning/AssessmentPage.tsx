@@ -23,6 +23,7 @@ import { authFetch } from "../../utils/authFetch";
 import type { Quiz, QuizQuestion, QuizAttempt, Subject, QuizFeedbackItem, QuestionType } from "../../types";
 import { Pagination, slicePage } from "../../components/Pagination";
 import { QuizCreateModal } from "../../components/QuizCreateModal";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 
 const AI_DEFAULT_QUIZ_DESCRIPTION = "Automated Bloom's Taxonomy Quiz generated via Groq Inference (GPT-OSS-120B).";
 
@@ -287,6 +288,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
   // Edit Quiz Modal
   const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
+  const [editDiscardOpen, setEditDiscardOpen] = useState(false);
+  const [editDirty, setEditDirty] = useState(false);
+  const editPendingRef = useRef<(() => void) | null>(null);
+  const markEditDirty = useCallback(() => setEditDirty(true), []);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editSubjectId, setEditSubjectId] = useState("");
@@ -698,6 +703,52 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
       console.error("Save edit quiz error:", err);
     }
   };
+
+  const confirmEditDiscard = useCallback(() => {
+    const after = editPendingRef.current;
+    editPendingRef.current = null;
+    setEditDiscardOpen(false);
+    setEditingQuiz(null);
+    after?.();
+  }, []);
+
+  const cancelEditDiscard = useCallback(() => {
+    editPendingRef.current = null;
+    setEditDiscardOpen(false);
+  }, []);
+
+  const requestCloseEdit = useCallback((afterClose?: () => void) => {
+    if (editDirty) {
+      editPendingRef.current = afterClose ?? null;
+      setEditDiscardOpen(true);
+      return;
+    }
+    setEditingQuiz(null);
+    afterClose?.();
+  }, [editDirty]);
+
+  // Escape key closes the discard dialog, or the whole modal when clean.
+  useEffect(() => {
+    if (!editingQuiz) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (editDiscardOpen) { setEditDiscardOpen(false); return; }
+      requestCloseEdit();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editingQuiz, editDiscardOpen, requestCloseEdit]);
+
+  // Native unsaved-changes prompt on browser refresh / close tab.
+  useEffect(() => {
+    if (!editingQuiz || !editDirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [editingQuiz, editDirty]);
 
   const handleTogglePublish = async (quiz: Quiz) => {
     const publish = !quiz.isPublished;
@@ -1752,7 +1803,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
         <div
           className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setEditingQuiz(null);
+            if (e.target === e.currentTarget) requestCloseEdit();
           }}
         >
           <div className="bg-card border border-border p-6 rounded-2xl max-w-5xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
@@ -1767,7 +1818,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                 </div>
               </div>
               <button
-                onClick={() => setEditingQuiz(null)}
+                onClick={() => requestCloseEdit()}
                 className="p-1 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -1787,7 +1838,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                 ) : (
                 <select
                   value={editQuizType}
-                  onChange={(e) => setEditQuizType(e.target.value as "teacher" | "student")}
+                  onChange={(e) => {
+          setEditQuizType(e.target.value as "teacher" | "student");
+          markEditDirty();
+        }}
                   className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary font-semibold"
                 >
                   <option value="teacher">Course Subject Quiz (For Enrolled Class Students)</option>
@@ -1803,7 +1857,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   <input
                     type="text"
                     value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
+                    onChange={(e) => {
+          setEditTitle(e.target.value);
+          markEditDirty();
+        }}
                     className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
@@ -1813,7 +1870,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     <label className="block font-bold text-foreground mb-1">Associated Course Subject</label>
                     <select
                       value={editSubjectId}
-                      onChange={(e) => setEditSubjectId(e.target.value)}
+                      onChange={(e) => {
+          setEditSubjectId(e.target.value);
+          markEditDirty();
+        }}
                       className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     >
                       {subjects
@@ -1833,7 +1893,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                 <textarea
                   rows={2}
                   value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
+                  onChange={(e) => {
+          setEditDescription(e.target.value);
+          markEditDirty();
+        }}
                   className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
                 />
               </div>
@@ -1845,7 +1908,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     type="number"
                     min={1}
                     value={editTimeLimit}
-                    onChange={(e) => setEditTimeLimit(Number(e.target.value))}
+                    onChange={(e) => {
+          setEditTimeLimit(Number(e.target.value));
+          markEditDirty();
+        }}
                     className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
@@ -1865,7 +1931,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     type="checkbox"
                     id="edit-limit-attempts"
                     checked={editLimitAttempts}
-                    onChange={(e) => setEditLimitAttempts(e.target.checked)}
+                    onChange={(e) => {
+          setEditLimitAttempts(e.target.checked);
+          markEditDirty();
+        }}
                     className="w-4 h-4 accent-primary cursor-pointer"
                   />
                   <label htmlFor="edit-limit-attempts" className="font-bold text-foreground text-xs cursor-pointer">
@@ -1880,7 +1949,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                       min={1}
                       max={99}
                       value={editAttempts}
-                      onChange={(e) => setEditAttempts(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
+                      onChange={(e) => {
+          setEditAttempts(Math.max(1, Math.min(99, Number(e.target.value) || 1)));
+          markEditDirty();
+        }}
                       className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                   </div>
@@ -1890,7 +1962,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     type="checkbox"
                     id="edit-reveal-answers"
                     checked={editRevealAnswers}
-                    onChange={(e) => setEditRevealAnswers(e.target.checked)}
+                    onChange={(e) => {
+          setEditRevealAnswers(e.target.checked);
+          markEditDirty();
+        }}
                     className="w-4 h-4 accent-primary cursor-pointer"
                   />
                   <label htmlFor="edit-reveal-answers" className="font-bold text-foreground text-xs cursor-pointer">
@@ -1902,7 +1977,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                   <input
                     type="datetime-local"
                     value={editDeadline}
-                    onChange={(e) => setEditDeadline(e.target.value)}
+                    onChange={(e) => {
+          setEditDeadline(e.target.value);
+          markEditDirty();
+        }}
                     className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                   <p className="text-[11px] text-muted-foreground mt-1">
@@ -1936,6 +2014,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                         topicTag: "General Topic",
                       };
                       setEditQuestions([...editQuestions, newQ]);
+        markEditDirty();
                       setEditScrollTick((t) => t + 1);
                     }}
                     className="px-3 py-1 bg-primary/10 text-primary hover:bg-primary/20 rounded-lg text-xs font-bold cursor-pointer flex items-center space-x-1"
@@ -1965,7 +2044,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                                     ? (typeof updated[idx].correctAnswer === "string" ? updated[idx].correctAnswer : "")
                                     : 0,
                               };
-                              setEditQuestions(updated);
+                              setEditQuestions(updated); markEditDirty();
                             }}
                             className="p-1 bg-card border border-border rounded text-[11px] font-semibold"
                           >
@@ -1975,7 +2054,10 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                           </select>
                           <button
                             type="button"
-                            onClick={() => setEditQuestions(editQuestions.filter((_, i) => i !== idx))}
+                            onClick={() => {
+                      setEditQuestions(editQuestions.filter((_, i) => i !== idx));
+                      markEditDirty();
+                    }}
                             className="text-rose-600 hover:text-rose-700 text-xs cursor-pointer p-1"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1992,7 +2074,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                         onChange={(e) => {
                           const updated = [...editQuestions];
                           updated[idx] = { ...updated[idx], question: e.target.value };
-                          setEditQuestions(updated);
+                          setEditQuestions(updated); markEditDirty();
                         }}
                         placeholder="Enter question prompt..."
                         className="w-full text-xs font-bold text-foreground bg-transparent border-b border-dashed border-border focus:border-primary focus:outline-none pb-1"
@@ -2007,7 +2089,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                             onChange={(e) => {
                               const updated = [...editQuestions];
                               updated[idx] = { ...updated[idx], correctAnswer: e.target.value };
-                              setEditQuestions(updated);
+                              setEditQuestions(updated); markEditDirty();
                             }}
                             placeholder="Type exact key term..."
                             className="w-full p-2 bg-muted/30 border border-border rounded-xl text-xs font-semibold text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
@@ -2026,7 +2108,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                                   onClick={() => {
                                     const updated = [...editQuestions];
                                     updated[idx] = { ...updated[idx], correctAnswer: tfIdx };
-                                    setEditQuestions(updated);
+                                    setEditQuestions(updated); markEditDirty();
                                   }}
                                   className={`p-2.5 rounded-xl border text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
                                     tfCorrect
@@ -2056,7 +2138,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                                   ...updated[idx],
                                   correctAnswer: e.target.checked ? [0] : 0,
                                 };
-                                setEditQuestions(updated);
+                                setEditQuestions(updated); markEditDirty();
                               }}
                               className="accent-primary"
                             />
@@ -2089,7 +2171,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                                     } else {
                                       updated[idx] = { ...updated[idx], correctAnswer: optIdx };
                                     }
-                                    setEditQuestions(updated);
+                                    setEditQuestions(updated); markEditDirty();
                                   }}
                                   onKeyDown={(e) => {
                                     if (e.key === "Enter" || e.key === " ") {
@@ -2116,7 +2198,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                                       const opts = [...(updated[idx].options || [])];
                                       opts[optIdx] = e.target.value;
                                       updated[idx] = { ...updated[idx], options: opts };
-                                      setEditQuestions(updated);
+                                      setEditQuestions(updated); markEditDirty();
                                     }}
                                     placeholder={`Option ${String.fromCharCode(65 + optIdx)}`}
                                     className="flex-1 min-w-0 bg-transparent focus:outline-none text-foreground"
@@ -2142,7 +2224,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                           onChange={(e) => {
                             const updated = [...editQuestions];
                             updated[idx] = { ...updated[idx], explanation: e.target.value };
-                            setEditQuestions(updated);
+                            setEditQuestions(updated); markEditDirty();
                           }}
                           placeholder="Brief explanation for why this answer is correct..."
                           className="w-full p-1.5 bg-card border border-border rounded text-[11px]"
@@ -2156,7 +2238,7 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
 
             <div className="flex items-center justify-end space-x-2 pt-3 border-t border-border">
               <button
-                onClick={() => setEditingQuiz(null)}
+                onClick={() => requestCloseEdit()}
                 className="px-4 py-2 bg-muted text-foreground rounded-xl text-xs font-bold cursor-pointer hover:bg-muted/80"
               >
                 Cancel
@@ -2172,17 +2254,30 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
           </div>
         </div>
       )}
-      <QuizCreateModal
-        open={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        onSaved={(saved) => setQuizzes((prev) => [saved, ...prev])}
-        subjects={subjects.filter(
-          (sub) => currentUser?.role !== 'teacher' || sub.teacherId === currentUser.id
-        )}
-        currentUserId={currentUser?.id}
-        currentUserName={currentUser?.name}
-        canManageCourseQuizzes={canManageCourseQuizzes}
-        defaultScope={canManageCourseQuizzes ? 'teacher' : 'student'}
+      {showCreateModal && (
+        <QuizCreateModal
+          open={showCreateModal}
+          onClose={() => setShowCreateModal(false)}
+          onSaved={(saved) => setQuizzes((prev) => [saved, ...prev])}
+          subjects={subjects.filter(
+            (sub) => currentUser?.role !== 'teacher' || sub.teacherId === currentUser.id
+          )}
+          currentUserId={currentUser?.id}
+          currentUserName={currentUser?.name}
+          canManageCourseQuizzes={canManageCourseQuizzes}
+          defaultScope={canManageCourseQuizzes ? 'teacher' : 'student'}
+        />
+      )}
+
+      <ConfirmDialog
+        open={editDiscardOpen}
+        title="Discard quiz changes?"
+        message="You have modified this quiz and the changes have not been saved. If you leave now, your edits will be lost."
+        confirmLabel="Discard & Leave"
+        cancelLabel="Keep Editing"
+        destructive
+        onConfirm={confirmEditDiscard}
+        onCancel={cancelEditDiscard}
       />
     </div>
   );
