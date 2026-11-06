@@ -835,13 +835,43 @@ def _rate_limit_exceeded(key, limit):
         return False
 
 
+def _rate_limit_status(key, limit):
+    """Returns ``(used, remaining, reset_seconds)`` for ``key`` in the current window.
+
+    ``reset_seconds`` is how long until the oldest call ages out of the sliding
+    window (i.e. the earliest a blocked caller can retry).
+    """
+    now = time.monotonic()
+    with _RATE_LOCK:
+        hits = list(_RATE_HITS.get(key, []))
+        while hits and now - hits[0] > _RATE_WINDOW_SECONDS:
+            hits.pop(0)
+        used = len(hits)
+        remaining = max(0, limit - used)
+        reset_seconds = max(0.0, _RATE_WINDOW_SECONDS - (now - hits[0])) if hits else 0.0
+        return used, remaining, reset_seconds
+
+
 def _ai_rate_limited():
-    """Returns a 429 JSON response if the caller is hammering AI generation."""
+    """Returns a 429 JSON response if the caller is hammering AI generation.
+
+    The response carries ``remaining`` calls and ``resetAtSeconds`` so the UI can tell
+    the user exactly when AI generation becomes available again.
+    """
     user_id = (getattr(request, "current_user", None) or {}).get("id") or request.remote_addr or "anon"
-    if _rate_limit_exceeded(f"ai:{user_id}", MAX_AI_CALLS_PER_MINUTE):
+    key = f"ai:{user_id}"
+    if _rate_limit_exceeded(key, MAX_AI_CALLS_PER_MINUTE):
+        _, remaining, reset_seconds = _rate_limit_status(key, MAX_AI_CALLS_PER_MINUTE)
+        reset_seconds = max(1, int(round(reset_seconds)))
+        reset_at = (
+            datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=reset_seconds)
+        ).isoformat().replace("+00:00", "Z")
         return jsonify({
             "error": f"Too many AI requests. Please wait a moment and try again (limit: {MAX_AI_CALLS_PER_MINUTE} per minute).",
             "code": "RATE_LIMITED",
+            "remaining": remaining,
+            "resetAtSeconds": reset_seconds,
+            "resetAt": reset_at,
         }), 429
     return None
 
@@ -1210,6 +1240,7 @@ def handle_groq_error(err):
         "AI_SERVICE_DOWN": 502,
         "MODEL_NOT_FOUND": 502,
         "API_ERROR": 502,
+        "COUNT_EXCEEDS_MAX": 400,
     }
     status = status_map.get(err.code, 502)
     return jsonify({"error": err.message, "code": err.code}), status
@@ -1326,6 +1357,21 @@ def _clamp_count(raw, fallback=5, minimum=1, maximum=20):
     if value > maximum:
         value = maximum
     return value
+
+
+def _require_within_max(raw, maximum, label="questions"):
+    """Raises a friendly COUNT_EXCEEDS_MAX error when an explicit request asks for more
+    than ``maximum`` items, instead of silently truncating the request. Non-numeric or
+    missing values are left to ``_clamp_count`` so defaults still apply."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return
+    if value > maximum:
+        raise GroqAPIError(
+            "COUNT_EXCEEDS_MAX",
+            f"You can generate a maximum of {maximum} {label} only. Please reduce the number and try again.",
+        )
 
 def _clamp_attempts(raw, fallback=0):
     """Safely parses a max-attempts value; 0 means unlimited, capped at 99."""
@@ -2194,6 +2240,19 @@ def update_user(user_id):
         user.role = data["role"]
     if data.get("department"):
         user.department = data["department"]
+    if data.get("email"):
+        new_email = str(data["email"]).strip().lower()
+        if new_email != user.email:
+            existing = UserModel.query.filter(db.func.lower(UserModel.email) == new_email).first()
+            if existing and existing.user_id != user_id:
+                return jsonify({"error": "Email already in use.", "code": "EMAIL_EXISTS"}), 400
+            user.email = new_email
+            # Self-initiated email changes keep the account verified so the user
+            # can still sign in with the new email immediately. Admin-initiated
+            # changes require re-verification.
+            if not is_self:
+                user.email_verified = 0
+                _issue_email_verify_code(user)
     if "avatar" in data:
         # Removal sends null/""; also guard against literal junk strings
         # ("None"/"null"/"undefined") that must never be stored as a URL.
@@ -2303,6 +2362,39 @@ def upload_user_avatar(user_id):
         return jsonify({"error": "Could not save the avatar. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
     log_action(user.user_id, user.to_dict()["name"], user.role, "USER_UPDATED", f"Profile picture updated for {user.email}")
     return jsonify(user.to_dict()), 200
+
+
+@app.route("/api/users/<user_id>/stats", methods=["GET"])
+@require_auth
+def get_user_stats(user_id):
+    current_user = getattr(request, "current_user", None) or {}
+    is_admin = current_user.get("role") == "admin"
+    is_self = current_user.get("id") == user_id
+    if not (is_admin or is_self):
+        return jsonify({"error": "You do not have permission to view these stats.", "code": "FORBIDDEN"}), 403
+
+    user = db.session.get(UserModel, user_id)
+    if not user:
+        return jsonify({"error": "User not found.", "code": "NOT_FOUND"}), 404
+
+    quiz_attempts = QuizAttemptModel.query.filter_by(student_id=user_id).all()
+    quizzes_taken = len(quiz_attempts)
+    total_time_seconds = sum((a.time_taken or 0) for a in quiz_attempts)
+    study_hours = round(total_time_seconds / 3600, 1)
+
+    flashcards_created = AIGeneratedContentModel.query.filter_by(
+        generated_by=user_id, content_type="Flashcard"
+    ).count()
+
+    materials_uploaded = MaterialModel.query.filter_by(teacher_id=user_id).count()
+
+    return jsonify({
+        "quizzesTaken": quizzes_taken,
+        "flashcardsCreated": flashcards_created,
+        "studyHours": study_hours,
+        "materialsUploaded": materials_uploaded,
+    }), 200
+
 
 @app.route("/api/users/<user_id>", methods=["DELETE"])
 @require_roles("admin")
@@ -2780,6 +2872,375 @@ def get_materials():
 
     return jsonify([m.to_dict() for m in mats])
 
+@app.route("/api/materials/<material_id>/download", methods=["GET"])
+@require_auth
+def download_material_file(material_id):
+    """Download the original uploaded material file (not a generated notes PDF).
+
+    Mirrors the quiz download contract: the server streams the stored file with
+    ``as_attachment=True`` so the browser saves the exact PDF/document the user
+    previews. Access follows the same visibility rules as GET /api/materials.
+    """
+    import re
+    from urllib.parse import urlparse
+    from urllib.request import urlopen
+
+    def _fetch_stored_bytes(target_url):
+        """Fetch a stored file, working around Cloudinary's default PDF block.
+
+        Free Cloudinary accounts return 401 for PDFs delivered through the image
+        pipeline. The authenticated /image/download endpoint still works, so for
+        image-backed PDFs we swap the public URL for a short-lived signed one.
+        Office documents stored as raw resources use the raw download pipeline.
+        """
+        fetch_url = target_url
+        if ext in ("pdf", "doc", "docx", "ppt", "pptx") and "/image/upload/" in target_url:
+            try:
+                import cloudinary
+                import cloudinary.utils
+
+                cloudinary.config(cloudinary_url=os.getenv("CLOUDINARY_URL", "").strip())
+                path = urlparse(target_url).path
+                marker = "/image/upload/"
+                rest = path[path.find(marker) + len(marker):]
+                parts = [p for p in rest.split("/") if p]
+                if parts and re.fullmatch(r"v\d+", parts[0]):
+                    parts = parts[1:]
+                public_id = re.sub(r"\.(pdf|doc|docx|ppt|pptx)$", "", "/".join(parts), flags=re.I)
+                if public_id:
+                    resource_type = "raw" if ext != "pdf" else "image"
+                    fetch_url = cloudinary.utils.private_download_url(
+                        public_id, ext, resource_type=resource_type, type="upload"
+                    )
+            except Exception:
+                fetch_url = target_url
+
+        with urlopen(fetch_url, timeout=30) as response:
+            return response.read()
+
+    mat = db.session.get(MaterialModel, material_id)
+    if not mat:
+        return jsonify({"error": "Material not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role") or ""
+    user_id = current_user.get("id") or ""
+
+    if role == "teacher":
+        managed_subject_ids = {
+            s.subject_id for s in SubjectModel.query.filter_by(teacher_id=user_id).all()
+        }
+        allowed = mat.subject_id in managed_subject_ids or mat.teacher_id == user_id
+    elif role == "student":
+        enrolled_ids = {
+            e.subject_id
+            for e in StudentSubjectModel.query.filter_by(student_id=user_id).all()
+        } if user_id else set()
+        allowed = bool(
+            (mat.subject_id and mat.subject_id in enrolled_ids)
+            or (mat.material_type == "personal" and mat.teacher_id == user_id)
+        )
+    else:
+        allowed = role == "admin"
+
+    if not allowed:
+        return jsonify({"error": "You do not have access to this material.", "code": "FORBIDDEN"}), 403
+
+    url = (mat.file_url or "").strip()
+    if not url:
+        return jsonify({"error": "This material has no downloadable file.", "code": "NOT_FOUND"}), 404
+
+    ext = re.sub(r"[^a-z0-9]", "", (mat.file_type or "").lower().lstrip(".")) or "bin"
+    safe_title = re.sub(r"[^A-Za-z0-9 _-]+", "", mat.title or "material").strip()[:80] or "material"
+    download_name = f"{safe_title}.{ext}"
+    mimetype = mimetypes.guess_type(download_name)[0] or "application/octet-stream"
+
+    if url.startswith("/uploads/"):
+        name = os.path.basename(url.replace("\\", "/"))
+        real_root = os.path.realpath(_UPLOADS_DIR).rstrip("\\/")
+        real_file = os.path.realpath(os.path.join(_UPLOADS_DIR, name))
+        if not (real_file == real_root or real_file.startswith(real_root + os.sep)) or not os.path.isfile(real_file):
+            return jsonify({"error": "File not found.", "code": "NOT_FOUND"}), 404
+        return send_file(real_file, mimetype=mimetype, as_attachment=True, download_name=download_name)
+
+    if not url.lower().startswith(("http://", "https://")):
+        return jsonify({"error": "Unsupported file location.", "code": "BAD_REQUEST"}), 400
+
+    try:
+        file_bytes = _fetch_stored_bytes(url)
+    except Exception:
+        return jsonify({"error": "Could not fetch the stored file.", "code": "STORAGE_UNAVAILABLE"}), 502
+
+    # Serve PDFs and Word docs inline (not attachment) so browsers render them
+    # intact in <embed>/<iframe> preview. Other files still download.
+    as_attachment = ext not in ("pdf", "doc", "docx")
+
+    return send_file(
+        io.BytesIO(file_bytes),
+        mimetype=mimetype,
+        as_attachment=as_attachment,
+        download_name=download_name,
+    )
+
+
+@app.route("/api/materials/<material_id>/convert-to-pdf", methods=["GET"])
+@require_auth
+def convert_material_to_pdf(material_id):
+    """Convert a DOC/DOCX material to a real PDF download.
+
+    Uses LibreOffice headless (soffice) when available so the output preserves
+    formatting, tables, and images. Falls back to rendering extracted text via
+    reportlab if soffice is missing or conversion fails, so the download never
+    hard-fails. Access follows the same rules as GET /api/materials.
+    """
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    from urllib.parse import urlparse
+    from urllib.request import urlopen
+
+    def _fetch_stored_bytes(target_url):
+        fetch_url = target_url
+        if ext in ("pdf", "doc", "docx", "ppt", "pptx") and "/image/upload/" in target_url:
+            try:
+                import cloudinary
+                import cloudinary.utils
+
+                cloudinary.config(cloudinary_url=os.getenv("CLOUDINARY_URL", "").strip())
+                path = urlparse(target_url).path
+                marker = "/image/upload/"
+                rest = path[path.find(marker) + len(marker):]
+                parts = [p for p in rest.split("/") if p]
+                if parts and re.fullmatch(r"v\d+", parts[0]):
+                    parts = parts[1:]
+                public_id = re.sub(r"\.(pdf|doc|docx|ppt|pptx)$", "", "/".join(parts), flags=re.I)
+                if public_id:
+                    resource_type = "raw" if ext != "pdf" else "image"
+                    fetch_url = cloudinary.utils.private_download_url(
+                        public_id, ext, resource_type=resource_type, type="upload"
+                    )
+            except Exception:
+                fetch_url = target_url
+
+        with urlopen(fetch_url, timeout=30) as response:
+            return response.read()
+
+    mat = db.session.get(MaterialModel, material_id)
+    if not mat:
+        return jsonify({"error": "Material not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    role = current_user.get("role") or ""
+    user_id = current_user.get("id") or ""
+
+    if role == "teacher":
+        managed_subject_ids = {
+            s.subject_id for s in SubjectModel.query.filter_by(teacher_id=user_id).all()
+        }
+        allowed = mat.subject_id in managed_subject_ids or mat.teacher_id == user_id
+    elif role == "student":
+        enrolled_ids = {
+            e.subject_id
+            for e in StudentSubjectModel.query.filter_by(student_id=user_id).all()
+        } if user_id else set()
+        allowed = bool(
+            (mat.subject_id and mat.subject_id in enrolled_ids)
+            or (mat.material_type == "personal" and mat.teacher_id == user_id)
+        )
+    else:
+        allowed = role == "admin"
+
+    if not allowed:
+        return jsonify({"error": "You do not have access to this material.", "code": "FORBIDDEN"}), 403
+
+    ext = re.sub(r"[^a-z0-9]", "", (mat.file_type or "").lower().lstrip(".")) or "bin"
+    if ext not in ("doc", "docx"):
+        return jsonify({
+            "error": "PDF conversion is only available for Word (.doc/.docx) documents.",
+            "code": "BAD_REQUEST",
+        }), 400
+
+    url = (mat.file_url or "").strip()
+    if not url:
+        return jsonify({"error": "This material has no downloadable file.", "code": "NOT_FOUND"}), 404
+
+    safe_title = re.sub(r"[^A-Za-z0-9 _-]+", "", mat.title or "material").strip()[:80] or "material"
+
+    def _render_text_fallback():
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=letter,
+            rightMargin=0.8 * inch,
+            leftMargin=0.8 * inch,
+            topMargin=0.8 * inch,
+            bottomMargin=0.8 * inch,
+            title=safe_title,
+            author="StudyLens AI",
+        )
+        styles = getSampleStyleSheet()
+        body = styles["BodyText"]
+        story = [Paragraph(safe_title, styles["Heading1"]), Spacer(1, 12)]
+        text = mat.extracted_text or mat.description or mat.title or ""
+        for para in text.split("\n"):
+            if para.strip():
+                story.append(Paragraph(para, body))
+            else:
+                story.append(Spacer(1, 6))
+        doc.build(story)
+        buf.seek(0)
+        return buf.read()
+
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        for cand in [
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        ]:
+            if os.path.isfile(cand):
+                soffice = cand
+                break
+
+    pdf_bytes = None
+    file_bytes = None
+
+    if url.startswith("/uploads/"):
+        name = os.path.basename(url.replace("\\", "/"))
+        real_root = os.path.realpath(_UPLOADS_DIR).rstrip("\\/")
+        real_file = os.path.realpath(os.path.join(_UPLOADS_DIR, name))
+        if (real_file == real_root or real_file.startswith(real_root + os.sep)) and os.path.isfile(real_file):
+            with open(real_file, "rb") as f:
+                file_bytes = f.read()
+    elif url.lower().startswith(("http://", "https://")):
+        try:
+            file_bytes = _fetch_stored_bytes(url)
+        except Exception:
+            file_bytes = None
+
+    if soffice and file_bytes:
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                src_path = os.path.join(tmpdir, f"material.{ext}")
+                with open(src_path, "wb") as f:
+                    f.write(file_bytes)
+                subprocess.run(
+                    [soffice, "--headless", "--convert-to", "pdf", "--outdir", tmpdir, src_path],
+                    check=True,
+                    capture_output=True,
+                    timeout=180,
+                )
+                pdf_path = os.path.join(tmpdir, "material.pdf")
+                if os.path.isfile(pdf_path):
+                    with open(pdf_path, "rb") as f:
+                        pdf_bytes = f.read()
+        except Exception as e:
+            print(f"[Convert] soffice conversion failed: {e}")
+            pdf_bytes = None
+
+    if pdf_bytes is None:
+        pdf_bytes = _render_text_fallback()
+
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"{safe_title}.pdf",
+    )
+
+
+@app.route("/api/materials/<material_id>/view", methods=["GET"])
+def view_material_file(material_id):
+    """Serve the material file inline for Office Viewer and browser preview.
+
+    Unlike /download (as_attachment=True), this serves the file inline
+    (as_attachment=False) with CORS headers so Microsoft Office Viewer can
+    fetch it server-side and embed it in an <iframe>.
+
+    No session auth is enforced here: Office Viewer fetches server-side and
+    cannot send cookies. Materials are already listed behind auth in
+    GET /api/materials; this endpoint simply renders the file inline.
+    """
+    import re
+    from urllib.parse import urlparse
+    from urllib.request import urlopen
+
+    def _fetch_stored_bytes(target_url):
+        fetch_url = target_url
+        if ext in ("pdf", "doc", "docx", "ppt", "pptx") and (
+            "/image/upload/" in target_url or "/raw/upload/" in target_url
+        ):
+            try:
+                import cloudinary
+                import cloudinary.utils
+
+                cloudinary.config(cloudinary_url=os.getenv("CLOUDINARY_URL", "").strip())
+                path = urlparse(target_url).path
+                marker = "/raw/upload/" if "/raw/upload/" in path else "/image/upload/"
+                rest = path[path.find(marker) + len(marker):]
+                parts = [p for p in rest.split("/") if p]
+                if parts and re.fullmatch(r"v\d+", parts[0]):
+                    parts = parts[1:]
+                public_id = re.sub(r"\.(pdf|doc|docx|ppt|pptx)$", "", "/".join(parts), flags=re.I)
+                if public_id:
+                    resource_type = "raw" if ext != "pdf" else "image"
+                    fetch_url = cloudinary.utils.private_download_url(
+                        public_id, ext, resource_type=resource_type, type="upload"
+                    )
+            except Exception:
+                fetch_url = target_url
+
+        with urlopen(fetch_url, timeout=30) as response:
+            return response.read()
+
+    mat = db.session.get(MaterialModel, material_id)
+    if not mat:
+        return jsonify({"error": "Material not found.", "code": "NOT_FOUND"}), 404
+
+    url = (mat.file_url or "").strip()
+    if not url:
+        return jsonify({"error": "This material has no viewable file.", "code": "NOT_FOUND"}), 404
+
+    ext = re.sub(r"[^a-z0-9]", "", (mat.file_type or "").lower().lstrip(".")) or "bin"
+    safe_title = re.sub(r"[^A-Za-z0-9 _-]+", "", mat.title or "material").strip()[:80] or "material"
+    mimetype = mimetypes.guess_type(f"{safe_title}.{ext}")[0] or "application/octet-stream"
+
+    if url.startswith("/uploads/"):
+        name = os.path.basename(url.replace("\\", "/"))
+        real_root = os.path.realpath(_UPLOADS_DIR).rstrip("\\/")
+        real_file = os.path.realpath(os.path.join(_UPLOADS_DIR, name))
+        if not (real_file == real_root or real_file.startswith(real_root + os.sep)) or not os.path.isfile(real_file):
+            return jsonify({"error": "File not found.", "code": "NOT_FOUND"}), 404
+        response = send_file(real_file, mimetype=mimetype, as_attachment=False)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return response
+
+    if not url.lower().startswith(("http://", "https://")):
+        return jsonify({"error": "Unsupported file location.", "code": "BAD_REQUEST"}), 400
+
+    try:
+        file_bytes = _fetch_stored_bytes(url)
+    except Exception:
+        return jsonify({"error": "Could not fetch the stored file.", "code": "STORAGE_UNAVAILABLE"}), 502
+
+    response = send_file(
+        io.BytesIO(file_bytes),
+        mimetype=mimetype,
+        as_attachment=False,
+    )
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
 @app.route("/api/materials/extract", methods=["POST"])
 @require_auth
 def extract_material_text():
@@ -2827,7 +3288,7 @@ def upload_material():
 
     title = request.form.get("title") or os.path.splitext(filename)[0]
     description = request.form.get("description", "Uploaded lecture notes")
-    subject_id = request.form.get("subjectId", "sub-101")
+    subject_id = request.form.get("subjectId", "") or None
     material_type = request.form.get("materialType", "course")
     text_input = request.form.get("textInput", "").strip()
 
@@ -2839,7 +3300,7 @@ def upload_material():
     # Ownership rule: a teacher may only upload course material to a subject they
     # are assigned to manage. Admins may upload anywhere. Personal notes bypass subjects.
     # A blank subject_id means a subjectless draft awaiting assignment (AI saves).
-    if uploader_role == "teacher" and subject_id not in ("", "personal"):
+    if uploader_role == "teacher" and subject_id is not None:
         if not sub:
             return jsonify({"error": "Selected subject was not found.", "code": "NOT_FOUND"}), 404
         if sub.teacher_id != uploader_id:
@@ -3307,6 +3768,7 @@ def generate_quiz_ai():
     if rate_err:
         return rate_err
     text_content = data.get("textContent", "Graph traversal BFS and DFS algorithms.")
+    _require_within_max(data.get("numQuestions", 5), MAX_AI_QUESTIONS)
     num_questions = _clamp_count(data.get("numQuestions", 5), fallback=5, maximum=MAX_AI_QUESTIONS)
     difficulty = data.get("difficulty", "medium")
     
@@ -3474,6 +3936,7 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
     instructions = data.get("instructions") or ""
 
     if mode == "quiz":
+        _require_within_max(data.get("quizCount") or data.get("numQuestions") or 5, MAX_AI_QUESTIONS)
         num_questions = _clamp_count(data.get("quizCount") or data.get("numQuestions") or 5, fallback=5, maximum=MAX_AI_QUESTIONS)
         # The quiz count box was removed from the UI: the prompt is the single source of
         # truth for how many questions to make. Callers that still send an explicit count
@@ -3849,6 +4312,251 @@ def generate_ai_resource():
     return jsonify(saved.to_dict()), 201
 
 
+def _build_quiz_pdf(title, subject_name, questions):
+    """Builds a formatted quiz PDF (question sheet + answer key) and returns a BytesIO buffer.
+
+    Shared by the AI assistant export endpoint and the quiz download endpoint so
+    both produce identical assessment papers. Returns None if ReportLab is missing.
+    """
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib import colors
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, HRFlowable, Spacer, PageBreak, Table, TableStyle,
+        )
+    except Exception:
+        return None
+
+    def sanitize(text):
+        """Reduces text to ASCII so the standard PDF fonts never render missing-glyph squares."""
+        s = str(text or "")
+        replacements = {
+            # Quotes
+            "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
+            "\u00ab": '"', "\u00bb": '"', "\u201a": "'", "\u201b": "'",
+            "\u201e": '"',
+            # Dashes
+            "\u2013": "-", "\u2014": "-", "\u2010": "-", "\u2011": "-",
+            "\u2012": "-", "\u2015": "-", "\u2212": "-", "\u00ad": "-",
+            # Bullets and dots
+            "\u2022": "-", "\u00b7": "-", "\u2023": "-", "\u2024": ".",
+            "\u2025": "..", "\u2026": "...",
+            # Spaces
+            "\u00a0": " ", "\u2000": " ", "\u2001": " ", "\u2002": " ",
+            "\u2003": " ", "\u2004": " ", "\u2005": " ", "\u2006": " ",
+            "\u2007": " ", "\u2008": " ", "\u2009": " ", "\u200a": " ",
+            "\u2028": " ", "\u2029": " ", "\u200b": "", "\ufeff": "",
+            # Other common symbols
+            "\u00a9": "(c)", "\u00ae": "(r)", "\u2122": "(tm)",
+            "\u00a2": "(c)", "\u00a3": "(pound)", "\u00a5": "(yen)",
+            "\u00a4": "(cur)", "\u00a6": "|", "\u00a7": "(s)",
+            "\u00a8": '"', "\u00aa": "a", "\u00ba": "o",
+            "\u00d7": "x", "\u00f7": "/",
+        }
+        for k, v in replacements.items():
+            s = s.replace(k, v)
+        return "".join(ch for ch in s if ch in "\t\n\r" or 32 <= ord(ch) <= 126)
+
+    _SPELL_MAP = {
+        # Quiz types (only genuinely misspelled forms)
+        "identication": "identification", "identifications": "identification",
+        "identifcation": "identification", "identifcations": "identification",
+        "true/fasle": "true/false", "truefalse": "true/false", "t/f": "true/false",
+        "multichoice": "multiple choice", "mcq": "multiple choice",
+        "shortanswer": "identification", "short answer": "identification",
+        # Common misspellings
+        "recieve": "receive", "seperate": "separate", "definately": "definitely",
+        "occured": "occurred", "untill": "until", "arguement": "argument",
+        "embarass": "embarrass", "liason": "liaison", "occurence": "occurrence",
+        "posession": "possession", "recomend": "recommend", "referance": "reference",
+        "begining": "beginning", "calender": "calendar", "cemetary": "cemetery",
+        "colleague": "colleague", "conscience": "conscience",
+        "dilemma": "dilemma", "embarrass": "embarrass", "exceed": "exceed",
+        "exercise": "exercise", "experience": "experience", "foreign": "foreign",
+        "gauge": "gauge", "grateful": "grateful", "harass": "harass",
+        "indispensable": "indispensable", "knowledge": "knowledge",
+        "maintenance": "maintenance", "millennium": "millennium",
+        "necessary": "necessary", "occasion": "occasion", "occurred": "occurred",
+        "parallel": "parallel", "precede": "precede", "principal": "principal",
+        "privilege": "privilege", "receive": "receive", "recommend": "recommend",
+        "referred": "referred", "relevant": "relevant", "separate": "separate",
+        "sergeant": "sergeant", "supersede": "supersede", "threshold": "threshold",
+        "twelfth": "twelfth", "until": "until", "weird": "weird",
+    }
+
+    def correct_spelling(text):
+        """Auto-correct misspelled words in user input text."""
+        if not isinstance(text, str) or not text:
+            return text
+        result = text
+        lower = text.lower()
+        for wrong, correct in _SPELL_MAP.items():
+            if wrong in lower:
+                result = result.replace(wrong, correct).replace(wrong.title(), correct.title()).replace(wrong.upper(), correct.upper())
+        return result
+
+    title = sanitize(title)
+    subject_name = sanitize(subject_name)
+    if not isinstance(questions, list):
+        questions = []
+
+    styles = getSampleStyleSheet()
+    section = ParagraphStyle("StudySection", parent=styles["Heading2"], fontSize=13, leading=17, spaceBefore=10, spaceAfter=6, textColor="#1d4ed8")
+    quiz_title = ParagraphStyle("QuizTitle", parent=styles["Title"], fontSize=17, leading=21, textColor="#1e293b", spaceAfter=2, alignment=TA_CENTER)
+    quiz_subtitle = ParagraphStyle("QuizSubtitle", parent=styles["Normal"], fontSize=9.5, leading=13, textColor="#64748b", alignment=TA_CENTER, spaceAfter=8)
+    quiz_instructions = ParagraphStyle("QuizInstructions", parent=styles["Normal"], fontSize=11, leading=14, textColor="#000000", spaceAfter=6)
+    quiz_question = ParagraphStyle("QuizQuestion", parent=styles["Normal"], fontSize=10.5, leading=14, textColor="#000000", spaceBefore=6, spaceAfter=2, leftIndent=22)
+    quiz_option = ParagraphStyle("QuizOption", parent=styles["Normal"], fontSize=10, leading=13, textColor="#000000", leftIndent=40, spaceAfter=1)
+
+    def esc(text):
+        return sanitize(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=letter,
+        rightMargin=0.8 * inch,
+        leftMargin=0.8 * inch,
+        topMargin=0.8 * inch,
+        bottomMargin=0.8 * inch,
+        title=title,
+        author="StudyLens AI",
+    )
+
+    def quiz_page_decorator(canvas, doc_):
+        """Draw a footer with page numbers on every quiz page."""
+        canvas.saveState()
+        w, h = letter
+        canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
+        canvas.setLineWidth(0.5)
+        canvas.line(50, 40, w - 50, 40)
+        canvas.setFillColor(colors.HexColor("#64748b"))
+        canvas.setFont("Helvetica", 8)
+        canvas.drawString(50, 30, "StudyLens AI - Assessment Paper")
+        canvas.drawRightString(w - 50, 30, f"Page {canvas.getPageNumber()}")
+        canvas.restoreState()
+
+    story = []
+    story.append(Paragraph(esc(title), quiz_title))
+    if subject_name:
+        story.append(Paragraph(f"Subject: {subject_name}", quiz_subtitle))
+    story.append(HRFlowable(width="100%", thickness=1, color="#d1d5db", spaceBefore=8, spaceAfter=10))
+
+    story.append(Paragraph(
+        "Instructions: Read each question carefully before answering. ",
+        quiz_instructions,
+    ))
+    story.append(Spacer(1, 6))
+
+    prev_q_type = None
+    for idx, q in enumerate(questions, start=1):
+        if not isinstance(q, dict):
+            continue
+        # Auto-correct misspelled question types
+        q_type = q.get("type", "")
+        if isinstance(q_type, str):
+            q_type = correct_spelling(q_type)
+            q["type"] = q_type
+        # Section header for True/False questions
+        if q_type == "true_false" and prev_q_type != "true_false":
+            story.append(Paragraph("<b>TRUE / FALSE</b> - Write T/F or True/False on the blank line before each question number.", quiz_instructions))
+            story.append(Spacer(1, 4))
+        # Section header for Identification questions
+        if q_type == "identification" and prev_q_type != "identification":
+            story.append(Paragraph("<b>IDENTIFICATION</b> - Fill in the blank with the correct answer before each question number.", quiz_instructions))
+            story.append(Spacer(1, 4))
+        # Section header for Multiple Choice questions
+        if q_type == "multiple_choice" and prev_q_type != "multiple_choice":
+            story.append(Paragraph("<b>MULTIPLE CHOICE</b> - Select the best answer from the options below.", quiz_instructions))
+            story.append(Spacer(1, 4))
+        prev_q_type = q_type
+        # Blank answer line beside and before the question number for student to write answer
+        story.append(Paragraph(f"_______ {idx}. {esc(q.get('question') or '')}", quiz_question))
+        options = q.get("options") or []
+        is_true_false = (
+            q_type == "true_false"
+            or (isinstance(options, list) and len(options) == 2
+                and str(options[0]).strip().lower() == "true"
+                and str(options[1]).strip().lower() == "false")
+        )
+        if isinstance(options, list) and options and not is_true_false:
+            for oi, opt in enumerate(options):
+                opt_letter = chr(65 + oi)
+                story.append(Paragraph(f"{opt_letter}) {esc(opt)}", quiz_option))
+        story.append(Spacer(1, 4))
+
+    # Answer Key section on a new page
+    story.append(PageBreak())
+    story.append(Paragraph("Answer Key", section))
+    key_items = []
+    for idx, q in enumerate(questions, start=1):
+        if not isinstance(q, dict):
+            continue
+        options = q.get("options") or []
+        correct_idx = q.get("correctAnswer")
+        q_type = q.get("type", "")
+        if isinstance(q_type, str):
+            q_type = correct_spelling(q_type)
+        is_true_false = (
+            q_type == "true_false"
+            or (isinstance(options, list) and len(options) == 2
+                and str(options[0]).strip().lower() == "true"
+                and str(options[1]).strip().lower() == "false")
+        )
+        if is_true_false and isinstance(correct_idx, (int, str)):
+            # True/False: show True or False instead of letter
+            if isinstance(correct_idx, int) and 0 <= correct_idx < len(options):
+                ans_text = options[correct_idx]
+            elif isinstance(correct_idx, str) and correct_idx.strip().lower() in ("true", "false"):
+                ans_text = correct_idx.strip().title()
+            elif isinstance(correct_idx, str) and correct_idx.strip().lower() == "t":
+                ans_text = "True"
+            elif isinstance(correct_idx, str) and correct_idx.strip().lower() == "f":
+                ans_text = "False"
+            else:
+                ans_text = "?"
+            key_items.append(f"{idx}. {ans_text}")
+        elif isinstance(options, list) and options and isinstance(correct_idx, int) and 0 <= correct_idx < len(options):
+            ans_letter = chr(65 + correct_idx)
+            key_items.append(f"{idx}. {ans_letter}")
+        elif isinstance(options, list) and options and str(correct_idx).isdigit():
+            ans_letter = chr(65 + int(correct_idx))
+            key_items.append(f"{idx}. {ans_letter}")
+        elif isinstance(correct_idx, str) and correct_idx:
+            key_items.append(f"{idx}. {correct_idx}")
+        else:
+            key_items.append(f"{idx}. ?")
+    col_w = (612 - 2 * 57.6) / 2
+    half = (len(key_items) + 1) // 2
+    col1 = key_items[:half]
+    col2 = key_items[half:]
+    max_rows = max(len(col1), len(col2))
+    key_rows = []
+    for i in range(max_rows):
+        left = col1[i] if i < len(col1) else ""
+        right = col2[i] if i < len(col2) else ""
+        key_rows.append([left, right])
+    key_table = Table(key_rows, colWidths=[col_w, col_w])
+    key_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#0f172a")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 22),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    story.append(key_table)
+
+    doc.build(story, onFirstPage=quiz_page_decorator, onLaterPages=quiz_page_decorator)
+    buf.seek(0)
+    return buf
+
+
 @app.route("/api/ai/export/pdf", methods=["POST"])
 @require_auth
 def export_ai_pdf():
@@ -3869,13 +4577,29 @@ def export_ai_pdf():
     if not isinstance(payload, dict):
         return jsonify({"error": "Missing resource data.", "code": "EMPTY_DATA"}), 400
 
+    if mode == "quiz":
+        quiz_pdf_title = str(data.get("title") or payload.get("title") or "StudyLens AI Resource")
+        quiz_pdf_subject = str(data.get("subjectName") or payload.get("subjectName") or "")
+        buf = _build_quiz_pdf(quiz_pdf_title, quiz_pdf_subject, payload.get("questions") or [])
+        if buf is None:
+            return jsonify({"error": "PDF library (reportlab) is not installed.", "code": "PDF_UNAVAILABLE"}), 500
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", quiz_pdf_title).strip("-") or "studylens-resource"
+        return send_file(
+            buf,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"{slug[:60]}.pdf",
+        )
+
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import inch
         from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib import colors
         from reportlab.platypus import (
             SimpleDocTemplate, Paragraph, ListFlowable, ListItem, HRFlowable,
+            Spacer, PageBreak, Table, TableStyle,
         )
     except Exception:
         return jsonify({"error": "PDF library (reportlab) is not installed.", "code": "PDF_UNAVAILABLE"}), 500
@@ -3887,13 +4611,69 @@ def export_ai_pdf():
         """Reduces text to ASCII so the standard PDF fonts never render missing-glyph squares."""
         s = str(text or "")
         replacements = {
+            # Quotes
             "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
-            "\u2013": "-", "\u2014": "-", "\u2022": "-", "\u00b7": "-",
-            "\u2026": "...", "\u00a0": " ", "\ufeff": "",
+            "\u00ab": '"', "\u00bb": '"', "\u201a": "'", "\u201b": "'",
+            "\u201e": '"',
+            # Dashes
+            "\u2013": "-", "\u2014": "-", "\u2010": "-", "\u2011": "-",
+            "\u2012": "-", "\u2015": "-", "\u2212": "-", "\u00ad": "-",
+            # Bullets and dots
+            "\u2022": "-", "\u00b7": "-", "\u2023": "-", "\u2024": ".",
+            "\u2025": "..", "\u2026": "...",
+            # Spaces
+            "\u00a0": " ", "\u2000": " ", "\u2001": " ", "\u2002": " ",
+            "\u2003": " ", "\u2004": " ", "\u2005": " ", "\u2006": " ",
+            "\u2007": " ", "\u2008": " ", "\u2009": " ", "\u200a": " ",
+            "\u2028": " ", "\u2029": " ", "\u200b": "", "\ufeff": "",
+            # Other common symbols
+            "\u00a9": "(c)", "\u00ae": "(r)", "\u2122": "(tm)",
+            "\u00a2": "(c)", "\u00a3": "(pound)", "\u00a5": "(yen)",
+            "\u00a4": "(cur)", "\u00a6": "|", "\u00a7": "(s)",
+            "\u00a8": '"', "\u00aa": "a", "\u00ba": "o",
+            "\u00d7": "x", "\u00f7": "/",
         }
         for k, v in replacements.items():
             s = s.replace(k, v)
         return "".join(ch for ch in s if ch in "\t\n\r" or 32 <= ord(ch) <= 126)
+
+    _SPELL_MAP = {
+        # Quiz types (only genuinely misspelled forms)
+        "identication": "identification", "identifications": "identification",
+        "identifcation": "identification", "identifcations": "identification",
+        "true/fasle": "true/false", "truefalse": "true/false", "t/f": "true/false",
+        "multichoice": "multiple choice", "mcq": "multiple choice",
+        "shortanswer": "identification", "short answer": "identification",
+        # Common misspellings
+        "recieve": "receive", "seperate": "separate", "definately": "definitely",
+        "occured": "occurred", "untill": "until", "arguement": "argument",
+        "embarass": "embarrass", "liason": "liaison", "occurence": "occurrence",
+        "posession": "possession", "recomend": "recommend", "referance": "reference",
+        "begining": "beginning", "calender": "calendar", "cemetary": "cemetery",
+        "colleague": "colleague", "conscience": "conscience",
+        "dilemma": "dilemma", "embarrass": "embarrass", "exceed": "exceed",
+        "exercise": "exercise", "experience": "experience", "foreign": "foreign",
+        "gauge": "gauge", "grateful": "grateful", "harass": "harass",
+        "indispensable": "indispensable", "knowledge": "knowledge",
+        "maintenance": "maintenance", "millennium": "millennium",
+        "necessary": "necessary", "occasion": "occasion", "occurred": "occurred",
+        "parallel": "parallel", "precede": "precede", "principal": "principal",
+        "privilege": "privilege", "receive": "receive", "recommend": "recommend",
+        "referred": "referred", "relevant": "relevant", "separate": "separate",
+        "sergeant": "sergeant", "supersede": "supersede", "threshold": "threshold",
+        "twelfth": "twelfth", "until": "until", "weird": "weird",
+    }
+
+    def correct_spelling(text):
+        """Auto-correct misspelled words in user input text."""
+        if not isinstance(text, str) or not text:
+            return text
+        result = text
+        lower = text.lower()
+        for wrong, correct in _SPELL_MAP.items():
+            if wrong in lower:
+                result = result.replace(wrong, correct).replace(wrong.title(), correct.title()).replace(wrong.upper(), correct.upper())
+        return result
 
     title = sanitize(title)
     subject_name = sanitize(subject_name)
@@ -3904,6 +4684,12 @@ def export_ai_pdf():
     section = ParagraphStyle("StudySection", parent=styles["Heading2"], fontSize=13, leading=17, spaceBefore=10, spaceAfter=6, textColor="#1d4ed8")
     body = ParagraphStyle("StudyBody", parent=styles["BodyText"], fontSize=10.5, leading=15, spaceAfter=4)
     topic_heading = ParagraphStyle("StudyTopic", parent=styles["Heading3"], fontSize=11.5, leading=15, spaceBefore=8, spaceAfter=4)
+    quiz_title = ParagraphStyle("QuizTitle", parent=styles["Title"], fontSize=17, leading=21, textColor="#1e293b", spaceAfter=2, alignment=TA_CENTER)
+    quiz_subtitle = ParagraphStyle("QuizSubtitle", parent=styles["Normal"], fontSize=9.5, leading=13, textColor="#64748b", alignment=TA_CENTER, spaceAfter=8)
+    quiz_instructions = ParagraphStyle("QuizInstructions", parent=styles["Normal"], fontSize=11, leading=14, textColor="#000000", spaceAfter=6)
+    quiz_question = ParagraphStyle("QuizQuestion", parent=styles["Normal"], fontSize=10.5, leading=14, textColor="#000000", spaceBefore=6, spaceAfter=2, leftIndent=22)
+    quiz_option = ParagraphStyle("QuizOption", parent=styles["Normal"], fontSize=10, leading=13, textColor="#000000", leftIndent=40, spaceAfter=1)
+    quiz_answer = ParagraphStyle("QuizAnswer", parent=styles["Normal"], fontSize=9, leading=12, textColor="#059669", leftIndent=40, spaceAfter=8)
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -3918,13 +4704,27 @@ def export_ai_pdf():
     )
 
     story = []
-    story.append(Paragraph(title, heading))
     story.append(Paragraph(f"Subject: {subject_name}" if subject_name else "StudyLens AI Study Resource", subtitle))
-    story.append(Paragraph(f"Generated {datetime.datetime.now(datetime.timezone.utc).strftime('%B %d, %Y at %H:%M')}", subtitle))
     story.append(HRFlowable(width="100%", thickness=1, color="#d1d5db", spaceBefore=8, spaceAfter=10))
 
     def esc(text):
         return sanitize(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    quiz_meta = {"mode": mode, "count": 0}
+
+    def quiz_page_decorator(canvas, doc_):
+        """Draw a footer with page numbers on every quiz page."""
+        canvas.saveState()
+        w, h = letter
+        # Footer
+        canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
+        canvas.setLineWidth(0.5)
+        canvas.line(50, 40, w - 50, 40)
+        canvas.setFillColor(colors.HexColor("#64748b"))
+        canvas.setFont("Helvetica", 8)
+        canvas.drawString(50, 30, "StudyLens AI — Assessment Paper")
+        canvas.drawRightString(w - 50, 30, f"Page {canvas.getPageNumber()}")
+        canvas.restoreState()
 
     if mode == "summary":
         story.append(Paragraph("Executive Summary", section))
@@ -3982,30 +4782,6 @@ def export_ai_pdf():
                         if a_text:
                             story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;A: {esc(a_text)}", body))
 
-    elif mode == "quiz":
-        questions = payload.get("questions") or []
-        if isinstance(questions, list) and questions:
-            story.append(Paragraph("Quiz Questions", section))
-            for idx, q in enumerate(questions, start=1):
-                if not isinstance(q, dict):
-                    continue
-                story.append(Paragraph(f"Q{idx}. {esc(q.get('question') or '')}", body))
-                options = q.get("options") or []
-                correct_idx = q.get("correctAnswer")
-                if isinstance(options, list):
-                    for oi, opt in enumerate(options):
-                        letter = chr(65 + oi)
-                        marker = "* " if str(correct_idx) == str(oi) else "  "
-                        story.append(Paragraph(f"{marker}{letter}. {esc(opt)}", body))
-                if isinstance(correct_idx, int) and isinstance(options, list) and 0 <= correct_idx < len(options):
-                    story.append(Paragraph(f"Correct Answer: {esc(options[correct_idx])}", body))
-                elif str(correct_idx).isdigit() and isinstance(options, list):
-                    ci = int(correct_idx)
-                    if 0 <= ci < len(options):
-                        story.append(Paragraph(f"Correct Answer: {esc(options[ci])}", body))
-                elif isinstance(correct_idx, str) and not (isinstance(options, list) and options):
-                    # Identification / short-answer items carry a string answer with no options.
-                    story.append(Paragraph(f"Correct Answer: {esc(correct_idx)}", body))
     else:
         cards = payload.get("cards") or []
         if isinstance(cards, list) and cards:
@@ -4020,7 +4796,7 @@ def export_ai_pdf():
     doc.build(story)
     buf.seek(0)
 
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower() or "studylens-resource"
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-") or "studylens-resource"
     return send_file(
         buf,
         mimetype="application/pdf",
@@ -4415,6 +5191,51 @@ def get_quizzes():
         {**_public_quiz_payload(q, requester_role), **({"attemptsUsed": used.get(q.quiz_id, 0), "lastScore": last_score.get(q.quiz_id), "bestScore": best_score.get(q.quiz_id), "lastScoreRaw": last_raw.get(q.quiz_id), "lastMaxScore": last_max.get(q.quiz_id)} if requester_role == "student" else {})}
         for q in qs
     ])
+
+@app.route("/api/quizzes/<quiz_id>/download-pdf", methods=["GET"])
+@require_auth
+def download_quiz_pdf(quiz_id):
+    """Download a quiz as a formatted PDF (question sheet + answer key).
+
+    Teachers may download only quizzes they personally created. Students may
+    download only the practice quizzes they generated themselves - never a
+    teacher-assigned course quiz.
+    """
+    import re
+
+    quiz = db.session.get(QuizModel, quiz_id)
+    if not quiz:
+        return jsonify({"error": "Quiz not found.", "code": "NOT_FOUND"}), 404
+
+    current_user = getattr(request, "current_user", None) or {}
+    user_id = current_user.get("id") or ""
+    role = current_user.get("role") or ""
+
+    if role == "student":
+        if quiz.quiz_type != "student" or quiz.teacher_id != user_id:
+            return jsonify({"error": "Students can only download quizzes they generated themselves.", "code": "FORBIDDEN"}), 403
+    elif role == "teacher":
+        if quiz.teacher_id != user_id:
+            return jsonify({"error": "You can only download quizzes you created.", "code": "FORBIDDEN"}), 403
+    elif role != "admin":
+        return jsonify({"error": "You do not have permission to download this quiz.", "code": "FORBIDDEN"}), 403
+
+    try:
+        questions = json.loads(quiz.questions_json or "[]")
+    except Exception:
+        questions = []
+
+    buf = _build_quiz_pdf(quiz.title, quiz.subject_name or "", questions)
+    if buf is None:
+        return jsonify({"error": "PDF library (reportlab) is not installed.", "code": "PDF_UNAVAILABLE"}), 500
+
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", quiz.title or "quiz").strip("-") or "quiz"
+    return send_file(
+        buf,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"{slug[:60]}.pdf",
+    )
 
 @app.route("/api/quizzes", methods=["POST"])
 @require_roles("teacher", "admin", "student")
@@ -4879,6 +5700,63 @@ def submit_quiz_attempt(quiz_id):
     db.session.add(attempt)
     _commit_or_warn("quiz attempt")
 
+    # --- Progress model upsert (student_progress table) ---
+    # Only persist for real course subjects; skip subjectless/personal quizzes
+    # because student_progress.subject_id is a required FK to subjects.
+    try:
+        subject_id = quiz.subject_id
+        if subject_id and subject_id not in ("", "personal"):
+            total_quizzes = QuizModel.query.filter_by(subject_id=subject_id).count()
+            attempted_rows = (
+                QuizAttemptModel.query.filter_by(student_id=student_id, subject_id=subject_id)
+                .with_entities(QuizAttemptModel.quiz_id)
+                .distinct()
+                .all()
+            )
+            attempted_quizzes = len(attempted_rows)
+            completion_percentage = (
+                round((attempted_quizzes / total_quizzes) * 100, 1) if total_quizzes else 0.0
+            )
+
+            subject_attempts = (
+                QuizAttemptModel.query.filter_by(student_id=student_id, subject_id=subject_id)
+                .order_by(QuizAttemptModel.submitted_at.desc())
+                .all()
+            )
+            latest_by_quiz = {}
+            for a in subject_attempts:
+                if a.quiz_id not in latest_by_quiz:
+                    latest_by_quiz[a.quiz_id] = float(a.percentage or 0)
+            average_score = (
+                round(sum(latest_by_quiz.values()) / len(latest_by_quiz), 1)
+                if latest_by_quiz else 0.0
+            )
+
+            if average_score >= 80:
+                learning_level = "Advanced"
+            elif average_score >= 60:
+                learning_level = "Intermediate"
+            else:
+                learning_level = "Beginner"
+
+            progress_id = f"prog-{student_id}-{subject_id}"
+            prog = db.session.get(StudentProgressModel, progress_id)
+            if prog is None:
+                prog = StudentProgressModel(
+                    progress_id=progress_id,
+                    student_id=student_id,
+                    subject_id=subject_id,
+                )
+            prog.completion_percentage = completion_percentage
+            prog.average_score = average_score
+            prog.learning_level = learning_level
+            prog.updated_at = now_str
+            prog.last_activity = now_str
+            db.session.add(prog)
+            _commit_or_warn("student progress")
+    except Exception as e:
+        print("[Database] Could not upsert student progress:", e)
+
     log_action(student_id, student_name, "student", "QUIZ_SUBMIT",
                f"Submitted '{quiz.title}' — {score}/{max_score} ({percentage}%)")
 
@@ -5319,6 +6197,16 @@ def get_student_progress(student_id):
             "error": "You do not have permission to view this student's progress.",
             "code": "FORBIDDEN",
         }), 403
+    student = db.session.get(UserModel, student_id)
+    if not student or student.role != "student":
+        return jsonify({"error": "Student not found.", "code": "NOT_FOUND"}), 404
+    try:
+        limit = int(request.args.get("limit", 10))
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        limit, offset = 10, 0
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
     attempts = QuizAttemptModel.query.filter_by(student_id=student_id).order_by(QuizAttemptModel.submitted_at.desc()).all()
     # "Quizzes completed" counts distinct quizzes, not raw attempts (retakes
     # of the same quiz do not multiply the stat).
@@ -5371,20 +6259,18 @@ def get_student_progress(student_id):
         current_weak = historical_weak
         mastered = []
 
+    latest_pcts = _latest_attempt_percentages(attempts)
+
     payload = {
         "studentId": student_id,
         "totalQuizzesTaken": total,
-        "averageScore": (
-            round(sum(_latest_attempt_percentages(attempts)) / len(latest_pcts))
-            if (latest_pcts := _latest_attempt_percentages(attempts))
-            else 0
-        ),
-        "totalMaterialsUploaded": MaterialModel.query.filter(
+        "averageScore": round(sum(latest_pcts) / len(latest_pcts)) if latest_pcts else 0,
+        "totalPersonalMaterialsUploaded": MaterialModel.query.filter(
             MaterialModel.uploader_role == "student",
             MaterialModel.subject_id.is_(None),
             MaterialModel.teacher_id == student_id,
         ).count(),
-        "completedFlashcardDecks": AIGeneratedContentModel.query.filter(
+        "totalFlashcardDecksGenerated": AIGeneratedContentModel.query.filter(
             AIGeneratedContentModel.content_type == "Flashcard",
             AIGeneratedContentModel.generated_by == student_id,
         ).count(),
@@ -5392,7 +6278,8 @@ def get_student_progress(student_id):
         "weakTopics": current_weak,
         "strongTopics": list(dict.fromkeys(strong)),
         "masteredTopics": mastered,
-        "recentQuizAttempts": [a.to_dict() for a in attempts][:10],
+        "recentQuizAttempts": [a.to_dict() for a in attempts][offset:offset + limit],
+        "recentQuizAttemptsHasMore": offset + limit < len(attempts),
     }
     return jsonify(payload)
 
@@ -5411,6 +6298,9 @@ def get_student_recommendations(student_id):
             "error": "You do not have permission to view this student's recommendations.",
             "code": "FORBIDDEN",
         }), 403
+    student = db.session.get(UserModel, student_id)
+    if not student or student.role != "student":
+        return jsonify({"error": "Student not found.", "code": "NOT_FOUND"}), 404
     attempts = QuizAttemptModel.query.filter_by(student_id=student_id).order_by(QuizAttemptModel.submitted_at.desc()).all()
     topic_map = _aggregate_topic_performance(attempts)
 
@@ -5578,6 +6468,87 @@ def get_teacher_analytics():
             "atRiskCount": total_at_risk,
         },
     }), 200
+
+
+@app.route("/api/analytics/admin", methods=["GET"])
+@require_auth
+def get_admin_analytics():
+    """Institution-wide analytics for admins: per-subject rollups across all
+    teachers, with institution-wide totals and at-risk students."""
+    current_user = getattr(request, "current_user", None) or {}
+    if current_user.get("role") != "admin":
+        return jsonify({"error": "Admin access required.", "code": "FORBIDDEN"}), 403
+
+    subjects = SubjectModel.query.all()
+    rows = []
+    all_student_ids = set()
+    total_attempts = 0
+    total_passed = 0
+    total_at_risk = 0
+    all_scores = []
+
+    for sub in subjects:
+        enrollments = StudentSubjectModel.query.filter_by(subject_id=sub.subject_id).all()
+        student_ids = [e.student_id for e in enrollments]
+        all_student_ids.update(student_ids)
+        attempts = QuizAttemptModel.query.filter_by(subject_id=sub.subject_id).all()
+        quiz_count = QuizModel.query.filter_by(subject_id=sub.subject_id).count()
+
+        per_student_avg = {}
+        for a in attempts:
+            per_student_avg.setdefault(a.student_id, []).append(a.percentage)
+        at_risk = []
+        for sid in student_ids:
+            scores = per_student_avg.get(sid, [])
+            if not scores:
+                continue
+            avg = sum(scores) / len(scores)
+            if avg < 70:
+                stu = db.session.get(UserModel, sid)
+                at_risk.append({"id": sid, "name": stu.first_name + " " + stu.last_name if stu else sid, "averageScore": round(avg)})
+
+        weak = []
+        for att in attempts:
+            try: weak += json.loads(att.weak_topics_json) or []
+            except Exception: pass
+        weak_counts = {}
+        for w in weak:
+            weak_counts[w] = weak_counts.get(w, 0) + 1
+        top_weak = [t for t, _ in sorted(weak_counts.items(), key=lambda kv: -kv[1])[:5]]
+
+        avg = round(sum(a.percentage for a in attempts) / len(attempts)) if attempts else 0
+        passed = sum(1 for a in attempts if a.passed)
+        total_attempts += len(attempts)
+        total_passed += passed
+        total_at_risk += len(at_risk)
+        all_scores += [a.percentage for a in attempts]
+
+        rows.append({
+            "subjectId": sub.subject_id,
+            "subjectCode": sub.subject_code,
+            "subjectName": sub.subject_name,
+            "teacherName": sub.teacher_name,
+            "studentCount": len(student_ids),
+            "quizCount": quiz_count,
+            "attempts": len(attempts),
+            "averageScore": avg,
+            "passRate": round(passed / len(attempts) * 100) if attempts else 0,
+            "weakTopics": top_weak,
+            "atRiskStudents": at_risk,
+        })
+
+    return jsonify({
+        "subjects": rows,
+        "totals": {
+            "subjectCount": len(subjects),
+            "studentCount": len(all_student_ids),
+            "attempts": total_attempts,
+            "averageScore": round(sum(all_scores) / len(all_scores)) if all_scores else 0,
+            "passRate": round(total_passed / total_attempts * 100) if total_attempts else 0,
+            "atRiskCount": total_at_risk,
+        },
+    }), 200
+
 
 @app.route("/api/announcements", methods=["GET"])
 @require_auth
@@ -5852,6 +6823,7 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
             quizzes = QuizModel.query.filter_by(subject_id=sub.subject_id).count()
             attempts = QuizAttemptModel.query.filter_by(subject_id=sub.subject_id).all()
             avg = round(sum(a.percentage for a in attempts) / len(attempts)) if attempts else 0
+            passed = sum(1 for a in attempts if a.passed)
             # AI items linked to this subject's mirrored materials
             material_rows = MaterialModel.query.filter_by(subject_id=sub.subject_id).all()
             material_ids = [m.material_id for m in material_rows]
@@ -5868,6 +6840,7 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
                 "aiGeneratedItems": ai_total,
                 "quizAttempts": len(attempts),
                 "averageScore": avg,
+                "passRate": round(passed / len(attempts) * 100) if attempts else 0,
             })
         summary = {"subjects": rows}
         return summary, 200
@@ -5903,6 +6876,14 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
 def handle_reports():
     generated_by = request.args.get("generatedBy", "")
     report_type = request.args.get("reportType", "")
+    target_id = request.args.get("targetId", "")
+    try:
+        limit = int(request.args.get("limit", 50))
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        limit, offset = 50, 0
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
     query = ReportModel.query
     current_user = getattr(request, "current_user", None) or {}
     if current_user.get("role") == "student":
@@ -5915,8 +6896,15 @@ def handle_reports():
         query = query.filter_by(generated_by=generated_by)
     if report_type:
         query = query.filter_by(report_type=report_type)
-    reports = query.order_by(ReportModel.generated_at.desc()).all()
-    return jsonify([r.to_dict() for r in reports])
+    if target_id:
+        query = query.filter_by(target_id=target_id)
+    total = query.count()
+    reports = query.order_by(ReportModel.generated_at.desc()).offset(offset).limit(limit).all()
+    return jsonify({
+        "reports": [r.to_dict() for r in reports],
+        "total": total,
+        "hasMore": offset + limit < total,
+    })
 
 @app.route("/api/reports", methods=["POST"])
 @require_roles("teacher", "admin")
@@ -5952,7 +6940,7 @@ def create_report():
         report_id=f"rpt-{timestamp_ms}",
         generated_by=generated_by,
         report_type=report_type,
-        generated_at=data.get("generatedAt") or (datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")),
+        generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
         title=title,
         summary_json=json.dumps(summary, ensure_ascii=False),
         target_id=data.get("targetId"),

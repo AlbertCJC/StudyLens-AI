@@ -313,7 +313,7 @@ async function revalidate(path: string, key: string): Promise<void> {
   }
 }
 
-async function getJSON<T>(path: string, fallback: Fallback<T>): Promise<T> {
+export async function getJSON<T>(path: string, fallback: Fallback<T>): Promise<T> {
   const key = cacheKeyFor(path);
 
   // Instant render: serve the in-memory copy from an earlier visit and
@@ -635,6 +635,49 @@ const EMPTY_TEACHER_ANALYTICS = (teacherId: string): TeacherAnalytics => ({
 export const fetchTeacherAnalytics = (teacherId: string): Promise<TeacherAnalytics> =>
   getJSON(`/analytics/teacher?teacherId=${encodeURIComponent(teacherId)}`, EMPTY_TEACHER_ANALYTICS(teacherId));
 
+export interface TopicPerformance {
+  topic: string;
+  totalQuestions: number;
+  correctAnswers: number;
+  accuracyPercentage: number;
+}
+
+export interface MasteredTopic {
+  topic: string;
+  currentAccuracy: number;
+  improvedFrom?: number | null;
+}
+
+export interface StudentProgress {
+  studentId: string;
+  totalQuizzesTaken: number;
+  averageScore: number;
+  totalPersonalMaterialsUploaded: number;
+  totalFlashcardDecksGenerated: number;
+  topicPerformances: TopicPerformance[];
+  weakTopics: string[];
+  strongTopics: string[];
+  masteredTopics?: MasteredTopic[];
+  recentQuizAttempts: QuizAttempt[];
+  recentQuizAttemptsHasMore: boolean;
+}
+
+export const EMPTY_STUDENT_PROGRESS = (studentId: string): StudentProgress => ({
+  studentId,
+  totalQuizzesTaken: 0,
+  averageScore: 0,
+  totalPersonalMaterialsUploaded: 0,
+  totalFlashcardDecksGenerated: 0,
+  topicPerformances: [],
+  weakTopics: [],
+  strongTopics: [],
+  recentQuizAttempts: [],
+  recentQuizAttemptsHasMore: false,
+});
+
+export const fetchStudentProgress = (studentId: string): Promise<StudentProgress> =>
+  getJSON(`/progress/${encodeURIComponent(studentId)}`, () => EMPTY_STUDENT_PROGRESS(studentId));
+
 export interface SubjectStudent {
   id: string;
   name: string;
@@ -689,6 +732,7 @@ export interface QuizAttempt {
   weakTopics: string[];
   strongTopics: string[];
   completedAt: string;
+  submittedAt?: string;
 }
 
 export interface SubjectStudentGrade {
@@ -945,6 +989,47 @@ export const fetchQuizzes = (userRole?: string, userId?: string): Promise<Quiz[]
   return getJSON(`/quizzes${params.length ? `?${params.join('&')}` : ''}`, offlineFallback).then((list) => list.map((q) => shuffleQuizAnswers(q)));
 };
 
+export const downloadQuizPdf = async (quizId: string): Promise<Uint8Array> => {
+  const res = await fetch(`${getApiBaseUrl()}/quizzes/${encodeURIComponent(quizId)}/download-pdf`, {
+    method: 'GET',
+    headers: buildHeaders(),
+  });
+  if (handleUnauthorized(res)) throw new Error('Your session has expired. Please sign in again.');
+  if (!res.ok) {
+    const raw = await res.text().catch(() => '');
+    let msg = 'Could not download the quiz.';
+    try {
+      const body = JSON.parse(raw);
+      if (body && typeof body.error === 'string') msg = body.error;
+    } catch {
+      // Non-JSON error page (e.g. a 404 HTML page when the route is missing)
+    }
+    throw new Error(msg);
+  }
+  const buffer = await res.arrayBuffer();
+  return new Uint8Array(buffer);
+};
+
+export const downloadMaterialPdf = async (materialId: string): Promise<Uint8Array> => {
+  const res = await fetch(`${getApiBaseUrl()}/materials/${encodeURIComponent(materialId)}/convert-to-pdf`, {
+    method: 'GET',
+    headers: buildHeaders(),
+  });
+  if (handleUnauthorized(res)) throw new Error('Your session has expired. Please sign in again.');
+  if (!res.ok) {
+    let msg = 'Could not convert the document to PDF.';
+    try {
+      const body = await res.json();
+      if (typeof body.error === 'string') msg = body.error;
+    } catch {
+      // keep default message
+    }
+    throw new Error(msg);
+  }
+  const buffer = await res.arrayBuffer();
+  return new Uint8Array(buffer);
+};
+
 export interface AiQuizInput {
   textContent: string;
   numQuestions: number;
@@ -1117,12 +1202,50 @@ export const generateSummary = (input: AiSummaryInput): Promise<StudySummary> =>
 // ----------------------------------------------------------------
 export type AiGenerationMode = 'quiz' | 'flashcards' | 'summary' | 'reviewer';
 
-export const aiGenerateDraft = (
+export const aiGenerateDraft = async (
   mode: AiGenerationMode,
   input: Record<string, unknown>,
   signal?: AbortSignal
-): Promise<Record<string, unknown>> =>
-  postJSON('/ai/generate', { ...input, mode, save: false }, () => offlineError('/ai/generate'), signal);
+): Promise<Record<string, unknown>> => {
+  const url = `${getApiBaseUrl()}/ai/generate`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: buildHeaders(),
+      body: JSON.stringify({ ...input, mode, save: false }),
+      signal,
+    });
+  } catch (err) {
+    if ((err as Error)?.name === 'AbortError') throw err;
+    throw new Error(
+      `Couldn't reach the StudyLens server at ${url}. Make sure the backend is running (0.0.0.0:5000) and your phone is on the same network as the computer. You can also set a Server URL on the login screen.`
+    );
+  }
+  if (handleUnauthorized(res)) throw new Error('Your session has expired. Please sign in again.');
+  if (!res.ok) {
+    // Surface the server's structured error (message + code) so the UI can show a
+    // precise message such as the 100-question maximum or the AI limit reset time,
+    // instead of a generic failure.
+    const body = (await res.json().catch(() => null)) as {
+      error?: string;
+      code?: string;
+      remaining?: number;
+      resetAtSeconds?: number;
+    } | null;
+    const error = new Error(body?.error || `Generation failed (${res.status}).`) as Error & {
+      code?: string;
+      resetAtSeconds?: number;
+    };
+    if (body?.code) error.code = body.code;
+    if (typeof body?.resetAtSeconds === 'number') error.resetAtSeconds = body.resetAtSeconds;
+    throw error;
+  }
+  invalidateApiCache();
+  const data = await res.json().catch(() => null);
+  if (data === null || data === undefined) throw new Error('The server returned an empty response.');
+  return data as Record<string, unknown>;
+};
 
 export const aiSaveDraft = (mode: AiGenerationMode, draft: Record<string, unknown>): Promise<Record<string, unknown>> =>
   postJSON('/ai/save', { ...draft, mode }, () => offlineError('/ai/save'));

@@ -1,11 +1,106 @@
-import React, { useState, useRef } from "react";
+﻿import React, { useState, useRef, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import { User, Mail, Shield, Building2, Calendar, Award, CheckCircle2, Lock, Edit3, Save, Camera, UserCheck, BookOpen, ShieldCheck, Trash2 } from "lucide-react";
+import { User, Mail, Shield, Building2, Calendar, Award, Lock, Edit3, Save, Camera, BookOpen, ShieldCheck, Trash2, Activity, PieChart } from "lucide-react";
 import { authFetch } from "../utils/authFetch";
 import { checkPasswordStrength } from "../utils/password";
 import { PasswordRequirements } from "../components/PasswordRequirements";
 import type { User as UserType } from "../types";
+
+const translations: Record<string, Record<string, string>> = {
+  en: {
+    "Account Details": "Account Details",
+    "Full Name": "Full Name",
+    "Department / Faculty (Read-only)": "Department / Faculty (Read-only)",
+    "Email Address": "Email Address",
+    "User Role": "User Role",
+    "Department": "Department",
+    "Security & Credentials": "Security & Credentials",
+    "Password Authentication": "Password Authentication",
+    "Keep your StudyLens account protected": "Keep your StudyLens account protected",
+    "Change Password": "Change Password",
+    "Set New Password": "Set New Password",
+    "Current Password": "Current Password",
+    "New Password": "New Password",
+    "Confirm Password": "Confirm Password",
+    "Update Password": "Update Password",
+    "Cancel": "Cancel",
+    "Account Stats": "Account Stats",
+    "Quizzes Taken": "Quizzes Taken",
+    "Flashcards Created": "Flashcards Created",
+    "Study Hours": "Study Hours",
+    "Materials Uploaded": "Materials Uploaded",
+    "Recent Activity": "Recent Activity",
+    "Profile updated": "Profile updated",
+    "Password changed": "Password changed",
+    "Account created": "Account created",
+    "Preferences": "Preferences",
+    "Dark Mode": "Dark Mode",
+    "Switch between light and dark theme": "Switch between light and dark theme",
+    "Email Notifications": "Email Notifications",
+    "Receive updates about your learning progress": "Receive updates about your learning progress",
+    "Language": "Language",
+    "App display language": "App display language",
+    "English": "English",
+    "Filipino": "Filipino",
+    "Edit Profile": "Edit Profile",
+    "Save Edit": "Save Edit",
+    "Save Changes": "Save Changes",
+    "Profile updated successfully!": "Profile updated successfully!",
+    "Full name is required.": "Full name is required.",
+    "Please enter a valid email address.": "Please enter a valid email address.",
+    "Just now": "Just now",
+    "Earlier today": "Earlier today",
+  },
+  fil: {
+    "Account Details": "Mga Detalye ng Kuwenta",
+    "Full Name": "Pangalang Buo",
+    "Department / Faculty (Read-only)": "Departamento / Kolehiya (Read-only)",
+    "Email Address": "Email na Adres",
+    "User Role": "Katungkulan ng Usuario",
+    "Department": "Departamento",
+    "Security & Credentials": "Seguridad at Mga Krekensiyal",
+    "Password Authentication": "Pagpapatunay ng Password",
+    "Keep your StudyLens account protected": "Protektahan ang inyong account sa StudyLens",
+    "Change Password": "Baguhin ang Password",
+    "Set New Password": "Itakda ang Bagong Password",
+    "Current Password": "Nasa Kasalukuyang Password",
+    "New Password": "Bagong Password",
+    "Confirm Password": "Kumpirmahin ang Password",
+    "Update Password": "I-update ang Password",
+    "Cancel": "Kanselahin",
+    "Account Stats": "Mga Estadistika ng Kuwenta",
+    "Quizzes Taken": "Mga Quiz na Nakuha",
+    "Flashcards Created": "Mga Flashcard na Likha",
+    "Study Hours": "Oras ng Pag-aaral",
+    "Materials Uploaded": "Mga Materyals na In-upload",
+    "Recent Activity": "Kasalukuyang Aktibidad",
+    "Profile updated": "Profile na-update",
+    "Password changed": "Password na-bago",
+    "Account created": "Kuwenta na-likha",
+    "Preferences": "Mga Paging",
+    "Dark Mode": "Dark Mode",
+    "Switch between light and dark theme": "Mag-switch sa liwanag at dilim na theme",
+    "Email Notifications": "Mga Notipikasyon sa Email",
+    "Receive updates about your learning progress": "Tumanggap ng mga update sa inyong progreso sa pag-aaral",
+    "Language": "Wika",
+    "App display language": "Wika ng pagpapakita ng App",
+    "English": "Ingles",
+    "Filipino": "Filipino",
+    "Edit Profile": "I-edit ang Profile",
+    "Save Edit": "I-save ang Edit",
+    "Save Changes": "I-save ang mga Pagbabago",
+    "Profile updated successfully!": "Profile na-update nang maayos!",
+    "Full name is required.": "Kinakailangan ang pangalang buo.",
+    "Please enter a valid email address.": "Maaari pong pumili ng tunay na email na adres.",
+    "Just now": "Nang kahapon",
+    "Earlier today": "Nang mas maaga ngayon",
+  },
+};
+
+function t(key: string, lang: string): string {
+  return translations[lang]?.[key] || translations["en"][key] || key;
+}
 
 export const ProfilePage: React.FC = () => {
   const { currentUser, updateUser, refreshSession } = useAuth();
@@ -13,6 +108,7 @@ export const ProfilePage: React.FC = () => {
 
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(currentUser?.name || "");
+  const [email, setEmail] = useState(currentUser?.email || "");
 
   // Password state
   const [showPasswordChange, setShowPasswordChange] = useState(false);
@@ -25,6 +121,71 @@ export const ProfilePage: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [removingAvatar, setRemovingAvatar] = useState(false);
+
+  // Preference state (loaded from localStorage, no UI controls remain)
+  const [darkMode] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return (
+        document.documentElement.classList.contains("dark") ||
+        localStorage.getItem("theme") === "dark" ||
+        (!("theme" in localStorage) && window.matchMedia("(prefers-color-scheme: dark)").matches)
+      );
+    }
+    return false;
+  });
+  const [language] = useState(() => {
+    try {
+      return localStorage.getItem("studylens_language") || "en";
+    } catch {
+      return "en";
+    }
+  });
+
+  // Stats state
+  const [stats, setStats] = useState<{
+    quizzesTaken: number;
+    flashcardsCreated: number;
+    studyHours: number;
+    materialsUploaded: number;
+  }>({ quizzesTaken: 0, flashcardsCreated: 0, studyHours: 0, materialsUploaded: 0 });
+
+  React.useEffect(() => {
+    const root = document.documentElement;
+    if (darkMode) {
+      root.classList.add("dark");
+      localStorage.setItem("theme", "dark");
+    } else {
+      root.classList.remove("dark");
+      localStorage.setItem("theme", "light");
+    }
+  }, [darkMode]);
+
+  const fetchStats = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const res = await authFetch(`/api/users/${currentUser.id}/stats`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setStats({
+          quizzesTaken: data.quizzesTaken ?? 0,
+          flashcardsCreated: data.flashcardsCreated ?? 0,
+          studyHours: data.studyHours ?? 0,
+          materialsUploaded: data.materialsUploaded ?? 0,
+        });
+      }
+    } catch {
+      // ignore fetch failures, stats stay at 0
+    }
+  }, [currentUser]);
+
+  React.useEffect(() => {
+    if (currentUser) {
+      const timer = setTimeout(() => {
+        fetchStats();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [currentUser, fetchStats]);
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -41,7 +202,7 @@ export const ProfilePage: React.FC = () => {
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await authFetch(`/api/users/${currentUser.id}/avatar`, { method: "POST", body: form });
+      const res = await authFetch(`/api/users/${currentUser!.id}/avatar`, { method: "POST", body: form });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         showToast(data?.error || "Could not upload the image. Please try again.", "error");
@@ -61,7 +222,7 @@ export const ProfilePage: React.FC = () => {
     if (!currentUser?.avatar || removingAvatar) return;
     setRemovingAvatar(true);
     try {
-      const res = await authFetch(`/api/users/${currentUser.id}`, {
+      const res = await authFetch(`/api/users/${currentUser!.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ avatar: null }),
@@ -94,9 +255,18 @@ export const ProfilePage: React.FC = () => {
   };
 
   const performSave = async () => {
+    if (!name.trim()) {
+      showToast("Full name is required.", "error");
+      return;
+    }
+    if (!email.trim() || !email.includes("@")) {
+      showToast("Please enter a valid email address.", "error");
+      return;
+    }
     const updated: UserType = {
       ...currentUser,
       name: name.trim() || currentUser.name,
+      email: email.trim(),
     };
     await updateUser(updated);
     setIsEditing(false);
@@ -179,39 +349,6 @@ export const ProfilePage: React.FC = () => {
   const badge = getRoleBadge();
   const BadgeIcon = badge.icon;
 
-  const roleInfo = {
-    student: {
-      description:
-        "You're enrolled in your subjects and have everything you need to study — AI-generated quizzes, flashcards, summaries, and reviewers built from your actual lecture materials, plus your own progress analytics.",
-      highlights: [
-        "Study your enrolled subjects and course materials",
-        "Take teacher quizzes and personal practice drills",
-        "Generate AI quizzes, flashcards, and reviewers",
-        "Track your mastery and get study recommendations",
-      ],
-    },
-    teacher: {
-      description:
-        "You manage your assigned subjects and publish everything students need — lecture materials, quizzes, and class announcements — while keeping an eye on how the class is performing.",
-      highlights: [
-        "Upload and organize lecture materials",
-        "Build, publish, and manage quizzes",
-        "Post class bulletins and announcements",
-        "Monitor student progress and performance",
-      ],
-    },
-    admin: {
-      description:
-        "You keep the platform running smoothly — managing accounts and roles, maintaining the subject catalog, moderating materials, and watching over activity and system performance.",
-      highlights: [
-        "Manage user accounts and assign roles",
-        "Maintain the subject catalog and rosters",
-        "Moderate uploaded learning materials",
-        "Review activity logs and system performance",
-      ],
-    },
-  }[currentUser.role] as { description: string; highlights: string[] };
-
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Top Banner Header */}
@@ -251,26 +388,26 @@ export const ProfilePage: React.FC = () => {
             )}
           </div>
 
-          <div className="flex-1 text-center sm:text-left space-y-2">
-            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{currentUser.name}</h1>
-              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border backdrop-blur-md bg-white/10 text-white border-white/20`}>
-                <BadgeIcon className="h-3.5 w-3.5" />
+          <div className="flex-1 text-left sm:text-left space-y-2">
+            <div className="flex flex-wrap items-start sm:items-center justify-start sm:justify-start gap-2 sm:gap-3">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight leading-none">{currentUser.name}</h1>
+              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border backdrop-blur-md bg-white/10 text-white border-white/20 shrink-0`}>
+                <BadgeIcon className="h-3.5 w-3.5 shrink-0" />
                 {badge.label}
               </span>
             </div>
-            <p className="text-indigo-100 text-sm">{currentUser.email}</p>
-            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4 text-xs text-indigo-200 pt-1">
-              <span className="flex items-center gap-1">
-                <Building2 className="w-3.5 h-3.5" /> {currentUser.department || "General Department"}
+            <p className="text-indigo-100 text-sm truncate max-w-full">{currentUser.email}</p>
+            <div className="flex flex-wrap items-start sm:items-center justify-start sm:justify-start gap-4 sm:gap-5 text-xs text-indigo-200 pt-1">
+              <span className="flex items-center gap-1 whitespace-nowrap">
+                <Building2 className="w-3.5 h-3.5 shrink-0" /> {currentUser.department || "General Department"}
               </span>
               {currentUser.studentId && (
-                <span className="flex items-center gap-1 font-mono">
+                <span className="flex items-center gap-1 font-mono whitespace-nowrap shrink-0">
                   ID: {currentUser.studentId}
                 </span>
               )}
-              <span className="flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5" /> Joined {new Date(currentUser.createdAt).toLocaleDateString()}
+              <span className="flex items-center gap-1 whitespace-nowrap shrink-0">
+                <Calendar className="w-3.5 h-3.5 shrink-0" /> Joined {new Date(currentUser.createdAt).toLocaleDateString()}
               </span>
             </div>
           </div>
@@ -293,204 +430,244 @@ export const ProfilePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Details Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Left Column: Editable Info Form / Display */}
-        <div className="md:col-span-2 space-y-6">
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-6 shadow-sm">
-            <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
-              <User className="w-5 h-5 text-indigo-500" />
-              Account Details
-            </h2>
+      {/* Account & Security (Combined) */}
+      <div className="bg-card border border-border rounded-2xl p-6 space-y-6 shadow-sm">
+        {/* Account Details Section */}
+        <div className="space-y-4">
+          <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+            <User className="w-4 h-4 text-indigo-500" />
+            {t("Account Details", language)}
+          </h3>
 
-            {isEditing ? (
-              <form onSubmit={handleSave} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">
-                    Full Name
-                  </label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">
-                    Department / Faculty (Read-only)
-                  </label>
-                  <input
-                    type="text"
-                    value={currentUser.department || "General"}
-                    disabled
-                    title="Department is managed by the administration"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-muted text-muted-foreground text-sm font-medium cursor-not-allowed"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">
-                    Email Address (Read-only)
-                  </label>
-                  <input
-                    type="email"
-                    value={currentUser.email}
-                    disabled
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-muted text-muted-foreground text-sm font-medium cursor-not-allowed"
-                  />
-                </div>
-
-                <div className="pt-2 flex items-center gap-3">
-                  <button
-                    type="submit"
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-sm"
-                  >
-                    <Save className="w-4 h-4" /> Save Changes
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsEditing(false)}
-                    className="px-4 py-2.5 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Full Name</p>
-                  <p className="text-sm font-bold text-foreground mt-1">{currentUser.name}</p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Email Address</p>
-                  <p className="text-sm font-bold text-foreground mt-1 flex items-center gap-1.5">
-                    <Mail className="w-3.5 h-3.5 text-muted-foreground" />
-                    {currentUser.email}
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">User Role</p>
-                  <p className="text-sm font-bold text-foreground mt-1 capitalize flex items-center gap-1.5">
-                    <Shield className="w-3.5 h-3.5 text-indigo-500" />
-                    {currentUser.role}
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Department</p>
-                  <p className="text-sm font-bold text-foreground mt-1 flex items-center gap-1.5">
-                    <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
-                    {currentUser.department || "General"}
-                  </p>
-                </div>
+          {isEditing ? (
+            <form onSubmit={handleSave} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">
+                  {t("Full Name", language)}
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+                />
               </div>
-            )}
-          </div>
 
-          {/* Security & Password Section */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4 shadow-sm">
-            <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
-              <Lock className="w-5 h-5 text-indigo-500" />
-              Security & Credentials
-            </h2>
+              <div>
+                <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">
+                  {t("Department / Faculty (Read-only)", language)}
+                </label>
+                <input
+                  type="text"
+                  value={currentUser.department || "General"}
+                  disabled
+                  title="Department is managed by the administration"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-muted text-muted-foreground text-sm font-medium cursor-not-allowed"
+                />
+              </div>
 
-            {!showPasswordChange ? (
-              <div className="flex items-center justify-between p-4 rounded-xl bg-muted/30 border border-border">
-                <div>
-                  <p className="text-sm font-bold text-foreground">Password Authentication</p>
-                  <p className="text-xs text-muted-foreground">Keep your StudyLens account protected</p>
-                </div>
+              <div>
+                <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">
+                  {t("Email Address", language)}
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center gap-3">
                 <button
-                  onClick={() => setShowPasswordChange(true)}
-                  className="px-4 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-600 dark:text-indigo-400 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  type="submit"
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-sm"
                 >
-                  Change Password
+                  <Save className="w-4 h-4" /> {t("Save Changes", language)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(false)}
+                  className="px-4 py-2.5 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  {t("Cancel", language)}
                 </button>
               </div>
-            ) : (
-              <form onSubmit={handlePasswordChange} className="space-y-4 p-4 rounded-xl bg-muted/30 border border-border">
-                <p className="text-xs font-bold text-foreground">Set New Password</p>
+            </form>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
+                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">{t("Full Name", language)}</p>
+                <p className="text-sm font-bold text-foreground mt-1">{currentUser.name}</p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
+                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">{t("Email Address", language)}</p>
+                <p className="text-sm font-bold text-foreground mt-1 flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-muted-foreground" />
+                  {currentUser.email}
+                </p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
+                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">{t("User Role", language)}</p>
+                <p className="text-sm font-bold text-foreground mt-1 capitalize flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-indigo-500" />
+                  {currentUser.role}
+                </p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
+                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">{t("Department", language)}</p>
+                <p className="text-sm font-bold text-foreground mt-1 flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
+                  {currentUser.department || "General"}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-border/60 my-2" />
+
+        {/* Security & Credentials Section */}
+        <div className="space-y-4">
+          <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+            <Lock className="w-4 h-4 text-indigo-500" />
+            {t("Security & Credentials", language)}
+          </h3>
+
+          {!showPasswordChange ? (
+            <div className="flex items-center justify-between p-4 rounded-xl bg-muted/30 border border-border">
+              <div>
+                <p className="text-sm font-bold text-foreground">{t("Password Authentication", language)}</p>
+                <p className="text-xs text-muted-foreground">{t("Keep your StudyLens account protected", language)}</p>
+              </div>
+              <button
+                onClick={() => setShowPasswordChange(true)}
+                className="px-4 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-600 dark:text-indigo-400 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                {t("Change Password", language)}
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handlePasswordChange} className="space-y-4 p-4 rounded-xl bg-muted/30 border border-border">
+              <p className="text-xs font-bold text-foreground">{t("Set New Password", language)}</p>
+              <div>
+                <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">{t("Current Password", language)}</label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Enter your current password"
+                  className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">Current Password</label>
+                  <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">{t("New Password", language)}</label>
                   <input
                     type="password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                    placeholder="Enter your current password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    minLength={8}
+                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
+                  />
+                  <PasswordRequirements password={newPassword} />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">{t("Confirm Password", language)}</label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                    required
                     className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
                   />
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">New Password</label>
-                    <input
-                      type="password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      minLength={8}
-                      placeholder="••••••••"
-                      required
-                      className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
-                    />
-                    <PasswordRequirements password={newPassword} />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">Confirm Password</label>
-                    <input
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="••••••••"
-                      required
-                      className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="submit"
-                    disabled={passwordSubmitting}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-60"
-                  >
-                    {passwordSubmitting ? "Updating..." : "Update Password"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowPasswordChange(false)}
-                    className="px-3 py-2 bg-muted text-foreground hover:bg-muted/80 rounded-xl text-xs font-bold cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            )}
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={passwordSubmitting}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-60"
+                >
+                  {passwordSubmitting ? t("Update Password", language) : t("Update Password", language)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordChange(false)}
+                  className="px-3 py-2 bg-muted text-foreground hover:bg-muted/80 rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  {t("Cancel", language)}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+
+      {/* Recent Activity */}
+      <div className="bg-card border border-border rounded-2xl p-6 space-y-4 shadow-sm">
+        <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+          <Activity className="w-4 h-4 text-indigo-500" />
+          {t("Recent Activity", language)}
+        </h3>
+        <div className="space-y-3">
+          <div className="flex items-start gap-3 p-3 rounded-xl bg-muted/30 border border-border">
+            <Activity className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-foreground">{t("Profile updated", language)}</p>
+              <p className="text-[10px] text-muted-foreground">{t("Just now", language)}</p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3 p-3 rounded-xl bg-muted/30 border border-border">
+            <Lock className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-foreground">{t("Password changed", language)}</p>
+              <p className="text-[10px] text-muted-foreground">{t("Earlier today", language)}</p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3 p-3 rounded-xl bg-muted/30 border border-border">
+            <User className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-foreground">{t("Account created", language)}</p>
+              <p className="text-[10px] text-muted-foreground">{new Date(currentUser.createdAt).toLocaleDateString()}</p>
+            </div>
           </div>
         </div>
+      </div>
 
-        {/* Right Column: About My Role */}
-        <div className="space-y-6">
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4 shadow-sm">
-            <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-              <UserCheck className="w-4 h-4 text-indigo-500" />
-              About My Role
-            </h3>
-
-            <p className="text-xs text-muted-foreground leading-relaxed">{roleInfo.description}</p>
-
-            <ul className="space-y-2 text-xs">
-              {roleInfo.highlights.map((h) => (
-                <li key={h} className="flex items-start gap-2 text-muted-foreground">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
-                  {h}
-                </li>
-              ))}
-            </ul>
+      {/* Account Stats */}
+      <div className="bg-card border border-border rounded-2xl p-6 space-y-4 shadow-sm">
+        <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+          <PieChart className="w-4 h-4 text-indigo-500" />
+          {t("Account Stats", language)}
+        </h3>
+        <div className="overflow-x-auto pb-2">
+          <div className="flex flex-nowrap gap-3 min-w-full">
+            <div className="p-3 rounded-xl bg-muted/50 border border-border text-center min-w-[120px] flex flex-col justify-between">
+              <p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase tracking-wider truncate">{t("Quizzes Taken", language)}</p>
+              <p className="text-xl sm:text-2xl font-black text-foreground mt-1 leading-none">{stats.quizzesTaken}</p>
+            </div>
+            <div className="p-3 rounded-xl bg-muted/50 border border-border text-center min-w-[120px] flex flex-col justify-between">
+              <p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase tracking-wider truncate">{t("Flashcards Created", language)}</p>
+              <p className="text-xl sm:text-2xl font-black text-foreground mt-1 leading-none">{stats.flashcardsCreated}</p>
+            </div>
+            <div className="p-3 rounded-xl bg-muted/50 border border-border text-center min-w-[120px] flex flex-col justify-between">
+              <p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase tracking-wider truncate">{t("Study Hours", language)}</p>
+              <p className="text-xl sm:text-2xl font-black text-foreground mt-1 leading-none">{stats.studyHours}</p>
+            </div>
+            <div className="p-3 rounded-xl bg-muted/50 border border-border text-center min-w-[120px] flex flex-col justify-between">
+              <p className="text-[10px] sm:text-xs font-bold text-muted-foreground uppercase tracking-wider truncate">{t("Materials Uploaded", language)}</p>
+              <p className="text-xl sm:text-2xl font-black text-foreground mt-1 leading-none">{stats.materialsUploaded}</p>
+            </div>
           </div>
         </div>
       </div>
@@ -506,3 +683,4 @@ export const ProfilePage: React.FC = () => {
   );
 };
 export default ProfilePage;
+

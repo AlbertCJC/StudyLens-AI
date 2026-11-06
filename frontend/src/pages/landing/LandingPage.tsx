@@ -14,7 +14,6 @@ import type { UserRole } from "../../types";
 
 const FORGOT_RESET_KEY = "studylens_forgot_reset";
 const PENDING_VERIFY_KEY = "studylens_pending_verification";
-const PENDING_2FA_KEY = "studylens_pending_2fa";
 const VERIFY_CODE_KEY = "studylens_verify_code";
 
 function readForgotReset(): { open: boolean; email: string; step: "request" | "verify" } {
@@ -44,14 +43,6 @@ function readStoredPending(): { userId: string; email: string } | null {
   }
 }
 
-function readStoredPending2FA(): boolean {
-  try {
-    return !!localStorage.getItem(PENDING_2FA_KEY);
-  } catch {
-    return false;
-  }
-}
-
 function readStoredVerifyCode(): string {
   try {
     return localStorage.getItem(VERIFY_CODE_KEY) || "";
@@ -78,7 +69,7 @@ export const LandingPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"home" | "features" | "about" | "contact">("home");
   // If a pending email-verification or two-factor step was restored from localStorage, reopen
   // the auth panel so the Verify Email / Confirm Sign-In screen survives a reload / tab discard.
-  const [authModal, setAuthModal] = useState<"login" | "register" | null>(() => (readStoredPending() || readStoredPending2FA() ? "login" : null));
+  const [authModal, setAuthModal] = useState<"login" | "register" | null>(null);
   
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
@@ -128,10 +119,9 @@ export const LandingPage: React.FC = () => {
   const [forgotConfirm, setForgotConfirm] = useState("");
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
   const [forgotNotice, setForgotNotice] = useState("");
-  const [forgotDevCode, setForgotDevCode] = useState("");
 
   // Persist the forgot-password OTP step (email + which step) so it survives a
-  // reload / tab discard. The devCode is never persisted.
+  // reload / tab discard.
   React.useEffect(() => {
     try {
       localStorage.setItem(FORGOT_RESET_KEY, JSON.stringify({ open: forgotOpen, email: forgotEmail, step: forgotStep }));
@@ -339,9 +329,7 @@ export const LandingPage: React.FC = () => {
   };
 
   const handleFeatureCardClick = () => {
-    // Feature cards now open the login modal — no more 1-click demo sessions.
-    setRole("student");
-    setAuthModal("login");
+    scrollToSection("features");
   };
 
   const handleForgotSendCode = async (e: React.FormEvent) => {
@@ -352,7 +340,6 @@ export const LandingPage: React.FC = () => {
     }
     setForgotSubmitting(true);
     setForgotNotice("");
-    setForgotDevCode("");
     try {
       const res = await fetch("/api/auth/reset-otp", {
         method: "POST",
@@ -366,7 +353,6 @@ export const LandingPage: React.FC = () => {
       }
       setForgotStep("verify");
       setForgotNotice(data?.message || "A 6-digit verification code was sent to your email.");
-      setForgotDevCode(data?.devCode || "");
       showToast(res.status === 200 ? "Verification code sent." : data?.message || "Code sent.");
     } catch {
       showToast("Could not reach the server. Please check your connection and try again.", "error");
@@ -415,7 +401,6 @@ export const LandingPage: React.FC = () => {
         setForgotConfirm("");
         setForgotStep("request");
         setForgotNotice("");
-        setForgotDevCode("");
       }, 2200);
     } catch {
       showToast("Could not reach the server. Please check your connection and try again.", "error");
@@ -432,7 +417,6 @@ export const LandingPage: React.FC = () => {
     setForgotPassword("");
     setForgotConfirm("");
     setForgotNotice("");
-    setForgotDevCode("");
   };
 
   const scrollToSection = (id: "home" | "features" | "about" | "contact") => {
@@ -479,11 +463,6 @@ export const LandingPage: React.FC = () => {
                     We sent a 6-digit code to <span className="font-semibold text-slate-700 dark:text-slate-200">{effectivePending.email}</span>.
                     Enter it below to activate your account.
                   </p>
-                  {!!effectivePending.devCode && (
-                    <div className="mt-3 text-xs font-medium text-[#15803d] bg-[#16a34a]/5 border border-[#16a34a]/20 rounded-xl px-3 py-2.5">
-                      Dev mode: your code is <span className="font-mono font-bold text-sm tracking-[0.25em]">{effectivePending.devCode}</span>
-                    </div>
-                  )}
                 </div>
                 <form onSubmit={handleVerifyEmailSubmit} className="space-y-4 text-xs sm:text-sm">
                   {verifyNotice && (
@@ -553,11 +532,6 @@ export const LandingPage: React.FC = () => {
                   <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
                     We sent a 6-digit code to <span className="font-semibold text-slate-700 dark:text-slate-200">{pending2FA.email}</span>. Enter it below to finish signing in.
                   </p>
-                  {!!pending2FA.devCode && (
-                    <div className="mt-3 text-xs font-medium text-[#15803d] bg-[#16a34a]/5 border border-[#16a34a]/20 rounded-xl px-3 py-2.5">
-                      Dev mode: your code is <span className="font-mono font-bold text-sm tracking-[0.25em]">{pending2FA.devCode}</span>
-                    </div>
-                  )}
                 </div>
                 <form onSubmit={handleVerify2FASubmit} className="space-y-4 text-xs sm:text-sm">
                   {f2aNotice && (
@@ -927,11 +901,6 @@ export const LandingPage: React.FC = () => {
                     {forgotNotice}
                   </div>
                 )}
-                {forgotDevCode && (
-                  <div className="text-xs font-medium text-[#15803d] bg-[#16a34a]/5 border border-[#16a34a]/20 rounded-xl px-3 py-2.5">
-                    Dev mode: your code is <span className="font-mono font-bold text-sm tracking-[0.25em]">{forgotDevCode}</span>
-                  </div>
-                )}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Verification Code</label>
                   <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
@@ -1109,19 +1078,19 @@ export const LandingPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Bottom Stats (Exact match to screenshot 4) */}
+            {/* Bottom Stats */}
             <div className="grid grid-cols-3 gap-6 pt-8 max-w-lg border-t border-slate-200/60 dark:border-slate-800/80">
               <div>
-                <p className="text-2xl sm:text-3xl font-black text-[#5b51d8] dark:text-[#818cf8]">1000+</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">Active Students</p>
+                <p className="text-2xl sm:text-3xl font-black text-[#5b51d8] dark:text-[#818cf8]">AI-Powered</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">Learning Platform</p>
               </div>
               <div>
-                <p className="text-2xl sm:text-3xl font-black text-[#5b51d8] dark:text-[#818cf8]">500+</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">Quiz Generated</p>
+                <p className="text-2xl sm:text-3xl font-black text-[#5b51d8] dark:text-[#818cf8]">Smart</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">Flashcard Creation</p>
               </div>
               <div>
-                <p className="text-2xl sm:text-3xl font-black text-[#5b51d8] dark:text-[#818cf8]">95%</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">Success Rate</p>
+                <p className="text-2xl sm:text-3xl font-black text-[#5b51d8] dark:text-[#818cf8]">Adaptive</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">Progress Tracking</p>
               </div>
             </div>
           </div>
