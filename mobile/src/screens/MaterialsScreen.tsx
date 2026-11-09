@@ -10,7 +10,7 @@ import {
 import * as DocumentPicker from 'expo-document-picker';
 import { downloadBlobOnWeb, saveTextFile, saveBytesFile } from '../utils/fileExport';
 import { FileText, Download, UploadCloud, CheckCircle2, X } from 'lucide-react-native';
-import { fetchMaterials, fetchSubjects, uploadMaterial, updateMaterialSubject, convertToPdf, Material, Subject } from '../services/api';
+import { fetchMaterials, fetchSubjects, uploadMaterial, updateMaterialSubject, convertToPdf, downloadMaterialPdf, Material, Subject } from '../services/api';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -26,6 +26,7 @@ import {
   Badge,
 } from '../components/ui';
 import { STORAGE_KEYS, getStringSet, addToStringSet } from '../utils/storage';
+import { MaterialFileViewer, materialViewerExt } from '../components/MaterialFileViewer';
 
 const ACCEPTED_TYPES = [
   'application/pdf',
@@ -69,7 +70,6 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
     Promise.all([fetchMaterials(), fetchSubjects()]).then(([mats, subs]) => {
       setMaterials(mats);
       setSubjects(subs);
-      if (subs.length > 0 && !subjectId) setSubjectId(subs[0].id);
       setLoading(false);
     });
     if (currentUser?.id) {
@@ -144,14 +144,22 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
   };
 
   const handleDownloadPdf = async (m: Material) => {
+    const isWord = ['doc', 'docx'].includes((m.fileType || '').toLowerCase().replace(/^\./, ''));
+    const fetchBytes = async (): Promise<Uint8Array> => {
+      if (isWord) {
+        return downloadMaterialPdf(m.id);
+      }
+      return convertToPdf({
+        title: m.title,
+        metaLine: [m.subjectName, m.uploadedBy || ''].filter(Boolean).join(' · '),
+        content: m.extractedText || m.description || m.title,
+        items: [],
+      });
+    };
+
     if (Platform.OS === 'web') {
       try {
-        const bytes = await convertToPdf({
-          title: m.title,
-          metaLine: [m.subjectName, m.uploadedBy || ''].filter(Boolean).join(' · '),
-          content: m.extractedText || m.description || m.title,
-          items: [],
-        });
+        const bytes = await fetchBytes();
         downloadBlobOnWeb(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' }), `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.pdf`);
         await addToStringSet(STORAGE_KEYS.downloadedMaterials, m.id);
         setDownloadedIds((prev) => {
@@ -165,12 +173,7 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
       return;
     }
     try {
-      const bytes = await convertToPdf({
-        title: m.title,
-        metaLine: [m.subjectName, m.uploadedBy || ''].filter(Boolean).join(' · '),
-        content: m.extractedText || m.description || m.title,
-        items: [],
-      });
+      const bytes = await fetchBytes();
       const name = `${m.title.replace(/[^\w\s]/g, '').slice(0, 40) || 'material'}.pdf`;
       const outcome = await saveBytesFile(name, bytes, 'application/pdf', m.title);
       if (outcome === 'saved') showToast(`Saved ${name} to the selected folder.`, 'success');
@@ -261,6 +264,15 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
           <View>
             <Text style={styles.fieldLabel}>Course Subject</Text>
             <View style={styles.chipWrap}>
+              <TouchableOpacity
+                key="no-subject"
+                onPress={() => setSubjectId('')}
+                style={[styles.chip, subjectId === '' ? { backgroundColor: colors.primary } : { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: subjectId === '' ? '#fff' : colors.foreground }}>
+                  No Subject
+                </Text>
+              </TouchableOpacity>
               {subjects.map((s) => (
                 <TouchableOpacity
                   key={s.id}
@@ -411,7 +423,11 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
             {isAiMaterial(previewMaterial) && (
               <Text style={[styles.previewTitle, { color: colors.foreground }]}>{previewMaterial?.title}</Text>
             )}
-            <Text style={{ color: colors.foreground, fontSize: 14, lineHeight: 22 }}>{previewMaterial?.extractedText || previewMaterial?.title}</Text>
+            {previewMaterial && materialViewerExt(previewMaterial) ? (
+              <MaterialFileViewer material={previewMaterial} height={340} />
+            ) : (
+              <Text style={{ color: colors.foreground, fontSize: 14, lineHeight: 22 }}>{previewMaterial?.extractedText || previewMaterial?.title}</Text>
+            )}
           </View>
         </ScrollView>
 
@@ -447,7 +463,7 @@ export default function MaterialsScreen({ onNavigate, onCreateNotes }: { onNavig
         )}
 
         <View style={styles.modalActions}>
-          <OutlineButton label="Download PDF" onPress={() => previewMaterial && handleDownloadPdf(previewMaterial)} style={{ flex: 1 }} />
+          <OutlineButton label={(previewMaterial?.fileType || '').toLowerCase() === 'pdf' ? 'Download PDF' : 'Download as PDF'} onPress={() => previewMaterial && handleDownloadPdf(previewMaterial)} style={{ flex: 1 }} />
           <OutlineButton label="Download TXT" onPress={() => previewMaterial && handleDownloadTxt(previewMaterial)} style={{ flex: 1 }} />
         </View>
       </Modal>

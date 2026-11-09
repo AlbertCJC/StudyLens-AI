@@ -46,6 +46,7 @@ export interface AIWorkspace {
   generatedOutput: AIGeneratedResult | null;
   editTitle: string;
   offlineNotice: boolean;
+  offlineReason?: string;
   titleExists: boolean;
   pending?: boolean;
   completedAt?: number;

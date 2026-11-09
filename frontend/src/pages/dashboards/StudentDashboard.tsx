@@ -14,29 +14,11 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import { authFetch } from "../../utils/authFetch";
 import { CardDetailModal, WeakTopicsDetail, AttemptsDetail, DetailRow } from "../../components/CardDetailModal";
-import type { TopicPerformance } from "../../types";
+import type { StudentProgress } from "../../types";
 
 interface StudentDashboardProps {
   onNavigate: (tab: string) => void;
   onOpenWeakTopic?: (topic: string) => void;
-}
-
-interface StudentProgress {
-  averageScore?: number;
-  totalQuizzesTaken?: number;
-  weakTopics?: string[];
-  topicPerformances?: TopicPerformance[];
-  masteredTopics?: Array<{
-    topic: string;
-    currentAccuracy: number;
-    improvedFrom?: number | null;
-  }>;
-  recentQuizAttempts?: Array<{
-    quizTitle?: string;
-    subjectName?: string;
-    percentage: number;
-    completedAt?: string;
-  }>;
 }
 
 interface EnrolledSubject {

@@ -10,6 +10,14 @@ SAFE_LOCAL_EXTENSIONS = {
     "jpg", "jpeg", "png", "gif", "webp", "bmp",
 }
 
+# Document types Cloudinary stores as "raw" resources. Their public_id must keep
+# the extension so the delivered URL ends in .docx/.pptx/etc. - Microsoft's Office
+# viewer (used for inline Word/PowerPoint previews) identifies the format from the
+# URL path and fails with "File Not Found" when the extension is missing.
+RAW_DOCUMENT_EXTENSIONS = {
+    "doc", "docx", "ppt", "pptx", "txt", "md", "csv", "json", "rtf", "log",
+}
+
 def _safe_upload_name(original_filename):
     """Derives a server-controlled filename from a client-provided one.
 
@@ -36,6 +44,10 @@ def upload_file_to_cloud(file_bytes: bytes, filename: str, content_type: str = "
     cloudinary_url = os.getenv("CLOUDINARY_URL", "").strip()
     firebase_creds = os.getenv("FIREBASE_CREDENTIALS", "").strip()
     safe_name = _safe_upload_name(filename)
+    safe_ext = os.path.splitext(safe_name)[1].lstrip(".").lower()
+    # Keep the extension for raw documents (public preview relies on it); images
+    # and other resources use an extension-less public_id as before.
+    public_id = safe_name if safe_ext in RAW_DOCUMENT_EXTENSIONS else os.path.splitext(safe_name)[0]
 
     # 1. Try Cloudinary Upload
     if cloudinary_url:
@@ -48,7 +60,7 @@ def upload_file_to_cloud(file_bytes: bytes, filename: str, content_type: str = "
                 file_bytes,
                 resource_type="auto",
                 folder="studylens_materials",
-                public_id=os.path.splitext(safe_name)[0]
+                public_id=public_id
             )
             secure_url = result.get("secure_url") or result.get("url")
             if secure_url:

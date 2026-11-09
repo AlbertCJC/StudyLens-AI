@@ -107,7 +107,7 @@ const handleExportPDF = async () => {
       const content = [
         `**Student:** ${currentUser?.name ?? "—"} | **Email:** ${currentUser?.email ?? "—"}`,
         `**Average score:** ${progress?.averageScore ?? 0}% | **Quizzes completed:** ${progress?.totalQuizzesTaken ?? 0}`,
-        `**Flashcard decks built:** ${progress?.completedFlashcardDecks ?? 0}`,
+        `**Flashcard decks generated:** ${progress?.totalFlashcardDecksGenerated ?? 0}`,
         "",
         "## Topic Performance",
         ...(topics.length ? topics : ["- No topic data yet."]),

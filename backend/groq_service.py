@@ -22,12 +22,12 @@ REQUEST_TIMEOUT_SECONDS = 45
 # Retry-After header, capped) so transient free-tier 429/413 limits recover instead of
 # hard-failing. Caps keep the worst-case wait short: 2 attempts x 2 models x 6s = ~24s
 # before degrading to offline, so multi-turn "add more" requests never spin for minutes.
-MAX_RATE_LIMIT_RETRIES = 3
+MAX_RATE_LIMIT_RETRIES = 2
 RATE_LIMIT_BACKOFF_BASE = 2.0
-RATE_LIMIT_BACKOFF_CAP = 15.0
+RATE_LIMIT_BACKOFF_CAP = 8.0
 # Clamp any provider Retry-After header to this many seconds so a large free-tier TPM
 # reset window (often 30-60s) never turns a single call into a multi-minute hang.
-RATE_LIMIT_RETRY_AFTER_MAX = 6
+RATE_LIMIT_RETRY_AFTER_MAX = 4
 
 
 def _rate_limit_delay(err, attempt):
@@ -57,13 +57,14 @@ def _rate_limit_delay(err, attempt):
 MAX_AI_QUESTIONS = 100
 MAX_AI_FLASHCARDS = 100
 MAX_PER_CHUNK = 10
-# Safety ceiling on batching rounds (100 items / 10 per call = 10 rounds; 12 leaves headroom).
-MAX_BATCH_ROUNDS = 12
+# Safety ceiling on batching rounds (typical 5-10 questions need 1-2 rounds; 4 leaves
+# headroom without stalling the user waiting on repeated AI calls).
+MAX_BATCH_ROUNDS = 4
 
 # Pacing delay inserted between consecutive AI calls inside a batched generation so a
 # large request (e.g. "add 20 more") doesn't burst several requests into the same free-tier
 # rate-limit window right after the previous generation.
-BATCH_CALL_PACING_SECONDS = 1.5
+BATCH_CALL_PACING_SECONDS = 0.5
 
 # Records the reason the most recent generation degraded to offline content-derived output,
 # so callers can surface a clear "offline mode" notice instead of silently returning fallback results.
@@ -919,9 +920,10 @@ def _instruction_directive(instructions: str = "") -> str:
     return (
         "\n\nUSER INSTRUCTIONS (follow these strictly):\n"
         f"{instructions}\n"
-        "Analyze this instruction and shape the output accordingly: choose relevant topics, "
-        "question style, difficulty mix, and emphasis based on what is instructed, "
-        "while still grounding everything in the material text below."
+        "Apply this instruction ONLY to question style, difficulty mix, emphasis, and how many "
+        "questions of each format to make. Do NOT let it introduce concepts, examples, or topics "
+        "outside the material text below — every question must stay on the material's actual subject. "
+        "The format names (multiple choice, identification, true or false) describe the FORMAT, not the subject."
     )
 
 def _randomize_mc_correct_answer(questions: list) -> list:
@@ -1096,7 +1098,9 @@ def _resolve_quiz_plan(ordered_types, counts=None, overall_count=None):
          named formats using the largest-remainder method.
       3. Otherwise every named format defaults to ``DEFAULT_PER_FORMAT`` (5).
 
-    The plan never exceeds ``MAX_AI_QUESTIONS`` total.
+    A request whose total exceeds ``MAX_AI_QUESTIONS`` raises
+    ``GroqAPIError("COUNT_EXCEEDS_MAX")`` so the caller can tell the user the maximum
+    instead of silently generating fewer questions than requested.
     """
     if not ordered_types:
         return None
@@ -1124,6 +1128,14 @@ def _resolve_quiz_plan(ordered_types, counts=None, overall_count=None):
                 remaining -= 1
     else:
         plan = {t: DEFAULT_PER_FORMAT for t in ordered_types}
+    # Reject over-limit requests BEFORE clamping so the user is told the maximum
+    # instead of silently receiving fewer questions than they asked for.
+    requested_total = sum(c for c in plan.values() if c > 0)
+    if requested_total > MAX_AI_QUESTIONS:
+        raise GroqAPIError(
+            "COUNT_EXCEEDS_MAX",
+            f"You can generate a maximum of {MAX_AI_QUESTIONS} questions only. Please reduce the number and try again.",
+        )
     plan = {t: min(c, MAX_AI_QUESTIONS) for t, c in plan.items() if c > 0}
     return _clamp_plan_total(plan, MAX_AI_QUESTIONS) or None
 
@@ -1258,7 +1270,12 @@ def _composition_system_prompt():
         '    "difficulty": "medium",\n'
         '    "topicTag": "Topic Name"\n'
         "  }\n\n"
-        "Observe the requested type for each question and use the matching schema above."
+        "Observe the requested type for each question and use the matching schema above.\n\n"
+        "TOPIC FOCUS (strict):\n"
+        "- Every question MUST test the actual SUBJECT MATTER in the provided material text (for example, the database concepts themselves), NOT the quiz format.\n"
+        "- NEVER generate questions about assessment formats, question types, pedagogy, education theory, or generic test-taking ideas. For example, do NOT ask what a multiple-choice / identification / true-or-false question is, or what an assessment format requires.\n"
+        "- The words \"multiple choice\", \"identification\", and \"true or false\" describe the FORMAT you must use — they are NOT the subject of the questions.\n"
+        "- If the material does not contain enough information about the requested topic, return fewer on-topic questions rather than inventing off-topic ones."
     )
 
 
@@ -1303,7 +1320,10 @@ def _composition_request_prompt(qtype, need, chunk, difficulty, instructions, ex
         gen_line
         + rule
         + f"\nTarget Difficulty: {difficulty}\n"
-        "The material below is the PRIMARY source. Use this entire section and generate every question strictly from its own concepts.\n"
+        "The material below is the ONLY source of truth. Generate every question strictly about the subject matter in this section.\n"
+        "Do NOT write questions about quiz formats, assessment methods, education theory, or generic test-taking concepts "
+        "(e.g. never ask what an identification / multiple-choice / true-or-false question is). "
+        "If this section lacks enough relevant content, return fewer on-topic questions instead of off-topic ones.\n"
         f"{_instruction_directive(instructions)}"
         f"{existing_block}"
         f"\nMaterial Text (request {request_no}):\n{chunk}\n\n"
@@ -1407,10 +1427,57 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
     blooms_levels = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"]
     context = context or []
 
+    # Auto-correct only genuinely misspelled quiz-type words in user's prompt text.
+    # Do NOT touch correctly-spelled names like "multiple choice", "identification", "true/false".
+    def _correct_spelling(text):
+        if not isinstance(text, str) or not text:
+            return text
+        _map = {
+            "identication": "identification", "identifications": "identification",
+            "identifcation": "identification", "true/fasle": "true/false",
+            "truefalse": "true/false", "t/f": "true/false",
+            "multichoice": "multiple choice", "mcq": "multiple choice",
+            "shortanswer": "identification", "short answer": "identification",
+        }
+        result = text
+        lower = text.lower()
+        for wrong, correct in _map.items():
+            if wrong in lower:
+                result = result.replace(wrong, correct).replace(wrong.title(), correct.title()).replace(wrong.upper(), correct.upper())
+        return result
+
+    instructions = _correct_spelling(instructions or "")
+    text_content = _correct_spelling(text_content or "")
+
+    # When no source material is attached but the user gave instructions (a topic
+    # request like "questions about Querying"), extract the topic from the
+    # instructions and build a short topic scaffold so questions are grounded in
+    # the actual subject instead of treating the request text as source material.
+    if not text_content.strip() and instructions.strip():
+        topic = None
+        for prep in ("with", "about", "on", "for", "of", "in", "regarding"):
+            m = re.search(rf"\b{prep}\s+([A-Za-z][A-Za-z0-9\- ]+)", instructions, re.IGNORECASE)
+            if m:
+                topic = m.group(1).strip(".,;:!?").strip()
+                break
+        if not topic:
+            topic = _prompt_topic(instructions)
+        text_content = (
+            f"{topic}\n"
+            f"Topic: {topic}. Generate study material about this topic using your own knowledge of it.\n"
+            f"Key focus areas: core definitions, main concepts, important terminology, key processes, and practical applications related to {topic}.\n"
+            f"Cover the essential ideas a student must understand about {topic}."
+        )
+
     try:
         num_questions = int(num_questions)
     except (TypeError, ValueError):
         num_questions = 5
+    if num_questions > MAX_AI_QUESTIONS:
+        raise GroqAPIError(
+            "COUNT_EXCEEDS_MAX",
+            f"You can generate a maximum of {MAX_AI_QUESTIONS} questions only. Please reduce the number and try again.",
+        )
     num_questions = max(1, min(MAX_AI_QUESTIONS, num_questions))
 
     if _is_prompt_like(text_content):
@@ -1441,12 +1508,15 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
     # structured error the route surface turns into a friendly validation message.
     overall_count = _extract_overall_count(instructions) or _extract_overall_count(text_content)
     if overall_count is not None:
+        if overall_count > MAX_AI_QUESTIONS:
+            raise GroqAPIError(
+                "COUNT_EXCEEDS_MAX",
+                f"You can generate a maximum of {MAX_AI_QUESTIONS} questions only. Please reduce the number and try again.",
+            )
         num_questions = max(1, min(MAX_AI_QUESTIONS, overall_count))
     elif require_count:
-        raise GroqAPIError(
-            "COUNT_REQUIRED",
-            'Include how many questions you want in the prompt (e.g. "Make 10 multiple choice questions" or "5 identification, 10 multiple choice, 5 true or false").',
-        )
+        # No explicit count was given: default to 5 questions instead of blocking.
+        num_questions = 5
 
     system_prompt = (
         "You are StudyLens AI Assessment Generator powered by Groq Inference (GPT-OSS-120B). "
@@ -1463,7 +1533,12 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
         '    "difficulty": "medium",\n'
         '    "topicTag": "Topic Name"\n'
         "  }\n"
-        "]"
+        "]\n\n"
+        "TOPIC FOCUS (strict): Every question MUST test the actual subject matter in the "
+        "provided material. NEVER generate questions about quiz formats, assessment methods, "
+        "education theory, or generic test-taking concepts. The words used to describe a "
+        "question format are NOT the subject of the questions. If the material lacks enough "
+        "relevant content, generate fewer on-topic questions rather than off-topic ones."
     )
 
     chunks = _generation_chunks(text_content, 4000)
@@ -1489,7 +1564,8 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
                 gen_line
                 + f"Ensure questions cover Bloom's 6 cognitive levels: Remembering, Understanding, Applying, Analyzing, Evaluating, Creating.\n"
                 f"Target Difficulty: {difficulty}\n"
-                f"The material below is the PRIMARY source. Use this entire section and generate every question strictly from its own concepts.\n"
+                f"The material below is the ONLY source of truth. Generate every question strictly about the subject matter in this section.\n"
+                "Do NOT write questions about quiz formats, assessment methods, education theory, or generic test-taking concepts.\n"
                 "OPTION RULES (strict):\n"
                 "- Every option must be SHORT (roughly 1 to 8 words), self-contained, and distinct — a plausible answer phrase, never a quoted paragraph or full sentence copied from the document.\n"
                 "- NEVER copy a document sentence verbatim, and NEVER truncate an option with '...'.\n"

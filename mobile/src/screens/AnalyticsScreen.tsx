@@ -7,9 +7,14 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { Card, StatCard, SectionHeader, ProgressBar, EmptyState, Modal } from '../components/ui';
 import { ThemedBarChart, ThemedLineChart } from '../components/Charts';
-import { getAttempts, LocalAttempt } from '../utils/storage';
 import { formatRelative } from '../utils/time';
-import { getApiBaseUrl, getAuthToken } from '../services/api';
+import {
+  getApiBaseUrl,
+  getAuthToken,
+  fetchStudentProgress,
+  StudentProgress,
+  EMPTY_STUDENT_PROGRESS,
+} from '../services/api';
 
 interface TopicStat {
   topic: string;
@@ -56,16 +61,27 @@ export default function AnalyticsScreen({
   const { showToast } = useToast();
   const userId = currentUser?.id || '';
 
-  const [attempts, setAttempts] = useState<LocalAttempt[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [progress, setProgress] = useState<StudentProgress | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [serverRecs, setServerRecs] = useState<ServerRecommendation[] | null>(null);
   const [detailCard, setDetailCard] = useState<'average' | 'assessments' | 'best' | 'weak' | null>(null);
 
   useEffect(() => {
-    getAttempts(userId).then((data) => {
-      setAttempts(data);
-      setLoaded(true);
-    });
+    if (!getAuthToken()) {
+      setLoading(false);
+      return;
+    }
+    fetchStudentProgress(userId)
+      .then((data) => {
+        setProgress(data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Failed to load student progress:", err);
+        setError("Could not load progress data.");
+        setLoading(false);
+      });
   }, [userId]);
 
   useEffect(() => {
@@ -84,49 +100,31 @@ export default function AnalyticsScreen({
     };
   }, [userId]);
 
-  if (!loaded) return null;
+  if (loading) return null;
 
-  const sorted = [...attempts].sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
-  const avg = sorted.reduce((sum, a) => sum + a.percentage, 0) / Math.max(1, sorted.length);
+  const progressData = progress ?? EMPTY_STUDENT_PROGRESS(userId);
+  const sorted = [...(progressData.recentQuizAttempts ?? [])]
+    .map((a) => ({ ...a, completedAt: a.submittedAt || a.completedAt }))
+    .sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
+
+  const avg = progressData.averageScore;
   const best = sorted.reduce((max, a) => Math.max(max, a.percentage), 0);
   const passedCount = sorted.filter((a) => a.passed).length;
 
-  const topicMap = new Map<string, TopicStat>();
-  sorted.forEach((a) => {
-    a.strongTopics.forEach((t) => {
-      const cur = topicMap.get(t) || { topic: t, correct: 0, wrong: 0, accuracy: 0 };
-      cur.correct += 1;
-      topicMap.set(t, cur);
-    });
-    a.weakTopics.forEach((t) => {
-      const cur = topicMap.get(t) || { topic: t, correct: 0, wrong: 0, accuracy: 0 };
-      cur.wrong += 1;
-      topicMap.set(t, cur);
-    });
-  });
-  const topicStats = Array.from(topicMap.values()).map((t) => ({
-    ...t,
-    accuracy: Math.round((t.correct / Math.max(1, t.correct + t.wrong)) * 100),
+  const topicStats = progressData.topicPerformances.map((t) => ({
+    topic: t.topic,
+    correct: t.correctAnswers,
+    wrong: Math.max(0, t.totalQuestions - t.correctAnswers),
+    accuracy: t.accuracyPercentage,
   }));
   topicStats.sort((a, b) => a.accuracy - b.accuracy);
 
-  // Latest status wins: a once-weak topic counts as mastered only if its most
-  // recent appearance was in a correct-answer ("strong") list.
-  const lastStatus = new Map<string, 'weak' | 'strong'>();
-  [...sorted].reverse().forEach((a) => {
-    (a.weakTopics || []).forEach((t) => {
-      if (!lastStatus.has(t)) lastStatus.set(t, 'weak');
-    });
-    (a.strongTopics || []).forEach((t) => {
-      if (!lastStatus.has(t)) lastStatus.set(t, 'strong');
-    });
-  });
-  const everWeak = new Set<string>();
-  attempts.forEach((a) => (a.weakTopics || []).forEach((t) => everWeak.add(t)));
-  const masteredTopics = Array.from(everWeak).filter((t) => lastStatus.get(t) === 'strong');
+  const weakTopics = progressData.weakTopics;
+  const masteredTopics = (progressData.masteredTopics ?? []).map((m) => m.topic);
 
-  const weakTopics = topicStats.filter((t) => t.accuracy < 70 && !masteredTopics.includes(t.topic)).slice(0, 3);
-  const chartTopics = topicStats.slice().sort((a, b) => b.correct + b.wrong - (a.correct + a.wrong)).slice(0, 5);
+  const chartTopics = [...topicStats]
+    .sort((a, b) => (b.correct + b.wrong) - (a.correct + a.wrong))
+    .slice(0, 5);
   const trend = sorted.slice(-8);
 
   const exportReport = async () => {
@@ -149,7 +147,7 @@ export default function AnalyticsScreen({
       '',
       'Recommendations',
       '---------------',
-      ...weakTopics.map((t) => `Review ${t.topic} using materials + AI reviewer`),
+      ...weakTopics.map((t) => `Review ${t} using materials + AI reviewer`),
     ];
     try {
       const outcome = await saveTextFile('StudyLens-Progress-Report.txt', lines.join('\n'), 'text/plain', 'Learning Progress Report');
@@ -311,25 +309,32 @@ export default function AnalyticsScreen({
           {weakTopics.length === 0 ? (
             <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No weak topics detected. Great job!</Text>
           ) : (
-            weakTopics.map((t) => (
-              <TouchableOpacity
-                key={t.topic}
-                style={[styles.detailRow, { borderColor: colors.border }]}
-                activeOpacity={0.7}
-                onPress={() => {
-                  setDetailCard(null);
-                  if (onOpenWeakTopic) onOpenWeakTopic(t.topic);
-                  else onNavigate('ai-assistant');
-                }}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>{t.topic}</Text>
-                  <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>Tap to study with AI</Text>
-                </View>
-                <Text style={{ color: colors.danger, fontSize: 12, fontWeight: '800' }}>{t.accuracy}%</Text>
-                <ChevronRight size={16} color={colors.mutedForeground} />
-              </TouchableOpacity>
-            ))
+            weakTopics.map((topicName) => {
+              const stat = topicStats.find((t) => t.topic === topicName);
+              return (
+                <TouchableOpacity
+                  key={topicName}
+                  style={[styles.detailRow, { borderColor: colors.border }]}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setDetailCard(null);
+                    if (onOpenWeakTopic) onOpenWeakTopic(topicName);
+                    else onNavigate('ai-assistant');
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.foreground, fontSize: 12, fontWeight: '700' }}>
+                      {topicName}
+                    </Text>
+                    <Text style={{ color: colors.mutedForeground, fontSize: 10 }}>Tap to study with AI</Text>
+                  </View>
+                  <Text style={{ color: colors.danger, fontSize: 12, fontWeight: '800' }}>
+                    {stat ? `${stat.accuracy}%` : '—'}
+                  </Text>
+                  <ChevronRight size={16} color={colors.mutedForeground} />
+                </TouchableOpacity>
+              );
+            })
           )}
         </View>
       </Modal>
@@ -403,22 +408,27 @@ export default function AnalyticsScreen({
         ) : weakTopics.length === 0 ? (
           <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No weak topics detected. Keep up the excellent work!</Text>
         ) : (
-          weakTopics.map((t) => (
-            <View key={t.topic} style={[styles.recoCard, { borderColor: colors.border }]}>
-              <View style={[styles.recoIcon, { backgroundColor: colors.dangerSoft }]}>
-                <Target size={16} color={colors.danger} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '800' }}>{t.topic}</Text>
-                <Text style={{ color: colors.mutedForeground, fontSize: 11, marginTop: 2 }}>
-                  {t.accuracy}% accuracy - review materials and retake quizzes
-                </Text>
-                <View style={styles.recoBar}>
-                  <ProgressBar value={t.accuracy} color={colors.danger} height={6} />
+          weakTopics.map((topicName) => {
+            const stat = topicStats.find((t) => t.topic === topicName);
+            return (
+              <View key={topicName} style={[styles.recoCard, { borderColor: colors.border }]}>
+                <View style={[styles.recoIcon, { backgroundColor: colors.dangerSoft }]}>
+                  <Target size={16} color={colors.danger} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: '800' }}>
+                    {topicName}
+                  </Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 11, marginTop: 2 }}>
+                    {stat ? `${stat.accuracy}%` : '—'}% accuracy - review materials and retake quizzes
+                  </Text>
+                  <View style={styles.recoBar}>
+                    <ProgressBar value={stat ? stat.accuracy : 0} color={colors.danger} height={6} />
+                  </View>
                 </View>
               </View>
-            </View>
-          ))
+            );
+          })
         )}
         {masteredTopics.length > 0 && (
           <View style={{ gap: 8 }}>

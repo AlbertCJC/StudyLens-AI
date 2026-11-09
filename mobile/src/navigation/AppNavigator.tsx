@@ -175,9 +175,9 @@ function SubjectsTab() {
 }
 
 function AITab({ route, navigation }: any) {
-  const { initialTopic, initialMaterial } = route.params ?? {};
+  const { initialTopic, initialMaterial, initialMode } = route.params ?? {};
   const consume = React.useCallback(() => {
-    navigation.setParams({ initialTopic: null, initialMaterial: null });
+    navigation.setParams({ initialTopic: null, initialMaterial: null, initialMode: null });
   }, [navigation]);
   return (
     <Shell title={PAGE_TITLES['ai-assistant']} activeKey="ai-assistant">
@@ -185,6 +185,7 @@ function AITab({ route, navigation }: any) {
         onNavigate={navTo}
         initialTopic={initialTopic ?? null}
         initialMaterial={initialMaterial ?? null}
+        initialMode={initialMode ?? null}
         onSeedConsumed={consume}
       />
     </Shell>

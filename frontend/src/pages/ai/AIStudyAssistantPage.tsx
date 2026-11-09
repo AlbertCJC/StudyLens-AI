@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Sparkles, BookOpen, CheckSquare, Layers, FileText, Save, Check, AlertCircle, UploadCloud, X, CheckCircle2, Download, Plus, AlertTriangle,} from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { authFetch } from "../../utils/authFetch";
@@ -17,12 +18,46 @@ import {
 } from "../../utils/aiWorkspaceCache";
 import type { LearningMaterial } from "../../types";
 
-const friendlyAiError = (message: string, code?: string): string => {
+const formatWait = (seconds?: number): string => {
+  if (!seconds || seconds <= 0) return "";
+  if (seconds < 60) {
+    const s = Math.ceil(seconds);
+    return `${s} second${s === 1 ? "" : "s"}`;
+  }
+  const m = Math.ceil(seconds / 60);
+  return `${m} minute${m === 1 ? "" : "s"}`;
+};
+
+const offlineBannerMessage = (reason?: string): string => {
+  switch ((reason || "").toUpperCase()) {
+    case "RATE_LIMITED":
+      return "The AI provider's rate limit was reached — results came from the material's text content instead. Please try again in a moment.";
+    case "NO_API_KEY":
+      return "The AI service is not configured (no API key). Please contact your administrator.";
+    case "SDK_MISSING":
+      return "The AI service SDK is not installed on the server. Please contact your administrator.";
+    case "BILLING_INACTIVE":
+      return "The AI service billing is not active. Please contact your administrator.";
+    default:
+      return "AI service is offline — results were generated from the material's text content instead.";
+  }
+};
+
+const friendlyAiError = (message: string, code?: string, resetAtSeconds?: number): string => {
   const lower = message.toLowerCase();
+  if (code === "COUNT_EXCEEDS_MAX") {
+    return "You can generate up to 100 questions only. Please reduce the number and try again.";
+  }
+  if (code === "RATE_LIMITED" || lower.includes("too many ai requests")) {
+    const wait = formatWait(resetAtSeconds);
+    return wait
+      ? `You've reached the AI limit for this minute. You can generate again in about ${wait}.`
+      : "You've reached the AI limit for this minute. Please wait a moment and try again.";
+  }
   if (lower.includes("payment") || lower.includes("billing") || code === "PAYMENT_REQUIRED") {
     return "The AI service is currently unavailable. Your request was handled locally instead, so generation is still allowed.";
   }
-  if (lower.includes("limit") || lower.includes("rate limit") || code === "RATE_LIMITED") {
+  if (lower.includes("limit") || lower.includes("rate limit")) {
     return "You have reached the AI generation limit for this session. Please wait a moment and try again.";
   }
   if (lower.includes("how many questions") || code === "COUNT_REQUIRED") {
@@ -33,11 +68,14 @@ const friendlyAiError = (message: string, code?: string): string => {
 
 const slugifyName = (s: string): string => {
   const slug = s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "")
     .slice(0, 60);
   return slug || "studylens-resource";
+};
+
+const sanitizeFileName = (s: string): string => {
+  return s.replace(/[\\/:*?"<>|]/g, "").trim().slice(0, 60) || "studylens-quiz";
 };
 
 const exportAiPdf = async (input: {
@@ -100,7 +138,18 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>(initialMaterial?.id || initialWs.selectedMaterialId || "");
   const [sourceText, setSourceText] = useState<string>(initialMaterial?.extractedText || initialWs.sourceText || "");
   const [prompt, setPrompt] = useState<string>(initialWs.prompt || "");
-  const [mode, setMode] = useState<AIMode>(initialWs.mode || "quiz");
+  // Deep link from other pages (e.g. the Flashcards "AI Flashcard Generator"
+  // button) can request a specific generator mode.
+  const [searchParams] = useSearchParams();
+  const requestedMode = searchParams.get("mode");
+  const requestedAIMode: AIMode | null =
+    requestedMode === "quiz" ||
+    requestedMode === "flashcards" ||
+    requestedMode === "summary" ||
+    requestedMode === "reviewer"
+      ? requestedMode
+      : null;
+  const [mode, setMode] = useState<AIMode>(requestedAIMode ?? initialWs.mode ?? "quiz");
 
   // Input Content State
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -128,6 +177,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
   const [savedDrafts, setSavedDrafts] = useState<Partial<Record<AIMode, boolean>>>(initialWs.savedDrafts || {});
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [offlineNotice, setOfflineNotice] = useState(initialWs.offlineNotice === true);
+  const [offlineReason, setOfflineReason] = useState<string>(initialWs.offlineReason || "");
   const [titleExists, setTitleExists] = useState(initialWs.titleExists === true);
 
   // Teacher Editable State
@@ -167,6 +217,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
       generatedOutput,
       editTitle,
       offlineNotice,
+      offlineReason,
       titleExists,
       pending: isJobRunning(uid),
     };
@@ -181,7 +232,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
     mode, prompt, sourceText, selectedMaterialId, uploadedFileName,
     flashcardCount, quizRevealAnswers,
     drafts, draftTitles, savedDrafts, generatedOutput, editTitle,
-    offlineNotice, titleExists, currentUser?.id,
+    offlineNotice, offlineReason, titleExists, currentUser?.id,
   ]);
 
   // On mount, if a background generation is still running, keep the spinner
@@ -212,6 +263,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
           setEditTitle(title);
           setDraftTitles((prev) => ({ ...prev, [wsMode]: title }));
           setOfflineNotice(ws.offlineNotice === true);
+          setOfflineReason(ws.offlineReason || "");
           setTitleExists(ws.titleExists === true);
           setIsGenerating(false);
           setSavedSuccess(false);
@@ -259,6 +311,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
     setSavedSuccess(false);
     setSaveSuccessMsg(null);
     setOfflineNotice(false);
+    setOfflineReason("");
   };
 
   const generateAbortRef = useRef<AbortController | null>(null);
@@ -377,6 +430,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
     setSavedSuccess(false);
     setSavedDrafts((prev) => ({ ...prev, [genMode]: false }));
     setOfflineNotice(false);
+    setOfflineReason("");
     setTitleExists(false);
 
     const controller = new AbortController();
@@ -414,12 +468,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
 
       if (res.ok && data) {
         const result = data as AIGeneratedResult;
-        const modeLabel =
-          genMode === "quiz" ? "Quiz" : genMode === "flashcards" ? "Flashcard Deck" : genMode === "summary" ? "Summary" : "Reviewer";
-        const fileBase = uploadedFile?.name?.replace(/\.[^/.]+$/, "") || "";
-        const promptBase = prompt.trim().slice(0, 60);
-        const sourceTitle = fileBase || promptBase || (materials.find((m) => m.id === selectedMaterialId)?.title ?? "");
-        const computedTitle = sourceTitle ? `${modeLabel}: ${sourceTitle}` : result.title || modeLabel;
+        const computedTitle = result.title || "AI Quiz";
 
         // Persist to the workspace cache so the result survives navigating away.
         // This runs even if the component unmounted mid-generation.
@@ -430,7 +479,10 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
         existing.draftTitles = { ...existing.draftTitles, [genMode]: computedTitle };
         existing.editTitle = computedTitle;
         existing.sourceText = sourceText || existing.sourceText;
-        existing.offlineNotice = data.source === "offline-fallback";
+        const offlineFallback = data.source === "offline-fallback";
+        const offlineReasonValue = typeof data.offlineReason === "string" ? data.offlineReason : "";
+        existing.offlineNotice = offlineFallback;
+        existing.offlineReason = offlineReasonValue;
         existing.titleExists = data.titleExists === true;
         existing.completedAt = Date.now();
         saveWorkspace(uid, existing);
@@ -438,7 +490,8 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
         if (mountedRef.current) {
           setGeneratedOutput(result);
           setDrafts((prev) => ({ ...prev, [genMode]: result }));
-          setOfflineNotice(data.source === "offline-fallback");
+          setOfflineNotice(offlineFallback);
+          setOfflineReason(offlineReasonValue);
           setTitleExists(data.titleExists === true);
           setEditTitle(computedTitle);
           setDraftTitles((prev) => ({ ...prev, [genMode]: computedTitle }));
@@ -447,7 +500,8 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
       } else if (data) {
         const rawError = typeof data.error === "string" ? data.error : `Server returned status ${res.status}`;
         const errorCode = typeof data.code === "string" ? data.code : "";
-        if (mountedRef.current) setErrorMsg(friendlyAiError(rawError, errorCode));
+        const resetAtSeconds = typeof data.resetAtSeconds === "number" ? data.resetAtSeconds : undefined;
+        if (mountedRef.current) setErrorMsg(friendlyAiError(rawError, errorCode, resetAtSeconds));
       } else if (mountedRef.current) {
         setErrorMsg("The server returned an invalid response. Please ensure the Flask backend is running.");
       }
@@ -471,7 +525,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
   const handleDownloadResource = async (downloadTarget?: { title: string; type: string; itemData: Record<string, unknown> }) => {
     let targetMode: AIMode | "flashcard" = mode;
     let targetData: AIGeneratedResult | Record<string, unknown> | null = generatedOutput;
-    let docTitle = editTitle || (mode === "reviewer" ? "AI Study Reviewer" : "AI Lecture Summary");
+    let docTitle = editTitle || (mode === "reviewer" ? "AI Study Reviewer" : mode === "quiz" ? "AI Quiz" : "AI Lecture Summary");
 
     if (downloadTarget) {
       targetMode = downloadTarget.type as AIMode | "flashcard";
@@ -494,7 +548,9 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
         title: docTitle,
         data: targetData as Record<string, unknown>,
       });
-      triggerPdfDownload(blob, slugifyName(docTitle));
+      const fileName = window.prompt("Enter file name:", docTitle);
+      if (fileName === null) return;
+      triggerPdfDownload(blob, sanitizeFileName(fileName.trim() || docTitle));
     } catch (err) {
       setErrorMsg((err as Error).message || "Could not export the PDF.");
     }
@@ -524,6 +580,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
     setSavedDrafts({});
     setEditTitle("");
     setOfflineNotice(false);
+    setOfflineReason("");
     setTitleExists(false);
     setErrorMsg(null);
   };
@@ -579,7 +636,8 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
       } else {
         const rawError = typeof data?.error === "string" ? data.error : `Server returned status ${res.status}`;
         const code = typeof data?.code === "string" ? data.code : "";
-        setErrorMsg(friendlyAiError(rawError, code));
+        const resetAtSeconds = typeof data?.resetAtSeconds === "number" ? data.resetAtSeconds : undefined;
+        setErrorMsg(friendlyAiError(rawError, code, resetAtSeconds));
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -802,7 +860,7 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
               <div className="p-3 bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 rounded-xl text-[11px] font-semibold flex items-start space-x-2">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  AI service is offline — results were generated from the material's text content instead.
+                  {offlineBannerMessage(offlineReason)}
                 </span>
               </div>
             )}
@@ -818,14 +876,14 @@ export const AIStudyAssistantPage: React.FC<AIStudyAssistantPageProps> = ({
             <div className="flex flex-wrap items-center justify-end gap-2">
               {generatedOutput && (
                 <div className="flex flex-wrap items-center justify-end gap-2">
-                  {(mode === "reviewer" || mode === "summary") && (
+                  {(mode === "reviewer" || mode === "summary" || mode === "quiz") && (
                     <button
                       onClick={() => handleDownloadResource()}
                       className="px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
-                      title={`Download ${mode === "reviewer" ? "Reviewer" : "Summary"} as a PDF document`}
+                      title={`Download ${mode === "reviewer" ? "Reviewer" : mode === "quiz" ? "Quiz" : "Summary"} as a PDF document`}
                     >
                       <Download className="w-4 h-4" />
-                      <span>Download {mode === "reviewer" ? "Reviewer" : "Summary"} (PDF)</span>
+                      <span>Download {mode === "reviewer" ? "Reviewer" : mode === "quiz" ? "Quiz" : "Summary"} (PDF)</span>
                     </button>
                   )}
 

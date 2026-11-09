@@ -36,8 +36,9 @@ export interface LearningMaterial {
   subjectId: string | null;
   subjectName: string;
   /** `ai-summary` / `ai-reviewer` / `ai-flashcards` are generated resources with
-   *  no uploaded file - the generated content itself is the document. */
-  fileType: "pdf" | "docx" | "pptx" | "txt" | `ai-${string}`;
+   *  no uploaded file - the generated content itself is the document. Other
+   *  values mirror the uploaded file's extension (pdf, pptx, docx, txt, ...). */
+  fileType: string;
   fileUrl?: string;
   fileSize?: string;
   extractedText: string;
@@ -232,8 +233,8 @@ export interface StudentProgress {
   studentId: string;
   totalQuizzesTaken: number;
   averageScore: number;
-  totalMaterialsUploaded: number;
-  completedFlashcardDecks: number;
+  totalPersonalMaterialsUploaded: number;
+  totalFlashcardDecksGenerated: number;
   topicPerformances: TopicPerformance[];
   weakTopics: string[];
   strongTopics: string[];

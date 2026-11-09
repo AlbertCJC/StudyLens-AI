@@ -564,7 +564,7 @@ const jwtPoll = window.setInterval(() => {
       ? teacherMenuItems
       : studentMenuItems;
 
-  const handleTabNavigate = (tab: string) => {
+  const handleTabNavigate = (tab: string, options?: { mode?: string }) => {
     const tabToPathMap: Record<string, string> = {
       dashboard: getRoleDefaultPath(role),
       materials: "/materials",
@@ -580,14 +580,16 @@ const jwtPoll = window.setInterval(() => {
       "activity-logs": role === "admin" ? "/activity-logs" : getRoleDefaultPath(role),
     };
     const targetPath = tabToPathMap[tab] || getRoleDefaultPath(role);
+    const destination =
+      options?.mode && tab === "ai-assistant" ? `${targetPath}?mode=${encodeURIComponent(options.mode)}` : targetPath;
     // Dashboard quick-action buttons reach the same pages as the sidebar but
     // bypass it, so they need the same re-click refresh. Compare on pathname
     // only: a path with a query string is still the same page.
-    if (location.pathname === targetPath) {
+    if (location.pathname === targetPath && !options?.mode) {
       handleNavigateActive();
       return;
     }
-    navigate(targetPath);
+    navigate(destination);
   };
 
   const handleGenerateFromMaterial = (material: LearningMaterial) => {
@@ -690,7 +692,7 @@ const jwtPoll = window.setInterval(() => {
         <Route path="/materials" element={<LearningMaterialsPage onGenerateResource={handleGenerateFromMaterial} onNavigate={handleTabNavigate} />} />
         <Route path="/ai-assistant" element={<AIStudyAssistantPage initialMaterial={selectedMaterial} initialTopic={aiSeedTopic} onSeedConsumed={() => setAiSeedTopic(null)} />} />
         <Route path="/assessments" element={<AssessmentPage onNavigate={handleTabNavigate} />} />
-        <Route path="/flashcards" element={<FlashcardsPage />} />
+        <Route path="/flashcards" element={<FlashcardsPage onNavigate={handleTabNavigate} />} />
         <Route
           path="/analytics"
           element={

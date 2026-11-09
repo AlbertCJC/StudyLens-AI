@@ -14,8 +14,9 @@ import {
   RotateCw,
   Trash2,
   Pencil,
+  Download,
 } from 'lucide-react-native';
-import { fetchQuizzes, fetchSubjects, submitQuizAttempt, updateQuiz, deleteQuiz, createQuiz, fetchQuizHint, Quiz, QuizQuestion, Subject, DifficultyLevel, QuizAttempt } from '../services/api';
+import { fetchQuizzes, fetchSubjects, submitQuizAttempt, updateQuiz, deleteQuiz, createQuiz, fetchQuizHint, downloadQuizPdf, Quiz, QuizQuestion, Subject, DifficultyLevel, QuizAttempt } from '../services/api';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -39,6 +40,7 @@ import {
   SavedQuizProgress,
   LocalAttempt,
 } from '../utils/storage';
+import { saveBytesFile } from '../utils/fileExport';
 
 type AnswerValue = number | string | number[] | null;
 
@@ -127,6 +129,26 @@ export default function AssessmentsScreen({
   const [savingEdit, setSavingEdit] = useState(false);
 
   const isStaff = currentUser?.role === 'teacher';
+
+  // Download is allowed only for quizzes the requester personally created:
+  // teachers for any quiz they authored, students for the practice quizzes they
+  // generated themselves (never a teacher-assigned course quiz).
+  const canDownloadQuizFor = (q: Quiz): boolean => {
+    if (currentUser?.role === 'teacher') return q.createdById === currentUser.id;
+    if (currentUser?.role === 'student') return q.quizType === 'student' && q.createdById === currentUser.id;
+    return false;
+  };
+
+  const downloadQuiz = async (q: Quiz) => {
+    try {
+      const bytes = await downloadQuizPdf(q.id);
+      const name = `${(q.title || 'quiz').replace(/[^\w\s-]/g, '').trim().slice(0, 40) || 'quiz'}.pdf`;
+      const outcome = await saveBytesFile(name, bytes, 'application/pdf', q.title);
+      if (outcome === 'saved') showToast(`Saved ${name} to the selected folder.`, 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not download the quiz.', 'error');
+    }
+  };
 
   const [showCreate, setShowCreate] = useState(false);
   const [cqType, setCqType] = useState<'teacher' | 'student'>(isStaff ? 'teacher' : 'student');
@@ -1141,13 +1163,24 @@ export default function AssessmentsScreen({
                 ) : (
                   <Badge text="Unassigned" color="#d97706" bg="rgba(217,119,6,0.12)" />
                 )}
-                {(q.attemptsUsed ?? 0) > 0 && (
-                  <View style={[styles.retakeChip, { backgroundColor: attemptsExhausted(q) ? colors.dangerSoft : colors.indigoSoft }]}>
-                    <Text style={{ fontSize: 10, fontWeight: '800', color: attemptsExhausted(q) ? colors.danger : colors.primary }}>
-                      {retakeLabel(q)}
-                    </Text>
-                  </View>
-                )}
+                <View style={styles.quizTopActions}>
+                  {(q.attemptsUsed ?? 0) > 0 && (
+                    <View style={[styles.retakeChip, { backgroundColor: attemptsExhausted(q) ? colors.dangerSoft : colors.indigoSoft }]}>
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: attemptsExhausted(q) ? colors.danger : colors.primary }}>
+                        {retakeLabel(q)}
+                      </Text>
+                    </View>
+                  )}
+                  {canDownloadQuizFor(q) && (
+                    <TouchableOpacity
+                      onPress={() => downloadQuiz(q)}
+                      style={[styles.downloadBtn, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+                      accessibilityLabel="Download quiz as PDF"
+                    >
+                      <Download size={15} color={colors.primary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
               <Text style={[styles.quizTitle, { color: colors.foreground }]} numberOfLines={1}>
                 {q.title}
@@ -1287,6 +1320,13 @@ export default function AssessmentsScreen({
                 color={colors.danger}
               />
             ) : null
+          ) : null}
+          {previewQuiz && canDownloadQuizFor(previewQuiz) ? (
+            <OutlineButton
+              label="Download"
+              onPress={() => downloadQuiz(previewQuiz)}
+              style={{ flex: 1 }}
+            />
           ) : null}
           <PrimaryButton
                 label={
@@ -1867,7 +1907,9 @@ const styles = StyleSheet.create({
   filterChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   filterChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 12, borderWidth: 1 },
   quizTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+  quizTopActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 'auto' },
   retakeChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 99 },
+  downloadBtn: { padding: 6, borderRadius: 10, borderWidth: 1 },
   quizTitle: { fontSize: 15, fontWeight: '800' },
   quizMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   quizActions: { flexDirection: 'row', gap: 10 },

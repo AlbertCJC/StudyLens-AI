@@ -13,6 +13,7 @@ export type AdminTabKey = 'overview' | 'users' | 'logs' | 'settings';
 export interface AISeedParams {
   initialTopic?: string | null;
   initialMaterial?: { title: string; content: string } | null;
+  initialMode?: 'quiz' | 'flashcards' | 'summary' | 'reviewer' | null;
 }
 
 export interface QuizOpenParams {

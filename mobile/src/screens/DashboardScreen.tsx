@@ -17,7 +17,14 @@ import {
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { getQuizProgresses, getAttempts, removeQuizProgress, SavedQuizProgress, LocalAttempt } from '../utils/storage';
-import { fetchSubjects, fetchQuizzes, Subject } from '../services/api';
+import {
+  fetchSubjects,
+  fetchQuizzes,
+  fetchStudentProgress,
+  StudentProgress,
+  EMPTY_STUDENT_PROGRESS,
+  Subject,
+} from '../services/api';
 import { EmptyState, Modal } from '../components/ui';
 
 export default function DashboardScreen({
@@ -34,10 +41,31 @@ export default function DashboardScreen({
 
   const [resumableQuiz, setResumableQuiz] = useState<SavedQuizProgress | null>(null);
   const [attempts, setAttempts] = useState<LocalAttempt[]>([]);
+  const [progress, setProgress] = useState<StudentProgress | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [detailCard, setDetailCard] = useState<'subjects' | 'completed' | 'average' | 'weak' | null>(null);
 
   const userId = currentUser?.id || '';
+
+  useEffect(() => {
+    let alive = true;
+    fetchStudentProgress(userId)
+      .then((data) => {
+        if (!alive) return;
+        setProgress(data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Failed to load student progress:", err);
+        setError("Could not load progress data.");
+        setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
 
   useEffect(() => {
     let alive = true;
@@ -80,40 +108,27 @@ export default function DashboardScreen({
 
   const studentName = currentUser?.name ? currentUser.name.split(' ')[0] : '';
 
-  const avgScore = attempts.length > 0 ? Math.round(attempts.reduce((sum, a) => sum + (a.percentage || 0), 0) / attempts.length) : 0;
-  const everWeak = new Set<string>();
-  attempts.forEach((a) => (a.weakTopics || []).forEach((t: string) => everWeak.add(t)));
-
-  // Latest status wins: a once-weak topic counts as overcome only if its most
-  // recent appearance was in a correct-answer ("strong") list.
-  const topicStatus = new Map<string, 'weak' | 'strong'>();
-  [...attempts]
-    .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
-    .forEach((a) => {
-      (a.weakTopics || []).forEach((t: string) => {
-        if (!topicStatus.has(t)) topicStatus.set(t, 'weak');
-      });
-      (a.strongTopics || []).forEach((t: string) => {
-        if (!topicStatus.has(t)) topicStatus.set(t, 'strong');
-      });
-    });
-
-  const weakTopics = Array.from(everWeak).filter((t) => topicStatus.get(t) !== 'strong');
-  const masteredTopics = Array.from(everWeak).filter((t) => topicStatus.get(t) === 'strong');
+  const progressData = progress ?? EMPTY_STUDENT_PROGRESS(userId);
+  const avgScore = progressData.averageScore;
+  const weakTopics = progressData.weakTopics;
+  const masteredTopics = (progressData.masteredTopics ?? []).map((m) => m.topic);
 
   const metrics: { key: 'subjects' | 'completed' | 'average' | 'weak'; label: string; value: string; icon: React.ReactNode; bg: string }[] = [
     { key: 'subjects', label: 'Total Subjects', value: String(subjects.length), icon: <BookOpen size={20} color={colors.primary} />, bg: colors.indigoSoft },
-    { key: 'completed', label: 'Completed Quizzes', value: String(attempts.length), icon: <Award size={20} color={colors.primary} />, bg: colors.indigoSoft },
+    { key: 'completed', label: 'Completed Quizzes', value: String(progressData.totalQuizzesTaken), icon: <Award size={20} color={colors.primary} />, bg: colors.indigoSoft },
     { key: 'average', label: 'Average Score', value: `${avgScore}%`, icon: <TrendingUp size={20} color={colors.success} />, bg: colors.accentSoft },
     { key: 'weak', label: 'Weak Topics', value: String(weakTopics.length), icon: <Activity size={20} color={colors.danger} />, bg: colors.dangerSoft },
   ];
 
-  const recentAttempts = [...attempts]
+  const serverAttempts = (progressData.recentQuizAttempts ?? [])
+    .map((a) => ({ ...a, completedAt: a.submittedAt || a.completedAt }));
+
+  const recentAttempts = [...serverAttempts]
     .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
     .slice(0, 5);
 
   const subjectPcts = new Map<string, number[]>();
-  attempts.forEach((a) => {
+  serverAttempts.forEach((a) => {
     const key = a.subjectName || '';
     if (!key) return;
     const list = subjectPcts.get(key) ?? [];
@@ -312,13 +327,13 @@ export default function DashboardScreen({
         visible={detailCard === 'completed'}
         onClose={() => setDetailCard(null)}
         title="Completed Quizzes"
-        subtitle={`You have completed ${attempts.length} quiz${attempts.length === 1 ? '' : 'zes'} so far.`}
+        subtitle={`You have completed ${progressData.totalQuizzesTaken} quiz${progressData.totalQuizzesTaken === 1 ? '' : 'zes'} so far.`}
       >
         <View style={{ gap: 8 }}>
-          {attempts.length === 0 ? (
+          {progressData.recentQuizAttempts.length === 0 ? (
             <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>No quiz attempts recorded yet.</Text>
           ) : (
-            attempts.map((a, idx) => (
+            progressData.recentQuizAttempts.map((a, idx) => (
               <TouchableOpacity
                 key={idx}
                 style={[styles.detailRow, { borderColor: colors.border }]}
@@ -351,10 +366,10 @@ export default function DashboardScreen({
         subtitle={`Overall average: ${avgScore}% (passing mark is 70%).`}
       >
         <View style={{ gap: 8 }}>
-          {attempts.length === 0 ? (
+          {progressData.recentQuizAttempts.length === 0 ? (
             <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>Take a quiz to build your score history.</Text>
           ) : (
-            attempts.map((a, idx) => (
+            progressData.recentQuizAttempts.map((a, idx) => (
               <TouchableOpacity
                 key={idx}
                 style={[styles.detailRow, { borderColor: colors.border }]}

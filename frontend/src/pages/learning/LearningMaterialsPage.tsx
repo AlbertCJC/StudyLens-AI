@@ -1,15 +1,13 @@
-﻿import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Upload,
   FileText,
   Trash2,
   Sparkles,
   Filter,
-  AlertCircle,
   Download,
   BookOpen,
   ArrowRight,
-  FileCode,
   X,
 } from "lucide-react";
 import { jsPDF } from "jspdf";
@@ -20,10 +18,15 @@ import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
 import type { LearningMaterial, Subject } from "../../types";
 import { Pagination, slicePage } from "../../components/Pagination";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { MaterialViewer } from "../../components/materials/MaterialViewer";
 
 interface LearningMaterialsPageProps {
   onGenerateResource?: (material: LearningMaterial) => void;
-  onNavigate?: (tab: string) => void;
+  onNavigate?: (
+    tab: string,
+    options?: { mode?: "quiz" | "flashcards" | "summary" | "reviewer" }
+  ) => void;
 }
 
 // Embedded Unicode Arial TTF cache so every downloaded PDF embeds a real font with
@@ -98,16 +101,6 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
   const [materialPage, setMaterialPage] = useState(1);
   const [showUpload, setShowUpload] = useState(false);
 
-  // Downloaded Tracking State
-  const [downloadedIds, setDownloadedIds] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem("studylens_downloaded_materials");
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
-
   // Upload State (For Teachers/Professors)
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
@@ -115,20 +108,17 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
   const [subjectId, setSubjectId] = useState("");
   const [rawText, setRawText] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const uploadAbortRef = useRef<AbortController | null>(null);
 
-  // Assign Subject Modal State (teacher-owned materials)
-  const [assignSubjectMat, setAssignSubjectMat] = useState<LearningMaterial | null>(null);
-  const [assignSubjectId, setAssignSubjectId] = useState("");
-  const [isAssigningSubject, setIsAssigningSubject] = useState(false);
-
+  // Unsaved-upload guard for the upload modal.
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const uploadAbortedRef = useRef(false);
 
   // Preview / Document Reader Modal
   const [previewMaterial, setPreviewMaterial] = useState<LearningMaterial | null>(null);
-  const [previewTab, setPreviewTab] = useState<"file" | "text">("file");
-  const [filePreviewError, setFilePreviewError] = useState(false);
-
-  // Format Download Selection Modal
-  const [downloadModalMaterial, setDownloadModalMaterial] = useState<LearningMaterial | null>(null);
+  const [assignSubjectMat, setAssignSubjectMat] = useState<LearningMaterial | null>(null);
+  const [assignSubjectId, setAssignSubjectId] = useState("");
+  const [isAssigningSubject, setIsAssigningSubject] = useState(false);
 
   // Delete Confirmation Modal State
   const [deleteConfirmMat, setDeleteConfirmMat] = useState<LearningMaterial | null>(null);
@@ -149,7 +139,6 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
           const subData = await subRes.json();
           if (isSubscribed) {
             setSubjects(subData);
-            if (subData.length > 0 && !subjectId) setSubjectId(subData[0].id);
           }
         }
       } catch (err) {
@@ -169,11 +158,19 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
       showToast("Please upload a file (PDF, DOCX, PPTX, TXT) or paste lecture text.", "info");
       return;
     }
+    if (!title.trim()) {
+      showToast("Document title is required before publishing.", "info");
+      return;
+    }
 
     setIsUploading(true);
+    setDiscardOpen(false);
+
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
 
     try {
-      const chosenSubject = subjectId || subjects[0]?.id || "";
+      const chosenSubject = subjectId || "";
       const isPersonalType = !chosenSubject;
       const formData = new FormData();
       if (file) formData.append("file", file);
@@ -189,9 +186,14 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
       const res = await authFetch("/api/materials/upload", {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
 
       if (res.ok) {
+        if (uploadAbortedRef.current) {
+          uploadAbortedRef.current = false;
+          return;
+        }
         const newMat = await res.json();
         setMaterials([newMat, ...materials]);
         showToast(
@@ -203,6 +205,7 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
         setTitle("");
         setDescription("");
         setRawText("");
+        setShowUpload(false);
       } else {
         let errMessage = "Upload failed";
         try {
@@ -217,9 +220,14 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("Upload error:", err);
-      showToast("Upload error: " + errorMsg, "error");
+      if (uploadAbortedRef.current) {
+        uploadAbortedRef.current = false;
+      } else if (errorMsg !== "AbortError" && errorMsg !== "The user aborted a request.") {
+        showToast("Upload error: " + errorMsg, "error");
+      }
     } finally {
       setIsUploading(false);
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
     }
   };
 
@@ -273,14 +281,6 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
     } finally {
       setIsAssigningSubject(false);
     }
-  };
-
-  const markAsDownloaded = (matId: string) => {
-    setDownloadedIds((prev) => {
-      const updated = new Set(prev).add(matId);
-      localStorage.setItem("studylens_downloaded_materials", JSON.stringify(Array.from(updated)));
-      return updated;
-    });
   };
 
   // PDF Download Generator using jsPDF
@@ -414,90 +414,59 @@ export const LearningMaterialsPage: React.FC<LearningMaterialsPageProps> = ({
 
     const filename = `${mat.title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_notes.pdf`;
     doc.save(filename);
-    markAsDownloaded(mat.id);
   };
 
-  // Plain Text Download Generator
-  const handleDownloadTXT = (mat: LearningMaterial) => {
-    const fileContent = `================================================
-${mat.title}
-================================================\n\n` + mat.extractedText;
-
-    const element = document.createElement("a");
-    const file = new Blob([fileContent], { type: "text/plain;charset=utf-8" });
-    element.href = URL.createObjectURL(file);
-    element.download = `${mat.title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_notes.txt`;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-
-    markAsDownloaded(mat.id);
-  };
-
-  // Resolve the URL for the original uploaded file (relative to Cloudinary/Firebase URLs).
-  const resolveFileUrl = (mat: LearningMaterial): string | null => {
-    const url = mat.fileUrl;
-    if (!url) return null;
-    if (/^(https?:)?\/\//i.test(url)) return url;
-    if (url.startsWith("/")) return url;
-    return `/${url.replace(/^\.?\//, "")}`;
-  };
-
-  // File types a browser can render directly without conversion.
-  const isRenderableFileType = (mat: LearningMaterial): boolean => {
-    const ext = (mat.fileType || "").toLowerCase().replace(/^\./, "");
-    if (ext === "pdf") return true;
-    if (["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp"].includes(ext)) return true;
-    if (["mp4", "webm", "ogg", "mov"].includes(ext)) return true;
-    return false;
-  };
-
-  const isImageFileType = (mat: LearningMaterial): boolean => {
-    const ext = (mat.fileType || "").toLowerCase().replace(/^\./, "");
-    return ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp"].includes(ext);
-  };
-
-  const isVideoFileType = (mat: LearningMaterial): boolean => {
-    const ext = (mat.fileType || "").toLowerCase().replace(/^\./, "");
-    return ["mp4", "webm", "ogg", "mov"].includes(ext);
-  };
-
-  // Open / download the ORIGINAL uploaded file (not a regenerated copy).
-  const handleOpenOriginalFile = (mat: LearningMaterial) => {
-    const url = resolveFileUrl(mat);
-    if (!url) return;
-    if (isRenderableFileType(mat)) {
-      window.open(url, "_blank", "noopener,noreferrer");
-    } else {
-      // Non-renderable types (DOCX/PPTX/TXT...) download instead of opening a dead viewer tab.
-      const element = document.createElement("a");
-      element.href = url;
-      element.download = mat.title || "download";
-      document.body.appendChild(element);
-      element.click();
-      document.body.removeChild(element);
-    }
-    markAsDownloaded(mat.id);
-  };
-
-  const openPreview = (mat: LearningMaterial, tab: "file" | "text" = "file") => {
-    setFilePreviewError(false);
-    setPreviewTab(tab);
-    setPreviewMaterial(mat);
-    if (tab === "file" && resolveFileUrl(mat)) preflightOriginalFile(mat);
-  };
-
-  // Probe the original file BEFORE rendering so a missing/unreachable file never
-  // leaves a silently blank viewer - on failure we fall back to the extracted text.
-  const preflightOriginalFile = async (mat: LearningMaterial) => {
-    const url = resolveFileUrl(mat);
-    if (!url) return;
+  // Real DOC/DOCX -> PDF conversion via the backend (LibreOffice when available,
+  // reportlab text fallback). Falls back to the generated-notes PDF so the
+  // download never completely fails.
+  const handleDownloadAsPdf = async (mat: LearningMaterial) => {
     try {
-      const res = await fetch(url, { method: "HEAD", cache: "no-store" });
-      if (!res.ok) setFilePreviewError(true);
+      const res = await authFetch(`/api/materials/${encodeURIComponent(mat.id)}/convert-to-pdf`);
+      if (!res.ok) throw new Error(`Server returned status ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${mat.title.replace(/[^a-z0-9]/gi, "_").toLowerCase() || "material"}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return;
     } catch {
-      setFilePreviewError(true);
+      showToast("Real PDF conversion unavailable; generating a notes PDF instead.", "info");
+      await handleDownloadPDF(mat);
     }
+  };
+
+  // Prefer the original uploaded PDF so viewing and downloading show the same
+  // document (matching how quiz PDFs are downloaded). Materials without an
+  // original PDF (AI notes, pasted text) keep the generated notes PDF.
+  const handleDownload = async (mat: LearningMaterial) => {
+    const ext = (mat.fileType || "").toLowerCase().replace(/^\./, "");
+    if (mat.fileUrl) {
+      try {
+        const res = await authFetch(`/api/materials/${encodeURIComponent(mat.id)}/download`);
+        if (!res.ok) throw new Error(`Server returned status ${res.status}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${mat.title.replace(/[^a-z0-9]/gi, "_").toLowerCase() || "material"}.${ext || "bin"}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+      } catch {
+        // Fall through to generated PDF below.
+      }
+    }
+    await handleDownloadPDF(mat);
+  };
+
+  const openPreview = (mat: LearningMaterial) => {
+    setPreviewMaterial(mat);
   };
 
   // Filter Logic with Privacy Enforcement
@@ -526,54 +495,108 @@ ${mat.title}
     // resource must lead or it lands on the last page and looks unsaved.
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
 
-  // Derived original-file URL for the current preview (the exact uploaded file).
-  const originalFileUrl = previewMaterial ? resolveFileUrl(previewMaterial) : null;
-  const hasOriginalFile = !!originalFileUrl && isRenderableFileType(previewMaterial as LearningMaterial);
-
   // AI-generated resources (fileType "ai-*") have no original uploaded file - the
   // generated content itself IS the document, so the viewer shows it directly.
   const isAiMaterial = (mat: LearningMaterial | null): boolean =>
     !!mat && (mat.fileType || "").toLowerCase().startsWith("ai-");
   const previewIsAi = isAiMaterial(previewMaterial);
+  const previewTimestamp = previewMaterial?.createdAt
+    ? new Date(previewMaterial.createdAt).toLocaleString()
+    : "";
+
+  const uploadDirty =
+    !!file || title.trim().length > 0 || description.trim().length > 0 || rawText.trim().length > 0;
+
+  const closeUploadNow = useCallback(() => {
+    setDiscardOpen(false);
+    setShowUpload(false);
+    setFile(null);
+    setTitle("");
+    setDescription("");
+    setRawText("");
+    setSubjectId("");
+  }, []);
+
+  const requestCloseUpload = useCallback(() => {
+    if (uploadDirty) {
+      setDiscardOpen(true);
+      return;
+    }
+    closeUploadNow();
+  }, [uploadDirty, closeUploadNow]);
+
+  const confirmUploadDiscard = () => {
+    uploadAbortRef.current?.abort();
+    uploadAbortedRef.current = true;
+    setDiscardOpen(false);
+    closeUploadNow();
+  };
+
+  const cancelUploadDiscard = () => {
+    uploadAbortedRef.current = false;
+    setDiscardOpen(false);
+  };
+
+  // Escape key closes the discard dialog, or the whole upload modal when clean.
+  useEffect(() => {
+    if (!showUpload) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (discardOpen) {
+        setDiscardOpen(false);
+        return;
+      }
+      requestCloseUpload();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showUpload, discardOpen, requestCloseUpload]);
+
+  // Native unsaved-changes prompt on browser refresh / close tab.
+  useEffect(() => {
+    if (!showUpload || !uploadDirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [showUpload, uploadDirty]);
+
+  const closePreview = () => {
+    setPreviewMaterial(null);
+  };
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        {currentUser?.role === "student" ? (
-          <button
-            onClick={() => onNavigate && onNavigate("ai-assistant")}
-            className="px-4 py-2.5 bg-[#5b51d8] hover:bg-[#4c42c9] text-white rounded-lg text-xs font-bold shadow-sm transition-all flex items-center space-x-2 shrink-0 cursor-pointer"
-          >
-            <Sparkles className="w-4 h-4 text-amber-300" />
-            <span>Create Notes in Resource Generator</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        ) : currentUser?.role === "teacher" ? (
-          <button
-            onClick={() => setShowUpload((prev) => !prev)}
-            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 shrink-0 cursor-pointer"
-          >
-            <Upload className="w-4 h-4" />
-            <span>{showUpload ? "Close Upload Form" : "Upload Material"}</span>
-          </button>
-        ) : null}
-      </div>
-
       {currentUser?.role === "teacher" && showUpload && (
-        /* Teacher Upload Form Box */
-        <div className="bg-card p-6 rounded-2xl border border-border shadow-xs space-y-4">
-          <div className="flex items-center space-x-2 text-foreground">
-            <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-lg">
-              <Upload className="w-5 h-5" />
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-start justify-center p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) requestCloseUpload();
+          }}
+        >
+          <div className="bg-card border border-border rounded-2xl max-w-3xl w-full shadow-xl my-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-3 border-b border-border px-6 py-4 sticky top-0 bg-card z-10">
+              <div className="flex items-center space-x-2 min-w-0">
+                <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-lg shrink-0">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-bold text-foreground truncate">Upload Course Material</h3>
+                  <p className="text-xs text-muted-foreground truncate">Publish lecture files (PDF, DOCX, PPTX, TXT) for student access.</p>
+                </div>
+              </div>
+              <button
+                onClick={requestCloseUpload}
+                className="p-2 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <div>
-              <h3 className="text-base font-bold">Upload Course Material</h3>
-              <p className="text-xs text-muted-foreground">Publish lecture files (PDF, DOCX, PPTX, TXT) for student access.</p>
-            </div>
-          </div>
 
-          <form onSubmit={handleUpload} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+          <form onSubmit={handleUpload} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs p-6">
             <div className="space-y-3">
               <div>
                 <label className="block font-semibold text-foreground mb-1">Document Title</label>
@@ -594,6 +617,7 @@ ${mat.title}
                     onChange={(e) => setSubjectId(e.target.value)}
                     className="w-full px-3 py-2 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-card text-foreground"
                   >
+                    <option value="">No Subject Assigned</option>
                     {subjects.map((sub) => (
                       <option key={sub.id} value={sub.id}>
                         {sub.code} - {sub.name}
@@ -601,7 +625,7 @@ ${mat.title}
                     ))}
                   </select>
                   <p className="text-[11px] text-muted-foreground">
-                    The material is published to students of the selected subject.
+                    Leave as "No Subject Assigned" for personal/self-study notes.
                   </p>
                 </div>
               )}
@@ -627,7 +651,10 @@ ${mat.title}
                     accept=".pdf,.docx,.pptx,.txt"
                     onChange={(e) => {
                       if (e.target.files && e.target.files[0]) {
-                        setFile(e.target.files[0]);
+                        const selected = e.target.files[0];
+                        setFile(selected);
+                        setRawText("");
+                        setTitle(selected.name.replace(/\.[^/.]+$/, ""));
                       }
                     }}
                     className="absolute inset-0 opacity-0 cursor-pointer"
@@ -667,6 +694,7 @@ ${mat.title}
               </button>
             </div>
           </form>
+          </div>
         </div>
       )}
 
@@ -679,23 +707,57 @@ ${mat.title}
             </span>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <Filter className="w-3.5 h-3.5 text-muted-foreground" />
-            <select
-              value={selectedSubject}
-              onChange={(e) => {
-                setSelectedSubject(e.target.value);
-                setMaterialPage(1);
-              }}
-              className="text-xs border border-border rounded-lg px-2.5 py-1.5 bg-muted text-foreground font-medium focus:outline-none"
-            >
-              <option value="all">All Subjects</option>
-              {subjects.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code} - {s.name}
-                </option>
-              ))}
-            </select>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+            <div className="flex items-center space-x-2">
+              <Filter className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+              <select
+                value={selectedSubject}
+                onChange={(e) => {
+                  setSelectedSubject(e.target.value);
+                  setMaterialPage(1);
+                }}
+                className="text-xs border border-border rounded-lg px-2.5 py-1.5 bg-muted text-foreground font-medium focus:outline-none flex-1 sm:flex-none"
+              >
+                <option value="all">All Subjects</option>
+                {subjects.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.code} - {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+              {currentUser?.role === "teacher" && (
+                <button
+                  onClick={() => {
+                    setShowUpload(true);
+                    setFile(null);
+                    setTitle("");
+                    setDescription("");
+                    setRawText("");
+                    setSubjectId("");
+                  }}
+                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-2 border border-slate-700 cursor-pointer shrink-0 w-full sm:w-auto"
+                  title="Upload a course material for your students"
+                >
+                  <Upload className="w-4 h-4 text-blue-400" />
+                  <span>Upload Material</span>
+                </button>
+              )}
+
+              {(currentUser?.role === "student" || currentUser?.role === "teacher") && (
+                <button
+                  onClick={() => onNavigate?.("ai-assistant", { mode: "reviewer" })}
+                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer shrink-0 w-full sm:w-auto"
+                  title="Generate study notes from your materials with AI"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <span>AI Notes Generator</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -712,7 +774,6 @@ ${mat.title}
           <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {slicePage(filteredMaterials, materialPage).map((mat) => {
-              const isDownloaded = downloadedIds.has(mat.id);
               const canAssignSubject =
                 currentUser?.role === "teacher" &&
                 mat.uploaderId === currentUser?.id &&
@@ -726,7 +787,7 @@ ${mat.title}
               return (
                 <div
                   key={mat.id}
-                  onClick={() => openPreview(mat, "file")}
+                  onClick={() => openPreview(mat)}
                   className="p-4 rounded-xl border border-border transition-all space-y-3 flex flex-col justify-between bg-card hover:border-blue-500/40 cursor-pointer"
                   title="Click to view this material"
                 >
@@ -739,7 +800,6 @@ ${mat.title}
                       )}
 
                       <div className="flex items-center space-x-1.5">
-                        {mat.fileSize && <span className="text-[10px] text-muted-foreground font-mono">{mat.fileSize}</span>}
                         {canDelete && (
                           <button
                             onClick={(e) => {
@@ -761,22 +821,67 @@ ${mat.title}
                   </div>
 
                   <div className="pt-3 border-t border-border space-y-2">
-                    <div className="flex items-center justify-end text-[10px] text-muted-foreground">
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                      {mat.fileSize ? (
+                        <span className="flex items-center gap-1 font-mono" title="File size">
+                          <FileText className="w-3 h-3" />
+                          {mat.fileSize}
+                        </span>
+                      ) : (
+                        <span />
+                      )}
                       <span>{new Date(mat.createdAt).toLocaleDateString()}</span>
                     </div>
 
                     <div className="grid grid-cols-1 gap-1.5 pt-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDownloadModalMaterial(mat);
-                        }}
-                        className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center space-x-1 cursor-pointer border border-slate-700"
-                        title="Download material notes in PDF or TXT format"
-                      >
-                        <Download className="w-3 h-3 text-emerald-400" />
-                        <span>{isDownloaded ? "Saved" : "Download"}</span>
-                      </button>
+                      {(() => {
+                        const ext = (mat.fileType || "").toLowerCase().replace(/^\./, "");
+                        const baseCls =
+                          "py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center space-x-1 cursor-pointer border border-slate-700";
+                        if (ext === "doc" || ext === "docx") {
+                          return (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDownload(mat);
+                                }}
+                                className={baseCls}
+                                title="Download the original Word file"
+                              >
+                                <Download className="w-3 h-3 text-emerald-400" />
+                                <span>Download DOCX</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDownloadAsPdf(mat);
+                                }}
+                                className={baseCls}
+                                title="Download as PDF"
+                              >
+                                <Download className="w-3 h-3 text-emerald-400" />
+                                <span>Download as PDF</span>
+                              </button>
+                            </>
+                          );
+                        }
+                        return (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDownload(mat);
+                            }}
+                            className={baseCls}
+                            title="Download this material"
+                          >
+                            <Download className="w-3 h-3 text-emerald-400" />
+                            <span>
+                              {ext === "pdf" ? "Download PDF" : `Download ${ext.toUpperCase()}`}
+                            </span>
+                          </button>
+                        );
+                      })()}
                     </div>
 
                     {canAssignSubject && (
@@ -808,22 +913,22 @@ ${mat.title}
 
       </div>
 
-      {/* 3. PDF DOCUMENT READER MODAL (VIEWING MATERIAL AS FORMATTED PDF DOCUMENT) */}
+      {/* 3. DOCUMENT PREVIEW MODAL (shows the actual uploaded file) */}
       {previewMaterial && (
         <div
           className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setPreviewMaterial(null);
+            if (e.target === e.currentTarget) closePreview();
           }}
         >
-          <div className="bg-card rounded-2xl max-w-3xl w-full p-6 shadow-xl border border-border space-y-4 max-h-[90vh] flex flex-col">
+          <div className="bg-card rounded-2xl max-w-4xl w-full shadow-xl border border-border max-h-[90vh] flex flex-col overflow-hidden">
             {/* Document Reader Bar Header */}
-            <div className="flex items-center justify-between border-b border-border pb-3 bg-slate-900 -mx-6 -mt-6 p-5 rounded-t-2xl text-white">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30">
+            <div className="flex items-center justify-between gap-3 bg-slate-900 p-5 text-white">
+              <div className="flex items-center space-x-3 min-w-0">
+                <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30 shrink-0">
                   <FileText className="w-5 h-5" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center space-x-2">
                     {!previewIsAi && previewMaterial.subjectName && (
                       <span className="text-[11px] text-slate-300 font-semibold">{previewMaterial.subjectName}</span>
@@ -836,14 +941,70 @@ ${mat.title}
                     )}
 
                   </div>
-                  <h3 className="text-base font-bold mt-0.5 text-white">{previewMaterial.title}</h3>
+                  <div className="flex items-baseline gap-2 flex-wrap mt-0.5 min-w-0">
+                    <h3 className="text-base font-bold text-white truncate">{previewMaterial.title}</h3>
+                    {previewTimestamp && (
+                      <span className="text-[10px] font-normal text-slate-400 whitespace-nowrap">
+                        {previewTimestamp}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-2 shrink-0">
                 <button
-                  onClick={() => setPreviewMaterial(null)}
+                  onClick={() => handleDownload(previewMaterial)}
+                  className="px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                  title="Download this material"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">
+                    {(() => {
+                      const ext = (previewMaterial?.fileType || "").toLowerCase().replace(/^\./, "");
+                      if (ext === "pdf") return "Download PDF";
+                      if (ext === "doc" || ext === "docx") return `Download ${ext.toUpperCase()}`;
+                      if (ext === "ppt" || ext === "pptx") return `Download ${ext.toUpperCase()}`;
+                      if (ext === "txt") return "Download TXT";
+                      return `Download ${ext.toUpperCase() || "FILE"}`;
+                    })()}
+                  </span>
+                </button>
+                {(() => {
+                  const ext = (previewMaterial?.fileType || "").toLowerCase().replace(/^\./, "");
+                  if (ext === "docx" || ext === "doc") {
+                    return (
+                      <button
+                        onClick={() => handleDownloadAsPdf(previewMaterial!)}
+                        className="px-3 py-2 bg-slate-600 hover:bg-slate-700 text-white rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                        title="Download as PDF"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Download as PDF</span>
+                      </button>
+                    );
+                  }
+                  return null;
+                })()}
+                {previewMaterial &&
+                  currentUser?.role !== "admin" &&
+                  previewMaterial.uploaderId === currentUser?.id && (
+                    <button
+                      onClick={() => {
+                        setDeleteConfirmMat(previewMaterial);
+                        setPreviewMaterial(null);
+                      }}
+                      className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                      title="Delete this material"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  )}
+                <button
+                  onClick={closePreview}
                   className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                  title="Close"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -851,267 +1012,8 @@ ${mat.title}
             </div>
 
             {/* Document Reader Content */}
-            <div className="flex-1 overflow-y-auto p-6 bg-slate-100 dark:bg-slate-950 rounded-xl border border-border space-y-4 shadow-inner">
-              {/* View Tabs (hidden for AI-generated resources - no original file exists) */}
-              {!previewIsAi && (
-                <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => { setFilePreviewError(false); setPreviewTab("file"); if (previewMaterial) preflightOriginalFile(previewMaterial); }}
-                  disabled={!hasOriginalFile}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                    previewTab === "file" && hasOriginalFile
-                      ? "bg-primary text-primary-foreground shadow-xs"
-                      : "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-muted-foreground hover:bg-slate-50 dark:hover:bg-slate-800"
-                  }`}
-                >
-                  Original Document
-                </button>
-                <button
-                  onClick={() => setPreviewTab("text")}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                    previewTab === "text" || !hasOriginalFile
-                      ? "bg-primary text-primary-foreground shadow-xs"
-                      : "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-muted-foreground hover:bg-slate-50 dark:hover:bg-slate-800"
-                  }`}
-                >
-                  Extracted Text
-                </button>
-              </div>
-              )}
-
-              {/* ORIGINAL FILE VIEW (PDF iframe / image / video) */}
-              {previewTab === "file" && hasOriginalFile && !filePreviewError && (
-                <div className="bg-slate-900 dark:bg-slate-950 rounded-xl border border-slate-700 overflow-hidden h-[60vh]">
-                  {isImageFileType(previewMaterial) ? (
-                    <img
-                      src={originalFileUrl || undefined}
-                      alt={previewMaterial.title}
-                      className="w-full h-full object-contain"
-                      onError={() => setFilePreviewError(true)}
-                    />
-                  ) : isVideoFileType(previewMaterial) ? (
-                    <video
-                      src={originalFileUrl || undefined}
-                      controls
-                      className="w-full h-full object-contain"
-                      onError={() => setFilePreviewError(true)}
-                    />
-                  ) : (
-                    <iframe
-                      src={originalFileUrl || undefined}
-                      title={previewMaterial.title}
-                      className="w-full h-full"
-                      onError={() => setFilePreviewError(true)}
-                    />
-                  )}
-                </div>
-              )}
-
-              {/* LOAD ERROR: original file is missing/unreachable -> fall back to extracted text */}
-              {previewTab === "file" && hasOriginalFile && filePreviewError && (
-                <div className="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800 shadow-md max-w-2xl mx-auto text-center space-y-4">
-                  <AlertCircle className="w-10 h-10 text-amber-500 mx-auto" />
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                    The original file could not be loaded.
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    Showing the extracted document text below instead.
-                  </p>
-                </div>
-              )}
-
-              {/* FALLBACK: non-renderable uploaded file type with a link to open the original.
-                  Not shown for AI-generated resources (they have no original file). */}
-              {previewTab === "file" && !hasOriginalFile && !previewIsAi && (
-                <div className="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800 shadow-md max-w-2xl mx-auto text-center space-y-4">
-                  <FileCode className="w-10 h-10 text-slate-400 mx-auto" />
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                    {previewMaterial.fileType?.toUpperCase()} files can't be previewed inline.
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    Open the original uploaded file to view its exact contents.
-                  </p>
-                </div>
-              )}
-
-              {/* EXTRACTED TEXT VIEW (paper style) */}
-              {(previewTab === "text" || !hasOriginalFile || filePreviewError) && (
-                <div className="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800 shadow-md space-y-6 max-w-2xl mx-auto">
-                  {/* Paper Page Header */}
-                  <div className="border-b border-slate-200 dark:border-slate-800 pb-4 flex justify-between items-end">
-                    <div>
-                      {!previewIsAi && previewMaterial.subjectName && (
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
-                          {previewMaterial.subjectName}
-                          {previewMaterial.fileType ? ` · ${previewMaterial.fileType.toUpperCase()}` : ""}
-                        </p>
-                      )}
-
-                      <h2 className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
-                        {previewMaterial.title}
-                      </h2>
-                    </div>
-                    {!previewIsAi && (
-                      <div className="text-right text-[10px] text-slate-500 font-mono">
-                        <p>Uploaded: {new Date(previewMaterial.createdAt).toLocaleDateString()}</p>
-                        <p className="font-bold text-slate-700 dark:text-slate-300">{previewMaterial.uploadedBy}</p>
-                        {previewMaterial.fileSize && <p>{previewMaterial.fileSize}</p>}
-                      </div>
-                    )}
-
-                  </div>
-
-                  {/* Content Body */}
-                  <div className="text-[13px] text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-7 font-sans font-normal tracking-wide">
-                    {previewMaterial.extractedText || "No readable document text available."}
-                  </div>
-
-                  {/* Decorative Page Footer (hidden for AI-generated resources) */}
-                  {!previewIsAi && (
-                    <div className="border-t border-slate-200 dark:border-slate-800 pt-4 flex items-center justify-center gap-2">
-                      <span className="w-8 h-px bg-slate-300 dark:bg-slate-700" />
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
-                        StudyLens Learning Materials
-                      </p>
-                      <span className="w-8 h-px bg-slate-300 dark:bg-slate-700" />
-                    </div>
-                    )}
-
-                </div>
-              )}
-
-            </div>
-
-            {/* Bottom Actions Bar */}
-            <div className="flex items-center justify-between pt-2 border-t border-border gap-2 flex-wrap">
-              <div className="flex items-center space-x-2">
-                {originalFileUrl && previewTab === "file" && (
-                  <button
-                    onClick={() => handleOpenOriginalFile(previewMaterial)}
-                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Open Original File</span>
-                  </button>
-                )}
-
-                <button
-                  onClick={() => handleDownloadPDF(previewMaterial)}
-                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download PDF (.pdf)</span>
-                </button>
-
-                <button
-                  onClick={() => handleDownloadTXT(previewMaterial)}
-                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl font-semibold text-xs flex items-center space-x-1.5 border border-slate-700 cursor-pointer"
-                >
-                  <FileCode className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Download TXT (.txt)</span>
-                </button>
-              </div>
-
-              <div className="flex items-center space-x-2">
-              <button
-                onClick={() => setPreviewMaterial(null)}
-                className="px-4 py-2 border border-border rounded-xl font-semibold text-muted-foreground hover:bg-muted text-xs cursor-pointer"
-              >
-                Close Reader
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-      )}
-
-      {/* 4. CHOOSE DOWNLOAD FORMAT MODAL */}
-      {downloadModalMaterial && (
-        <div
-          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setDownloadModalMaterial(null);
-          }}
-        >
-          <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-xl border border-border space-y-5">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div className="flex items-center space-x-2">
-                <div className="p-2 bg-emerald-500/10 text-emerald-600 rounded-xl">
-                  <Download className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-foreground">Select File Download Format</h3>
-                  <p className="text-xs text-muted-foreground">Choose your preferred download format</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setDownloadModalMaterial(null)}
-                className="text-muted-foreground hover:text-foreground font-bold text-lg cursor-pointer"
-              >
-                âœ•
-              </button>
-            </div>
-
-            <div className="p-3 bg-muted/40 rounded-xl border border-border space-y-1">
-              <p className="text-xs font-bold text-foreground">{downloadModalMaterial.title}</p>
-              <p className="text-[11px] text-muted-foreground">{downloadModalMaterial.subjectName}</p>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3">
-              <button
-                onClick={() => {
-                  handleDownloadPDF(downloadModalMaterial);
-                  setDownloadModalMaterial(null);
-                }}
-                className="p-4 rounded-xl border border-rose-500/30 bg-rose-500/5 hover:bg-rose-500/10 transition-all flex items-center justify-between cursor-pointer group"
-              >
-                <div className="flex items-center space-x-3 text-left">
-                  <div className="p-2.5 bg-rose-600 text-white rounded-xl font-bold text-xs shadow-xs">
-                    PDF
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-foreground group-hover:text-rose-600 dark:group-hover:text-rose-400">
-                      PDF Document (.pdf)
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">
-                      Formatted printable PDF document
-                    </p>
-                  </div>
-                </div>
-                <Download className="w-4 h-4 text-rose-500" />
-              </button>
-
-              <button
-                onClick={() => {
-                  handleDownloadTXT(downloadModalMaterial);
-                  setDownloadModalMaterial(null);
-                }}
-                className="p-4 rounded-xl border border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/10 transition-all flex items-center justify-between cursor-pointer group"
-              >
-                <div className="flex items-center space-x-3 text-left">
-                  <div className="p-2.5 bg-slate-800 text-blue-400 rounded-xl font-bold text-xs border border-slate-700">
-                    TXT
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-foreground group-hover:text-blue-600 dark:group-hover:text-blue-400">
-                      Plain Text File (.txt)
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">
-                      Raw text notes file compatible with all editors & note apps
-                    </p>
-                  </div>
-                </div>
-                <Download className="w-4 h-4 text-blue-500" />
-              </button>
-            </div>
-
-            <div className="pt-2 border-t border-border flex justify-end">
-              <button
-                onClick={() => setDownloadModalMaterial(null)}
-                className="px-4 py-2 border border-border rounded-xl text-xs font-semibold text-muted-foreground hover:bg-muted cursor-pointer"
-              >
-                Cancel
-              </button>
+            <div className="flex-1 overflow-y-auto p-4 bg-slate-100 dark:bg-slate-950">
+              <MaterialViewer key={previewMaterial.id} material={previewMaterial} />
             </div>
           </div>
         </div>
@@ -1140,18 +1042,19 @@ ${mat.title}
 
             <div className="p-3.5 bg-muted/40 border border-border rounded-xl space-y-3 text-xs">
               <label className="block font-semibold text-foreground">Assigned Course Subject</label>
-              <select
-                value={assignSubjectId}
-                onChange={(e) => setAssignSubjectId(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-card text-foreground"
-              >
-                <option value="">-- Select Assigned Subject --</option>
-                {subjects.map((sub) => (
-                  <option key={sub.id} value={sub.id}>
-                    {sub.code} - {sub.name}
-                  </option>
-                ))}
-              </select>
+                <select
+                  value={subjectId}
+                  onChange={(e) => setSubjectId(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-card text-foreground"
+                >
+                  <option value="">No Subject Assigned</option>
+                  <option value="all">All Subjects</option>
+                  {subjects.map((sub) => (
+                    <option key={sub.id} value={sub.id}>
+                      {sub.code} - {sub.name}
+                    </option>
+                  ))}
+                </select>
               <p className="text-[11px] text-muted-foreground">
                 Students of the selected subject will see this material.
               </p>
@@ -1220,6 +1123,22 @@ ${mat.title}
             </div>
           </div>
         </div>
+      )}
+
+      {discardOpen && (
+        <ConfirmDialog
+          open={discardOpen}
+          title="Discard this upload?"
+          message={
+            "You have entered material details or attached a file that have not been uploaded. " +
+            "If you leave now, your inputs will be lost."
+          }
+          confirmLabel="Discard & Close"
+          cancelLabel="Keep Editing"
+          destructive
+          onConfirm={confirmUploadDiscard}
+          onCancel={cancelUploadDiscard}
+        />
       )}
 
     </div>

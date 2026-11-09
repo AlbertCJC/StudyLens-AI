@@ -41,12 +41,46 @@ const ACCEPTED_TYPES = [
 
 type Mode = 'quiz' | 'flashcards' | 'summary' | 'reviewer';
 
-const friendlyAiError = (message: string, code?: string): string => {
+const formatWait = (seconds?: number): string => {
+  if (!seconds || seconds <= 0) return '';
+  if (seconds < 60) {
+    const s = Math.ceil(seconds);
+    return `${s} second${s === 1 ? '' : 's'}`;
+  }
+  const m = Math.ceil(seconds / 60);
+  return `${m} minute${m === 1 ? '' : 's'}`;
+};
+
+const offlineBannerMessage = (reason?: string): string => {
+  switch ((reason || '').toUpperCase()) {
+    case 'RATE_LIMITED':
+      return "The AI provider's rate limit was reached — results came from the material's text content instead. Please try again in a moment.";
+    case 'NO_API_KEY':
+      return 'The AI service is not configured (no API key). Please contact your administrator.';
+    case 'SDK_MISSING':
+      return 'The AI service SDK is not installed on the server. Please contact your administrator.';
+    case 'BILLING_INACTIVE':
+      return 'The AI service billing is not active. Please contact your administrator.';
+    default:
+      return "AI service is offline — results were generated from the material's text content instead.";
+  }
+};
+
+const friendlyAiError = (message: string, code?: string, resetAtSeconds?: number): string => {
   const lower = (message || '').toLowerCase();
+  if (code === 'COUNT_EXCEEDS_MAX') {
+    return 'You can generate up to 100 questions only. Please reduce the number and try again.';
+  }
+  if (code === 'RATE_LIMITED' || lower.includes('too many ai requests')) {
+    const wait = formatWait(resetAtSeconds);
+    return wait
+      ? `You've reached the AI limit for this minute. You can generate again in about ${wait}.`
+      : "You've reached the AI limit for this minute. Please wait a moment and try again.";
+  }
   if (lower.includes('payment') || lower.includes('billing') || code === 'PAYMENT_REQUIRED') {
     return 'The AI service is currently unavailable. Your request was handled locally instead, so generation is still allowed.';
   }
-  if (lower.includes('limit') || lower.includes('rate limit') || code === 'RATE_LIMITED') {
+  if (lower.includes('limit') || lower.includes('rate limit')) {
     return 'You have reached the AI generation limit for this session. Please wait a moment and try again.';
   }
   if (lower.includes('how many questions') || code === 'COUNT_REQUIRED') {
@@ -59,18 +93,20 @@ export default function AIStudyAssistantScreen({
   onNavigate,
   initialTopic,
   initialMaterial,
+  initialMode,
   onSeedConsumed,
 }: {
   onNavigate: (tab: string) => void;
   initialTopic?: string | null;
   initialMaterial?: { title: string; content: string } | null;
+  initialMode?: 'quiz' | 'flashcards' | 'summary' | 'reviewer' | null;
   onSeedConsumed?: () => void;
 }) {
   const { colors } = useTheme();
   const { currentUser } = useAuth();
   const { showToast } = useToast();
 
-  const [mode, setMode] = useState<Mode>('quiz');
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'quiz');
   const [text, setText] = useState('');
   const [cardCount, setCardCount] = useState('');
   const [quizRevealAnswers, setQuizRevealAnswers] = useState(true);
@@ -83,6 +119,7 @@ export default function AIStudyAssistantScreen({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [offlineNotice, setOfflineNotice] = useState(false);
+  const [offlineReason, setOfflineReason] = useState('');
   const generateAbortRef = useRef<AbortController | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [pickedFile, setPickedFile] = useState<{ uri: string; name: string; type: string } | null>(null);
@@ -116,6 +153,15 @@ export default function AIStudyAssistantScreen({
       onSeedConsumed();
     }
   }, [initialMaterial, onSeedConsumed]);
+
+  // Pre-select a generator mode when arriving from a contextual action such as
+  // the Flashcards "AI Flashcard Generator" button.
+  useEffect(() => {
+    if (initialMode) {
+      setMode(initialMode);
+      onSeedConsumed?.();
+    }
+  }, [initialMode, onSeedConsumed]);
 
   const pickAndAttachFile = async () => {
     setShowAttachMenu(false);
@@ -212,13 +258,17 @@ export default function AIStudyAssistantScreen({
         setOutput({ type: 'reviewer', data: draft as unknown as Reviewer });
       }
       setOfflineNotice((draft as { source?: string }).source === 'offline-fallback');
-      const sourceBase = pickedFile?.name?.replace(/\.[^/.]+$/, '') || text.trim().slice(0, 60);
-      setDraftTitle(sourceBase ? `${modeLabel}: ${sourceBase}` : String(draft.title || modeLabel));
+      setOfflineReason(typeof (draft as { offlineReason?: string }).offlineReason === 'string' ? (draft as { offlineReason?: string }).offlineReason! : '');
+      setDraftTitle(draft.title || modeLabel);
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') {
         setError('AI generation cancelled.');
       } else {
-        setError(friendlyAiError((err as Error).message || 'Failed to generate content. Please try again.'));
+        setError(friendlyAiError(
+          (err as Error).message || 'Failed to generate content. Please try again.',
+          (err as { code?: string })?.code,
+          (err as { resetAtSeconds?: number })?.resetAtSeconds,
+        ));
       }
     } finally {
       if (generateAbortRef.current === controller) generateAbortRef.current = null;
@@ -242,6 +292,7 @@ export default function AIStudyAssistantScreen({
     setDraftTitle('');
     setTitleExists(false);
     setOfflineNotice(false);
+    setOfflineReason('');
     setError(null);
   };
 
@@ -442,7 +493,7 @@ export default function AIStudyAssistantScreen({
           <View style={[styles.offlineBox, { backgroundColor: colors.warningSoft, borderColor: colors.warning }]}>
             <AlertTriangle size={14} color={colors.warning} />
             <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '700', flex: 1 }}>
-              AI service is offline — results were generated from the material's text content instead.
+              {offlineBannerMessage(offlineReason)}
             </Text>
           </View>
         )}

@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { STORAGE_KEYS, getItem, setItem, getJSON as storageGetJSON, setJSON } from '../utils/storage';
+import { uint8ToBase64 } from '../utils/base64';
 
 const DEFAULT_PORT = 5000;
 
@@ -1028,6 +1029,19 @@ export const downloadMaterialPdf = async (materialId: string): Promise<Uint8Arra
   }
   const buffer = await res.arrayBuffer();
   return new Uint8Array(buffer);
+};
+
+// Fetch the original uploaded file as base64 so it can be handed to an
+// in-app WebView renderer (PowerPoint/Word). Auth is enforced by the backend.
+export const fetchMaterialFileBase64 = async (materialId: string): Promise<string> => {
+  const res = await fetch(`${getApiBaseUrl()}/materials/${encodeURIComponent(materialId)}/download`, {
+    method: 'GET',
+    headers: buildHeaders(),
+  });
+  if (handleUnauthorized(res)) throw new Error('Your session has expired. Please sign in again.');
+  if (!res.ok) throw new Error('Could not load this file.');
+  const buffer = await res.arrayBuffer();
+  return uint8ToBase64(new Uint8Array(buffer));
 };
 
 export interface AiQuizInput {

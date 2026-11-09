@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  FileText, BarChart2, Download, Trash2, RefreshCw, ChevronDown, X, Users, GraduationCap, Sparkles, Loader2, Search, Filter, RotateCcw,
+  FileText, BarChart2, Download, Trash2, RefreshCw, ChevronDown, X, Users, GraduationCap, Sparkles, Loader2, Search, Filter, Pencil,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useAuth } from "../../context/AuthContext";
@@ -158,8 +158,12 @@ export const ReportsPage: React.FC = () => {
   const [viewing, setViewing] = useState<GeneratedReport | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<GeneratedReport | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [exporting, setExporting] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Pagination state
+  const [reportsPage, setReportsPage] = useState(1);
+  const [reportsTotal, setReportsTotal] = useState(0);
+  const REPORT_PAGE_SIZE = 50;
 
   // Filters
   const [searchTerm, setSearchTerm] = useState("");
@@ -169,11 +173,17 @@ export const ReportsPage: React.FC = () => {
     try {
       setLoading(true);
       setRefreshing(true);
-      const suffix = isTeacher && currentUser?.id ? `?generatedBy=${encodeURIComponent(currentUser.id)}` : "";
+      const offset = (reportsPage - 1) * REPORT_PAGE_SIZE;
+      const params = new URLSearchParams();
+      params.set("limit", String(REPORT_PAGE_SIZE));
+      params.set("offset", String(offset));
+      const suffix = isTeacher && currentUser?.id ? `?generatedBy=${encodeURIComponent(currentUser.id)}&${params.toString()}` : `?${params.toString()}`;
       const res = await authFetch(`/api/reports${suffix}`);
       if (res.ok) {
         const data = await res.json();
-        setReports(Array.isArray(data) ? data : []);
+        const reportList = Array.isArray(data.reports) ? data.reports : [];
+        setReports(reportList);
+        setReportsTotal(data.total || 0);
       } else {
         showToast("Failed to load reports.", "error");
       }
@@ -183,7 +193,7 @@ export const ReportsPage: React.FC = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [showToast, isTeacher, currentUser?.id]);
+  }, [showToast, isTeacher, currentUser, reportsPage]);
 
   useEffect(() => {
     let active = true;
@@ -364,36 +374,7 @@ export const ReportsPage: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const exportReportPDF = async (report: GeneratedReport) => {
-    setExporting(report.id);
-    try {
-      const items = summaryRows(report).map((r) => ({ question: r.label, answer: r.value }));
-      const res = await authFetch("/api/convert-to-pdf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: report.title,
-          content: `${report.reportType} · Generated ${report.generatedAt}`,
-          items,
-        }),
-      });
-      if (!res.ok) throw new Error("PDF export failed");
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${report.title.replace(/[^a-z0-9]+/gi, "_")}.pdf`;
-      a.click();
-      window.URL.revokeObjectURL(url);
-      showToast("Report exported as PDF.");
-    } catch {
-      showToast("Could not export the report as PDF.", "error");
-    } finally {
-      setExporting(null);
-    }
-  };
-
-    const filteredReports = reports.filter((r) => {
+  const filteredReports = reports.filter((r) => {
     if (typeFilter !== "all" && r.reportType !== typeFilter) return false;
     if (searchTerm) {
       const q = searchTerm.trim().toLowerCase();
@@ -432,7 +413,6 @@ export const ReportsPage: React.FC = () => {
 
   const renderDetails = (report: GeneratedReport) => {
     const s = (report.summary || {}) as Record<string, unknown>;
-    const rows = summaryRows(report);
 
     if (report.reportType === "Quiz Analytics" && Array.isArray(s.quizzes)) {
       const qrows = s.quizzes as Record<string, unknown>[];
@@ -579,53 +559,55 @@ export const ReportsPage: React.FC = () => {
     setTypeFilter("all");
   };
 
+  // Reset page when filters change.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setReportsPage(1);
+  }, [searchTerm, typeFilter]);
+
   const hasFilters = searchTerm !== "" || typeFilter !== "all";
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Toolbar */}
-      <div className="flex items-center justify-end shrink-0">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer">
-              <FileText className="w-3.5 h-3.5" />
-              <span>Generate Report</span>
-              <ChevronDown className="w-3.5 h-3.5" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>Choose a report type</DropdownMenuLabel>
-            {REPORT_TYPES.map((type) => {
-              const Icon = REPORT_ICONS[type];
-              return (
-                <DropdownMenuItem key={type} onClick={() => openGenerate(type)} className="gap-2.5">
-                  <Icon className="w-4 h-4 text-primary" />
-                  <span>{type}</span>
-                </DropdownMenuItem>
-              );
-            })}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-wrap">
-          <div className="flex flex-col items-start gap-1">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-foreground">Generated Reports</h3>
-              <button
-                onClick={fetchReports}
-                title="Reload the report list from the server"
-                className="p-1.5 bg-muted/50 hover:bg-muted text-foreground rounded-lg transition-all border border-border cursor-pointer"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
-              </button>
+        <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-wrap">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer">
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Generate Report</span>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Choose a report type</DropdownMenuLabel>
+                {REPORT_TYPES.map((type) => {
+                  const Icon = REPORT_ICONS[type];
+                  return (
+                    <DropdownMenuItem key={type} onClick={() => openGenerate(type)} className="gap-2.5">
+                      <Icon className="w-4 h-4 text-primary" />
+                      <span>{type}</span>
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <div className="space-y-2 flex flex-col items-start lg:flex lg:flex-row lg:items-center gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-foreground">Generated Reports</h3>
+                <button
+                  onClick={fetchReports}
+                  title="Reload the report list from the server"
+                  className="p-1.5 bg-muted/50 hover:bg-muted text-foreground rounded-lg transition-all border border-border cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Showing {filteredReports.length} of {reports.length} generated reports
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Showing {filteredReports.length} of {reports.length} generated reports
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input
@@ -677,10 +659,7 @@ export const ReportsPage: React.FC = () => {
                   title="View Report"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="flex items-center space-x-2 min-w-0">
-                      <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-primary/10 text-primary uppercase tracking-wider shrink-0">
-                        {report.reportType}
-                      </span>
+                    <div className="min-w-0">
                       <h4 className="text-sm font-bold text-foreground truncate">{report.title}</h4>
                     </div>
                     <div className="flex items-center space-x-2 shrink-0">
@@ -688,9 +667,9 @@ export const ReportsPage: React.FC = () => {
                       <button
                         onClick={(e) => { e.stopPropagation(); openGenerate(report.reportType, report); }}
                         className="p-1.5 text-muted-foreground hover:text-emerald-600 rounded-lg cursor-pointer"
-                        title="Regenerate with same settings"
+                        title="Edit Report"
                       >
-                        <RotateCcw className="w-3.5 h-3.5" />
+                        <Pencil className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); exportReportCSV(report); }}
@@ -698,14 +677,6 @@ export const ReportsPage: React.FC = () => {
                         title="Export CSV"
                       >
                         <Download className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); exportReportPDF(report); }}
-                        disabled={exporting === report.id}
-                        className="p-1.5 text-muted-foreground hover:text-blue-600 rounded-lg cursor-pointer disabled:opacity-50"
-                        title="Export PDF"
-                      >
-                        {exporting === report.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); requestDelete(report); }}
@@ -725,6 +696,33 @@ export const ReportsPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Pagination controls */}
+      {reportsTotal > 0 && (
+        <div className="flex items-center justify-between gap-4 p-4 bg-muted/30 border border-border rounded-xl">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Page {reportsPage}</span>
+            <span>of {Math.ceil(reportsTotal / REPORT_PAGE_SIZE)}</span>
+            <span>({reportsTotal} total)</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setReportsPage((p) => Math.max(1, p - 1))}
+              disabled={reportsPage === 1 || loading}
+              className="px-3 py-1.5 rounded-xl border border-border bg-card hover:bg-muted/50 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Prev
+            </button>
+            <button
+              onClick={() => setReportsPage((p) => p + 1)}
+              disabled={!(reportsPage * REPORT_PAGE_SIZE < reportsTotal) || loading}
+              className="px-3 py-1.5 rounded-xl border border-border bg-card hover:bg-muted/50 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
 
       {showGenerate && (
         <div
@@ -917,13 +915,6 @@ export const ReportsPage: React.FC = () => {
                 className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" /> CSV
-              </button>
-              <button
-                onClick={() => exportReportPDF(viewing)}
-                disabled={exporting === viewing.id}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-60"
-              >
-                {exporting === viewing.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />} PDF
               </button>
               <button onClick={() => setViewing(null)} className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer">
                 Close

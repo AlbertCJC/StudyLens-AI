@@ -1,6 +1,6 @@
 import React from 'react';
 import { createNavigationContainerRef, StackActions } from '@react-navigation/native';
-import type { RootStackParamList } from './types';
+import type { RootStackParamList, AISeedParams } from './types';
 import type { Subject, Quiz, Material } from '../services/api';
 
 export const navigationRef = createNavigationContainerRef<RootStackParamList>();
@@ -53,7 +53,7 @@ export function useRefreshKey(key: string): number {
   );
 }
 
-export function navTo(key: string): void {
+export function navTo(key: string, params?: AISeedParams): void {
   if (!isReady()) return;
   const nk = key.toLowerCase().trim();
   const safe = (action: () => void) => {
@@ -85,7 +85,7 @@ export function navTo(key: string): void {
       if (currentRoleRef.current === 'admin') {
         safe(() => navigationRef.navigate('Main', { screen: 'Subjects' } as never));
       } else {
-        safe(() => navigationRef.navigate('Main', { screen: 'AI' } as never));
+        safe(() => navigationRef.navigate('Main', { screen: 'AI', params } as never));
       }
       return;
     case 'quiz':

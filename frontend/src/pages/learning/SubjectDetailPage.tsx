@@ -1,5 +1,5 @@
-﻿import React, { useState, useEffect } from "react";
-import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
+﻿import React, { useState, useEffect, useCallback } from "react";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   Users,
@@ -14,8 +14,6 @@ import {
   X,
   FileCode,
   Download,
-  Eye,
-  XCircle,
   Pencil,
   ShieldCheck,
   BarChart2,
@@ -41,6 +39,8 @@ import type {
   SubjectGrades,
 } from "../../types";
 import { QuizCreateModal } from "../../components/QuizCreateModal";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { MaterialViewer } from "../../components/materials/MaterialViewer";
 
 interface EnrolledStudent {
   id: string;
@@ -124,6 +124,7 @@ export const SubjectDetailPage: React.FC = () => {
   const [uploadDescription, setUploadDescription] = useState("");
   const [uploadRawText, setUploadRawText] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
 
   // Edit Material Modal
   const [materialToEdit, setMaterialToEdit] = useState<LearningMaterial | null>(null);
@@ -216,6 +217,61 @@ export const SubjectDetailPage: React.FC = () => {
       setResolving(false);
     }
   };
+
+  const uploadDirty =
+    !!uploadFile || uploadTitle.trim().length > 0 || uploadDescription.trim().length > 0 || uploadRawText.trim().length > 0;
+
+  const closeUploadNow = useCallback(() => {
+    setDiscardOpen(false);
+    setShowUploadModal(false);
+    setUploadFile(null);
+    setUploadTitle("");
+    setUploadDescription("");
+    setUploadRawText("");
+  }, []);
+
+  const requestCloseUpload = useCallback(() => {
+    if (uploadDirty) {
+      setDiscardOpen(true);
+      return;
+    }
+    closeUploadNow();
+  }, [uploadDirty, closeUploadNow]);
+
+  const confirmUploadDiscard = () => {
+    setDiscardOpen(false);
+    closeUploadNow();
+  };
+
+  const cancelUploadDiscard = () => {
+    setDiscardOpen(false);
+  };
+
+  // Escape key handler for upload modal
+  useEffect(() => {
+    if (!showUploadModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (discardOpen) {
+        setDiscardOpen(false);
+        return;
+      }
+      requestCloseUpload();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showUploadModal, discardOpen, requestCloseUpload]);
+
+  // Beforeunload handler for unsaved upload changes
+  useEffect(() => {
+    if (!showUploadModal || !uploadDirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [showUploadModal, uploadDirty]);
 
   useEffect(() => {
     let active = true;
@@ -364,9 +420,68 @@ export const SubjectDetailPage: React.FC = () => {
     }
   };
 
+  // Download quiz as PDF via the server-side endpoint.
+  const downloadQuizPdf = async (quizId: string, quizTitle: string) => {
+    try {
+      const res = await authFetch(`/api/quizzes/${encodeURIComponent(quizId)}/download-pdf`);
+      if (!res.ok) throw new Error(`Server returned status ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${quizTitle || "quiz"}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("Quiz downloaded as PDF.", "success");
+    } catch {
+      showToast("Could not download the quiz PDF.", "error");
+    }
+  };
+
+  const handleOpenMaterialPreview = (mat: LearningMaterial) => {
+    setViewingMaterial(mat);
+  };
+
   // Inline material preview modal state
   const [viewingMaterial, setViewingMaterial] = useState<LearningMaterial | null>(null);
   const [previewQuiz, setPreviewQuiz] = useState<Quiz | null>(null);
+
+  const closePreview = () => {
+    setViewingMaterial(null);
+  };
+
+  const handleDownload = async (mat: LearningMaterial) => {
+    const ext = (mat.fileType || "").toLowerCase().replace(/^\./, "");
+    if (mat.fileUrl) {
+      try {
+        const res = await authFetch(`/api/materials/${encodeURIComponent(mat.id)}/download`);
+        if (!res.ok) throw new Error(`Server returned status ${res.status}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${mat.title.replace(/[^a-z0-9]/gi, "_").toLowerCase() || "material"}.${ext || "bin"}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+      } catch {
+        // Fall through to generated PDF below.
+      }
+    }
+    await downloadMaterialAsPdf(mat);
+  };
+
+  const isAiMaterial = (mat: LearningMaterial | null): boolean =>
+    !!mat && (mat.fileType || "").toLowerCase().startsWith("ai-");
+
+  const previewMaterialForHelpers = viewingMaterial;
+  const previewTimestamp = previewMaterialForHelpers?.createdAt
+    ? new Date(previewMaterialForHelpers.createdAt).toLocaleString()
+    : "";
 
   const groupAttemptsByQuiz = <T extends { id: string; quizTitle: string }>(attempts: T[]) => {
     const groups: { title: string; entries: T[] }[] = [];
@@ -647,26 +762,7 @@ export const SubjectDetailPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center space-x-2 shrink-0">
-          {currentUser?.role !== "admin" && (
-            <>
-              <Link
-                to="/materials"
-                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all inline-flex items-center space-x-1.5 cursor-pointer"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>{canManage ? "Manage Materials" : "View Materials"}</span>
-              </Link>
-              <Link
-                to={isStudent ? `/assessments?quizId=${quizzes[0]?.id || ""}` : "/assessments"}
-                className="px-3 py-2 border border-blue-300/60 dark:border-blue-500/40 text-blue-700 dark:text-blue-300 hover:bg-blue-500/10 rounded-xl text-xs font-bold transition-all inline-flex items-center space-x-1.5 cursor-pointer"
-              >
-                <GraduationCap className="w-3.5 h-3.5" />
-                <span>{canManage ? "Manage Quizzes" : "Take Quizzes"}</span>
-              </Link>
-            </>
-          )}
-        </div>
+        <div className="flex items-center space-x-2 shrink-0" />
       </div>
 
       {/* Tabs */}
@@ -837,7 +933,7 @@ export const SubjectDetailPage: React.FC = () => {
                   } ${highlighted ? "ring-2 ring-primary/60" : ""}`}
                 >
                   <div
-                    onClick={() => setViewingMaterial(mat)}
+                    onClick={() => handleOpenMaterialPreview(mat)}
                     className="flex items-center justify-between p-3.5 rounded-xl gap-3 cursor-pointer hover:bg-muted/50 transition-all"
                     title="View material"
                   >
@@ -846,26 +942,34 @@ export const SubjectDetailPage: React.FC = () => {
                         <FileText className="w-4 h-4" />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-xs font-bold text-foreground truncate">{mat.title}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-bold text-foreground truncate">{mat.title}</p>
+                          {(mat.fileType || "") !== "" && (
+                            <span
+                              className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${
+                                (mat.fileType || "").toLowerCase() === "pdf"
+                                  ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20"
+                                  : (mat.fileType || "").toLowerCase() === "doc" ||
+                                    (mat.fileType || "").toLowerCase() === "docx"
+                                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                                    : (mat.fileType || "").toLowerCase() === "ppt" ||
+                                      (mat.fileType || "").toLowerCase() === "pptx"
+                                      ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20"
+                                      : (mat.fileType || "").toLowerCase() === "txt"
+                                        ? "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20"
+                                        : "bg-muted/40 text-muted-foreground dark:text-slate-400 border-border"
+                              }`}
+                            >
+                              {(mat.fileType || "").toUpperCase()}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-[10px] text-muted-foreground truncate">
                           {mat.fileType?.toUpperCase() || "TEXT"} {mat.fileSize ? `• ${mat.fileSize}` : ""}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center space-x-1 shrink-0">
-                      {resolveFileUrl(mat) && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (isRenderable(mat)) openFile(mat);
-                            else downloadMaterialAsPdf(mat);
-                          }}
-                          className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
-                          title={isRenderable(mat) ? "Open" : "Download as PDF"}
-                        >
-                          {isRenderable(mat) ? <Eye className="w-4 h-4" /> : <Download className="w-4 h-4" />}
-                        </button>
-                      )}
                       {currentUser?.role === "admin" && (
                         <button
                           onClick={(e) => {
@@ -889,6 +993,13 @@ export const SubjectDetailPage: React.FC = () => {
                             title="Edit Material"
                           >
                             <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDownload(mat); }}
+                            className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
+                            title="Download Material"
+                          >
+                            <Download className="w-4 h-4" />
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); setMaterialToDelete(mat); }}
@@ -1055,6 +1166,13 @@ export const SubjectDetailPage: React.FC = () => {
                           title="Edit Quiz"
                         >
                           <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); downloadQuizPdf(quiz.id, quiz.title); }}
+                          className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
+                          title="Download Quiz PDF"
+                        >
+                          <Download className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => setQuizToDelete(quiz)}
@@ -1404,14 +1522,14 @@ export const SubjectDetailPage: React.FC = () => {
         <div
           className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setShowUploadModal(false);
+            if (e.target === e.currentTarget) requestCloseUpload();
           }}
         >
           <div className="bg-card rounded-2xl max-w-md w-full p-6 shadow-xl border border-border space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between">
               <h3 className="text-lg font-bold text-foreground">Upload Material</h3>
               <button
-                onClick={() => setShowUploadModal(false)}
+                onClick={requestCloseUpload}
                 className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -1423,7 +1541,14 @@ export const SubjectDetailPage: React.FC = () => {
                 <input
                   type="file"
                   accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md"
-                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                  onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    const selected = e.target.files[0];
+                    setUploadFile(selected);
+                    setUploadRawText("");
+                    setUploadTitle(selected.name.replace(/\.[^/.]+$/, ""));
+                  }
+                }}
                   className="w-full text-xs text-muted-foreground file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:text-xs file:font-bold file:cursor-pointer cursor-pointer"
                 />
               </div>
@@ -1464,7 +1589,7 @@ export const SubjectDetailPage: React.FC = () => {
               <div className="pt-2 flex items-center justify-end space-x-2">
                 <button
                   type="button"
-                  onClick={() => setShowUploadModal(false)}
+                  onClick={requestCloseUpload}
                   className="px-4 py-2 border border-border rounded-xl font-semibold text-muted-foreground hover:bg-muted cursor-pointer"
                 >
                   Cancel
@@ -1480,6 +1605,18 @@ export const SubjectDetailPage: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Discard Upload Confirmation Dialog */}
+      {discardOpen && (
+        <ConfirmDialog
+          open={discardOpen}
+          title="Discard changes?"
+          message="You have unsaved changes to this material upload. Are you sure you want to discard them?"
+          confirmLabel="Discard"
+          onConfirm={confirmUploadDiscard}
+          onCancel={cancelUploadDiscard}
+        />
       )}
 
       {/* ===== Edit Material Modal ===== */}
@@ -1851,89 +1988,104 @@ export const SubjectDetailPage: React.FC = () => {
       {/* Material Preview Modal */}
       {viewingMaterial && (
         <div
-          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setViewingMaterial(null);
+            if (e.target === e.currentTarget) closePreview();
           }}
         >
-          <div className="bg-card rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-border space-y-4 max-h-[85vh] overflow-y-auto">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h3 className="text-base font-bold text-foreground truncate">{viewingMaterial.title}</h3>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  {viewingMaterial.fileType?.toUpperCase() || "TEXT"}
-                  {viewingMaterial.fileSize ? ` • ${viewingMaterial.fileSize}` : ""} • {viewingMaterial.uploadedBy}
-                </p>
+          <div className="bg-card rounded-2xl max-w-4xl w-full shadow-xl border border-border max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Document Reader Bar Header */}
+            <div className="flex items-center justify-between gap-3 bg-slate-900 p-5 text-white">
+              <div className="flex items-center space-x-3 min-w-0">
+                <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30 shrink-0">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center space-x-2">
+                    {!isAiMaterial(viewingMaterial) && viewingMaterial.subjectName && (
+                      <span className="text-[11px] text-slate-300 font-semibold">{viewingMaterial.subjectName}</span>
+                    )}
+
+                    {viewingMaterial.fileType && !isAiMaterial(viewingMaterial) && (
+                      <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 bg-rose-500/20 text-rose-300 rounded-md border border-rose-500/30">
+                        {viewingMaterial.fileType.toUpperCase()}
+                      </span>
+                    )}
+
+                  </div>
+                  <div className="flex items-baseline gap-2 flex-wrap mt-0.5 min-w-0">
+                    <h3 className="text-base font-bold text-white truncate">{viewingMaterial.title}</h3>
+                    {previewTimestamp && (
+                      <span className="text-[10px] font-normal text-slate-400 whitespace-nowrap">
+                        {previewTimestamp}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-              <button
-                onClick={() => setViewingMaterial(null)}
-                className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg transition-all cursor-pointer shrink-0"
-                title="Close"
-              >
-                <XCircle className="w-5 h-5" />
-              </button>
+
+              <div className="flex items-center space-x-2 shrink-0">
+                <button
+                  onClick={() => handleDownload(viewingMaterial)}
+                  className="px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                  title="Download this material"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">
+                    {(() => {
+                      const ext = (viewingMaterial?.fileType || "").toLowerCase().replace(/^\./, "");
+                      if (ext === "pdf") return "Download PDF";
+                      if (ext === "doc" || ext === "docx") return `Download ${ext.toUpperCase()}`;
+                      if (ext === "ppt" || ext === "pptx") return `Download ${ext.toUpperCase()}`;
+                      if (ext === "txt") return "Download TXT";
+                      return `Download ${ext.toUpperCase() || "FILE"}`;
+                    })()}
+                  </span>
+                </button>
+                {(() => {
+                  const ext = (viewingMaterial?.fileType || "").toLowerCase().replace(/^\./, "");
+                  if (ext === "docx" || ext === "doc") {
+                    return (
+                      <button
+                        onClick={() => downloadMaterialAsPdf(viewingMaterial!)}
+                        className="px-3 py-2 bg-slate-600 hover:bg-slate-700 text-white rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                        title="Download as PDF"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Download as PDF</span>
+                      </button>
+                    );
+                  }
+                  return null;
+                })()}
+                {viewingMaterial &&
+                  currentUser?.role !== "admin" &&
+                  viewingMaterial.uploaderId === currentUser?.id && (
+                    <button
+                      onClick={() => {
+                      setMaterialToDelete(viewingMaterial);
+                      setViewingMaterial(null);
+                      }}
+                      className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                      title="Delete this material"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  )}
+                <button
+                  onClick={closePreview}
+                  className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                  title="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            {viewingMaterial.description && (
-              <p className="text-xs text-muted-foreground">{viewingMaterial.description}</p>
-            )}
-
-            <div className="rounded-xl border border-border bg-muted/20 p-4 max-h-[45vh] overflow-y-auto">
-              {viewingMaterial.extractedText ? (
-                <pre className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed">
-                  {viewingMaterial.extractedText}
-                </pre>
-              ) : (
-                <p className="text-xs text-muted-foreground italic">
-                  No readable text preview is available for this material. Use the button below to open or download the
-                  original file.
-                </p>
-              )}
-            </div>
-
-            <div className="flex justify-end space-x-2 flex-wrap">
-              {resolveFileUrl(viewingMaterial) && isRenderable(viewingMaterial) && (
-                <button
-                  onClick={() => openFile(viewingMaterial)}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
-                >
-                  Open Original
-                </button>
-              )}
-              {resolveFileUrl(viewingMaterial) && (
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    const url = resolveFileUrl(viewingMaterial);
-                    if (!url) return;
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = viewingMaterial.title || "material";
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                  }}
-                  className="px-4 py-2 border border-primary/50 text-primary hover:bg-primary/10 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                  title="Save the original uploaded file"
-                >
-                  Download Original
-                </button>
-              )}
-              {!isRenderable(viewingMaterial) && (
-                <button
-                  onClick={() => downloadMaterialAsPdf(viewingMaterial)}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
-                  title="Download the material content as PDF"
-                >
-                  Download as PDF
-                </button>
-              )}
-              <button
-                onClick={() => setViewingMaterial(null)}
-                className="px-4 py-2 border border-border rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted transition-all cursor-pointer"
-              >
-                Close
-              </button>
+            {/* Document Reader Content */}
+            <div className="flex-1 overflow-y-auto p-4 bg-slate-100 dark:bg-slate-950">
+              <MaterialViewer key={viewingMaterial.id} material={viewingMaterial} />
             </div>
           </div>
         </div>

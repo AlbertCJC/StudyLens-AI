@@ -70,6 +70,7 @@ import { useToast } from '../context/ToastContext';
 import { useAnnouncements } from '../context/AnnouncementsContext';
 import { Card, Badge, LoadingView, EmptyState, Modal, Field, PrimaryButton, OutlineButton } from '../components/ui';
 import { getQuizProgresses, SavedQuizProgress } from '../utils/storage';
+import { MaterialFileViewer, materialViewerExt } from '../components/MaterialFileViewer';
 
 type TabKey = 'people' | 'materials' | 'quizzes' | 'announcements' | 'grades';
 
@@ -732,7 +733,7 @@ const confirmDeleteMaterial = (m: Material) => {
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.panelTitle, { color: colors.foreground }]}>
-                {isStaff ? 'Manage Materials' : 'View Materials'}
+                {'Materials'}
               </Text>
               <Text style={{ color: colors.mutedForeground, fontSize: 11, marginBottom: 8 }}>
                 {materials.length} document(s)
@@ -847,7 +848,7 @@ const confirmDeleteMaterial = (m: Material) => {
       {tab === 'quizzes' && (
         <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Text style={[styles.panelTitle, { color: colors.foreground }]}>
-            {isStaff ? 'Manage Quizzes' : 'Quizzes'}
+            {'Quizzes'}
           </Text>
           <Text style={{ color: colors.mutedForeground, fontSize: 11, marginBottom: 12 }}>
             {quizzes.length} quiz(zes)
@@ -1119,9 +1120,13 @@ const confirmDeleteMaterial = (m: Material) => {
                 {previewMaterial?.fileSize ? ` · ${previewMaterial.fileSize}` : ''}
               </Text>
             </View>
-            <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 21 }}>
-              {previewMaterial?.extractedText || previewMaterial?.description || previewMaterial?.title}
-            </Text>
+            {previewMaterial && materialViewerExt(previewMaterial) ? (
+              <MaterialFileViewer material={previewMaterial} height={320} />
+            ) : (
+              <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 21 }}>
+                {previewMaterial?.extractedText || previewMaterial?.description || previewMaterial?.title}
+              </Text>
+            )}
           </View>
         </ScrollView>
         <View style={{ gap: 10, marginTop: 14 }}>
