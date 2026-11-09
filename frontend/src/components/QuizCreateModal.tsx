@@ -37,7 +37,8 @@ function validateCreateDraft(q: CreateDraft): string | null {
     if (options.length < 4 || options.some((o) => !o)) {
       return "Fill in all four answer options (A-D).";
     }
-    if (typeof q.correctAnswer !== "string" || !q.correctAnswer.trim() || !options.includes(q.correctAnswer.trim())) {
+    const correctIdx = typeof q.correctAnswer === "number" ? q.correctAnswer : options.indexOf(String(q.correctAnswer));
+    if (correctIdx < 0 || correctIdx >= options.length) {
       return "Select which option is the correct answer.";
     }
     return null;
@@ -253,7 +254,9 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
         q.type === "multiple_choice" ? q.options.filter((o) => o.trim() !== "") : undefined,
       correctAnswer:
         q.type === "multiple_choice"
-          ? q.options.findIndex((o) => o === q.correctAnswer)
+          ? typeof q.correctAnswer === "number" && q.correctAnswer >= 0 && q.correctAnswer < q.options.length
+            ? q.correctAnswer
+            : q.options.indexOf(String(q.correctAnswer))
           : q.type === "true_false"
             ? q.correctAnswer === "True"
               ? 0
@@ -269,10 +272,6 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
     e.preventDefault();
     if (!title.trim()) {
       showToast("Quiz title is required.", "error");
-      return;
-    }
-    if (!isPractice && !subjectId && !lockSubject) {
-      showToast("Select an associated course subject.", "error");
       return;
     }
     if (draftQuestions.length === 0) {

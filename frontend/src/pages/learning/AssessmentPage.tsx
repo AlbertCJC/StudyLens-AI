@@ -1871,11 +1871,12 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({ onNavigate }) =>
                     <select
                       value={editSubjectId}
                       onChange={(e) => {
-          setEditSubjectId(e.target.value);
-          markEditDirty();
-        }}
+            setEditSubjectId(e.target.value);
+            markEditDirty();
+          }}
                       className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     >
+                      <option value="">— Subjectless (no assigned subject) —</option>
                       {subjects
                         .filter((sub) => currentUser?.role !== "teacher" || sub.teacherId === currentUser.id)
                         .map((sub) => (

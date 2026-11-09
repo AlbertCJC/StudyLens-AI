@@ -6,6 +6,7 @@ import json
 from flask import jsonify, request, send_file
 
 from db.session import _commit_or_warn
+from extensions import db
 from lib.auth import require_auth, require_roles
 from lib.quiz import _answer_index
 from lib.validation import _clamp_attempts, _reveal_answers

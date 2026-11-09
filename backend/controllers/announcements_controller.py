@@ -61,8 +61,6 @@ def post_announcement():
     author_id = current_user.get("id") or data.get("teacherId") or data.get("createdById") or "usr-admin-1"
     author_name = current_user.get("name") or data.get("authorName") or "Faculty"
     author_role = current_user.get("role") or "teacher"
-    if author_role == "admin":
-        return jsonify({"error": "Administrators have read-only access to announcements and cannot post them.", "code": "FORBIDDEN"}), 403
     subject_id = data.get("subjectId")
     target_audience = data.get("targetAudience") or "all"
     if author_role == "teacher":
@@ -80,6 +78,10 @@ def post_announcement():
         if not subject or subject.teacher_id != author_id:
             return jsonify({"error": "You can only post announcements to subjects you teach.", "code": "FORBIDDEN"}), 403
         target_audience = "students"
+    elif author_role == "admin":
+        # Admins may post system-wide announcements without tying to a subject.
+        target_audience = "all"
+        subject_id = None
     # Server-stamp all timestamps: client-provided values (e.g. optimistic
     # placeholders like "Just now") are never persisted.
     server_now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")

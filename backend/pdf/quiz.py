@@ -1,5 +1,7 @@
 """Quiz PDF rendering (question sheet + answer key)."""
 
+import io
+
 def _build_quiz_pdf(title, subject_name, questions):
     """Builds a formatted quiz PDF (question sheet + answer key) and returns a BytesIO buffer.
 
