@@ -7,7 +7,7 @@ import jwt
 
 from config import SECRET_KEY
 from db.session import _commit_or_warn
-from email_service import is_email_enabled, send_otp_email
+from email_service import send_otp_email
 from extensions import db
 from lib.constants import (
     EMAIL_VERIFY_EXPIRY_MINUTES,
@@ -99,9 +99,7 @@ def _issue_email_verify_code(user):
     user.email_verify_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=EMAIL_VERIFY_EXPIRY_MINUTES)).isoformat()
     user.email_verify_attempts = 0
     db.session.commit()
-    if is_email_enabled():
-        send_otp_email(user.email, "verify", code, EMAIL_VERIFY_EXPIRY_MINUTES)
-    elif OTP_DEV_REVEAL:
+    if not send_otp_email(user.email, "verify", code, EMAIL_VERIFY_EXPIRY_MINUTES) and OTP_DEV_REVEAL:
         print(f"[Auth] Email verification OTP for {user.email}: {code}")
     return code
 

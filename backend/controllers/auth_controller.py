@@ -7,7 +7,7 @@ from flask import jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from db.session import _commit_or_warn
-from email_service import is_email_enabled, send_otp_email
+from email_service import send_otp_email
 from extensions import db
 from lib.constants import (
     EMAIL_VERIFY_MAX_ATTEMPTS,
@@ -119,9 +119,7 @@ def auth_login():
         user.two_factor_code = code
         user.two_factor_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=5)).isoformat()
         db.session.commit()
-        if is_email_enabled():
-            send_otp_email(user.email, "2fa", code, 5)
-        elif OTP_DEV_REVEAL:
+        if not send_otp_email(user.email, "2fa", code, 5) and OTP_DEV_REVEAL:
             print(f"[Auth] 2FA OTP for {user.email}: {code}")
         log_action(user.user_id, user.to_dict()["name"], user.role, "TWO_FACTOR_REQUIRED", f"2FA code issued for {user.email}")
         payload = {
@@ -341,9 +339,7 @@ def resend_two_factor_code():
     user.two_factor_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=5)).isoformat()
     user.two_factor_attempts = None
     db.session.commit()
-    if is_email_enabled():
-        send_otp_email(user.email, "2fa", code, 5)
-    elif OTP_DEV_REVEAL:
+    if not send_otp_email(user.email, "2fa", code, 5) and OTP_DEV_REVEAL:
         print(f"[Auth] 2FA OTP for {user.email}: {code}")
     payload = {"message": f"A new verification code was sent to {user.email}.", "expiresInMinutes": 5}
     if OTP_DEV_REVEAL:
@@ -419,9 +415,7 @@ def auth_request_reset_otp():
     user.reset_otp_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=RESET_OTP_EXPIRY_MINUTES)).isoformat()
     user.reset_otp_attempts = 0
     db.session.commit()
-    if is_email_enabled():
-        send_otp_email(user.email, "reset", code, RESET_OTP_EXPIRY_MINUTES)
-    elif OTP_DEV_REVEAL:
+    if not send_otp_email(user.email, "reset", code, RESET_OTP_EXPIRY_MINUTES) and OTP_DEV_REVEAL:
         print(f"[Auth] Password reset OTP for {user.email}: {code}")
     log_action(user.user_id, user.to_dict()["name"], user.role, "RESET_OTP_REQUESTED", f"Password reset code issued for {user.email}")
 
