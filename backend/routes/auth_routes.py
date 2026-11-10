@@ -8,6 +8,7 @@ from controllers.auth_controller import (
     auth_register,
     auth_request_reset_otp,
     auth_reset_password,
+    auth_verify_reset_otp,
     resend_email_code,
     resend_two_factor_code,
     verify_email,
@@ -57,6 +58,11 @@ def auth_change_password_route():
 @bp.route("/api/auth/reset-otp", methods=["POST"])
 def auth_request_reset_otp_route():
     return auth_request_reset_otp()
+
+
+@bp.route("/api/auth/verify-reset-otp", methods=["POST"])
+def auth_verify_reset_otp_route():
+    return auth_verify_reset_otp()
 
 
 @bp.route("/api/auth/reset-password", methods=["POST"])

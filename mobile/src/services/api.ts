@@ -521,6 +521,18 @@ export async function apiRequestResetOtp(email: string): Promise<{ devCode?: str
   return { devCode: errBody.devCode, expiresInMinutes: errBody.expiresInMinutes };
 }
 
+export async function apiVerifyResetOtp(email: string, otp: string): Promise<void> {
+  const res = await fetch(`${getApiBaseUrl()}/auth/verify-reset-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, otp }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || 'That verification code is incorrect.');
+  }
+}
+
 export async function apiResetPassword(email: string, otp: string, newPassword: string): Promise<void> {
   const res = await fetch(`${getApiBaseUrl()}/auth/reset-password`, {
     method: 'POST',

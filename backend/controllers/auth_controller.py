@@ -429,6 +429,66 @@ def auth_request_reset_otp():
     return jsonify(payload), 200
 
 
+def _check_reset_otp(user, otp):
+    """Validates a forgot-password OTP, incrementing attempts on mismatch.
+
+    Returns ``None`` when the code is valid, otherwise a ``(json, status)``
+    tuple. The code is not consumed here; callers decide when to clear it.
+    """
+    expires = _parse_iso(user.reset_otp_expires_at)
+    if not user.reset_otp or not expires or _utcnow_naive() > expires:
+        user.reset_otp = None
+        user.reset_otp_expires_at = None
+        user.reset_otp_attempts = None
+        db.session.commit()
+        return jsonify({"error": "This code has expired. Request a new one.", "code": "RESET_OTP_EXPIRED"}), 401
+    if (user.reset_otp_attempts or 0) >= RESET_OTP_MAX_ATTEMPTS:
+        return jsonify({"error": "Too many incorrect reset codes. Request a new code.", "code": "RESET_OTP_LOCKED"}), 429
+    if not otp or not user.reset_otp or not secrets.compare_digest(user.reset_otp, otp):
+        user.reset_otp_attempts = (user.reset_otp_attempts or 0) + 1
+        db.session.commit()
+        return jsonify({"error": "Incorrect verification code. Please try again.", "code": "INVALID_OTP"}), 401
+    return None
+
+
+def auth_verify_reset_otp():
+    """Confirms a forgot-password OTP without applying the new password.
+
+    Lets the UI validate the emailed code first and only reveal the
+    new-password fields once it checks out. The code stays valid for
+    ``auth_reset_password`` so the final reset still re-verifies it.
+    """
+    data = request.json or {}
+    if _rate_limit_exceeded(f"reset-verify-ip:{request.remote_addr}", 10):
+        return jsonify({
+            "error": "Too many verification attempts. Please try again in a minute.",
+            "code": "RATE_LIMITED",
+        }), 429
+    email = (data.get("email") or "").strip().lower()
+    otp = str(data.get("otp") or data.get("code") or "").strip()
+    if not email or "@" not in email:
+        return jsonify({"error": "A valid email address is required.", "code": "BAD_REQUEST"}), 400
+    if not otp:
+        return jsonify({"error": "Please enter the 6-digit verification code.", "code": "BAD_REQUEST"}), 400
+
+    user = UserModel.query.filter(db.func.lower(UserModel.email) == email).first()
+    if not user:
+        return jsonify({
+            "error": "No matching reset request was found for that email. Please request a new code and try again.",
+            "code": "NOT_FOUND",
+        }), 404
+    if user.role in ("teacher", "admin"):
+        return jsonify({
+            "error": "Staff passwords cannot be reset through the self-service flow. Please contact an administrator.",
+            "code": "STAFF_RESET_FORBIDDEN",
+        }), 403
+
+    error = _check_reset_otp(user, otp)
+    if error:
+        return error
+    return jsonify({"success": True, "message": "Verification code confirmed. Choose a new password."}), 200
+
+
 def auth_reset_password():
     """Verifies the emailed OTP and applies a new password for a student account."""
     data = request.json or {}
@@ -460,19 +520,9 @@ def auth_reset_password():
         }), 403
 
     # Temporary login lockouts don't block the OTP-gated reset (email-verified).
-    expires = _parse_iso(user.reset_otp_expires_at)
-    if not user.reset_otp or not expires or _utcnow_naive() > expires:
-        user.reset_otp = None
-        user.reset_otp_expires_at = None
-        user.reset_otp_attempts = None
-        db.session.commit()
-        return jsonify({"error": "This code has expired. Request a new one.", "code": "RESET_OTP_EXPIRED"}), 401
-    if (user.reset_otp_attempts or 0) >= RESET_OTP_MAX_ATTEMPTS:
-        return jsonify({"error": "Too many incorrect reset codes. Request a new code.", "code": "RESET_OTP_LOCKED"}), 429
-    if not otp or not user.reset_otp or not secrets.compare_digest(user.reset_otp, otp):
-        user.reset_otp_attempts = (user.reset_otp_attempts or 0) + 1
-        db.session.commit()
-        return jsonify({"error": "Incorrect verification code. Please try again.", "code": "INVALID_OTP"}), 401
+    error = _check_reset_otp(user, otp)
+    if error:
+        return error
 
     _clear_login_failures(user)
     user.password_hash = generate_password_hash(new_password)

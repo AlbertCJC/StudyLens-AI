@@ -26,7 +26,7 @@ import {
   ShieldCheck,
 } from 'lucide-react-native';
 import { useAuth, UserRole, TwoFactorRequiredError, TwoFactorPending, EmailVerificationRequiredError } from '../context/AuthContext';
-import { apiRequestResetOtp, apiResetPassword, EmailVerificationPending } from '../services/api';
+import { apiRequestResetOtp, apiResetPassword, apiVerifyResetOtp, EmailVerificationPending } from '../services/api';
 import { STORAGE_KEYS, getJSON, setJSON } from '../utils/storage';
 import { useTheme } from '../theme/ThemeContext';
 import { Modal, Field, PrimaryButton, OutlineButton } from '../components/ui';
@@ -48,7 +48,7 @@ export default function LoginScreen({ navigation, onBack }: any) {
 
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotStep, setForgotStep] = useState<'request' | 'verify'>('request');
+  const [forgotStep, setForgotStep] = useState<'request' | 'verify' | 'reset'>('request');
   const [forgotOtp, setForgotOtp] = useState('');
   const [forgotPassword, setForgotPassword] = useState('');
   const [forgotConfirm, setForgotConfirm] = useState('');
@@ -90,9 +90,14 @@ export default function LoginScreen({ navigation, onBack }: any) {
     };
   }, []);
 
-  // Persist the forgot-password OTP step. The devCode is never persisted.
+  // Persist the forgot-password OTP step. The devCode is never persisted, and
+  // the password step is stored as "verify" so a restart asks for the code again.
   useEffect(() => {
-    setJSON(STORAGE_KEYS.forgotReset, { open: forgotOpen, email: forgotEmail, step: forgotStep });
+    setJSON(STORAGE_KEYS.forgotReset, {
+      open: forgotOpen,
+      email: forgotEmail,
+      step: forgotStep === 'reset' ? 'verify' : forgotStep,
+    });
   }, [forgotOpen, forgotEmail, forgotStep]);
 
   const closeForgotModal = () => {
@@ -117,6 +122,9 @@ export default function LoginScreen({ navigation, onBack }: any) {
     try {
       const res = await apiRequestResetOtp(forgotEmail.trim());
       setForgotStep('verify');
+      setForgotOtp('');
+      setForgotPassword('');
+      setForgotConfirm('');
       setForgotDevCode(res.devCode || '');
       setForgotMsgType('success');
       setForgotMsg('A 6-digit verification code was sent to your email.');
@@ -128,13 +136,29 @@ export default function LoginScreen({ navigation, onBack }: any) {
     }
   };
 
-  const handleForgotPassword = async () => {
+  const handleVerifyForgotOtp = async () => {
     setForgotMsg('');
     if (!forgotOtp.trim() || forgotOtp.trim().length !== 6) {
       setForgotMsgType('error');
       setForgotMsg('Please enter the 6-digit verification code.');
       return;
     }
+    setForgotSubmitting(true);
+    try {
+      await apiVerifyResetOtp(forgotEmail.trim(), forgotOtp.trim());
+      setForgotStep('reset');
+      setForgotMsgType('success');
+      setForgotMsg('Code verified. Choose your new password.');
+    } catch (err) {
+      setForgotMsgType('error');
+      setForgotMsg((err as Error).message || 'That verification code is incorrect.');
+    } finally {
+      setForgotSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setForgotMsg('');
     if (!forgotPassword || forgotPassword.length < 6) {
       setForgotMsgType('error');
       setForgotMsg('New password must be at least 6 characters.');
@@ -551,7 +575,13 @@ export default function LoginScreen({ navigation, onBack }: any) {
         visible={forgotOpen}
         onClose={closeForgotModal}
         title="Reset Password"
-        subtitle={forgotStep === 'request' ? 'Enter your account email to receive a 6-digit verification code.' : 'Enter the code we sent and choose a new password.'}
+        subtitle={
+          forgotStep === 'request'
+            ? 'Enter your account email to receive a 6-digit verification code.'
+            : forgotStep === 'verify'
+              ? 'Enter the 6-digit code we sent to your email to verify it.'
+              : 'Code verified. Choose and confirm your new password.'
+        }
       >
         <View style={{ gap: 14 }}>
           {forgotMsg ? (
@@ -570,9 +600,14 @@ export default function LoginScreen({ navigation, onBack }: any) {
               <PrimaryButton label={forgotSubmitting ? 'Sending Code...' : 'Send Verification Code'} onPress={handleSendCode} loading={forgotSubmitting} />
               <OutlineButton label="Cancel" onPress={closeForgotModal} />
             </>
-          ) : (
+          ) : forgotStep === 'verify' ? (
             <>
               <Field label="Verification Code" value={forgotOtp} onChangeText={(v) => setForgotOtp(v.replace(/[^0-9]/g, '').slice(0, 6))} placeholder="6-digit code" keyboardType="numeric" />
+              <PrimaryButton label={forgotSubmitting ? 'Verifying...' : 'Verify Code'} onPress={handleVerifyForgotOtp} loading={forgotSubmitting} />
+              <OutlineButton label="Cancel" onPress={closeForgotModal} />
+            </>
+          ) : (
+            <>
               <Field label="New Password" value={forgotPassword} onChangeText={setForgotPassword} placeholder="At least 6 characters" secureTextEntry />
               <Field label="Confirm New Password" value={forgotConfirm} onChangeText={setForgotConfirm} placeholder="Re-enter new password" secureTextEntry />
               <PrimaryButton label={forgotSubmitting ? 'Resetting...' : 'Reset Password'} onPress={handleForgotPassword} loading={forgotSubmitting} />

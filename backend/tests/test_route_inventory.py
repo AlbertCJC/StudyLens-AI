@@ -26,6 +26,7 @@ EXPECTED_RULES = {
     ("/api/auth/reset-password", "POST"),
     ("/api/auth/verify-2fa", "POST"),
     ("/api/auth/verify-email", "POST"),
+    ("/api/auth/verify-reset-otp", "POST"),
     ("/api/convert-to-pdf", "POST"),
     ("/api/explain", "POST"),
     ("/api/flashcards", "GET"),

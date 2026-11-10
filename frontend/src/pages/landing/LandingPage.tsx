@@ -16,7 +16,7 @@ const FORGOT_RESET_KEY = "studylens_forgot_reset";
 const PENDING_VERIFY_KEY = "studylens_pending_verification";
 const VERIFY_CODE_KEY = "studylens_verify_code";
 
-function readForgotReset(): { open: boolean; email: string; step: "request" | "verify" } {
+function readForgotReset(): { open: boolean; email: string; step: "request" | "verify" | "reset" } {
   try {
     const raw = localStorage.getItem(FORGOT_RESET_KEY);
     if (!raw) return { open: false, email: "", step: "request" };
@@ -113,7 +113,7 @@ export const LandingPage: React.FC = () => {
   // Forgot Password State
   const [forgotOpen, setForgotOpen] = useState(() => readForgotReset().open);
   const [forgotEmail, setForgotEmail] = useState(() => readForgotReset().email);
-  const [forgotStep, setForgotStep] = useState<"request" | "verify">(() => readForgotReset().step);
+  const [forgotStep, setForgotStep] = useState<"request" | "verify" | "reset">(() => readForgotReset().step);
   const [forgotOtp, setForgotOtp] = useState("");
   const [forgotPassword, setForgotPassword] = useState("");
   const [forgotConfirm, setForgotConfirm] = useState("");
@@ -124,7 +124,10 @@ export const LandingPage: React.FC = () => {
   // reload / tab discard.
   React.useEffect(() => {
     try {
-      localStorage.setItem(FORGOT_RESET_KEY, JSON.stringify({ open: forgotOpen, email: forgotEmail, step: forgotStep }));
+      // The OTP is never persisted, so treat the password step as "verify" on
+      // reload: the user must re-enter the emailed code before choosing one.
+      const step = forgotStep === "reset" ? "verify" : forgotStep;
+      localStorage.setItem(FORGOT_RESET_KEY, JSON.stringify({ open: forgotOpen, email: forgotEmail, step }));
     } catch {
       // ignore persistence failures
     }
@@ -352,6 +355,9 @@ export const LandingPage: React.FC = () => {
         return;
       }
       setForgotStep("verify");
+      setForgotOtp("");
+      setForgotPassword("");
+      setForgotConfirm("");
       setForgotNotice(data?.message || "A 6-digit verification code was sent to your email.");
       showToast(res.status === 200 ? "Verification code sent." : data?.message || "Code sent.");
     } catch {
@@ -361,12 +367,36 @@ export const LandingPage: React.FC = () => {
     }
   };
 
-  const handleForgotResetSubmit = async (e: React.FormEvent) => {
+  const handleForgotVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!forgotOtp.trim() || forgotOtp.trim().length !== 6) {
       showToast("Please enter the 6-digit verification code.", "error");
       return;
     }
+    setForgotSubmitting(true);
+    try {
+      const res = await fetch("/api/auth/verify-reset-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail.trim(), otp: forgotOtp.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data?.error || "That verification code is incorrect. Please try again.", "error");
+        return;
+      }
+      setForgotStep("reset");
+      setForgotNotice("Code verified. Choose your new password.");
+      showToast("Verification code confirmed.");
+    } catch {
+      showToast("Could not reach the server. Please check your connection and try again.", "error");
+    } finally {
+      setForgotSubmitting(false);
+    }
+  };
+
+  const handleForgotResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!forgotPassword) {
       showToast("Please enter a new password.", "error");
       return;
@@ -859,7 +889,9 @@ export const LandingPage: React.FC = () => {
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                   {forgotStep === "request"
                     ? "Enter your account email to receive a 6-digit verification code."
-                    : "Enter the code we sent and choose a new password."}
+                    : forgotStep === "verify"
+                      ? "Enter the 6-digit code we sent to your email to verify it."
+                      : "Code verified. Choose and confirm your new password."}
                 </p>
               </div>
               <button
@@ -894,8 +926,8 @@ export const LandingPage: React.FC = () => {
                   {forgotSubmitting ? "Sending Code..." : "Send Verification Code"}
                 </button>
               </form>
-            ) : (
-              <form onSubmit={handleForgotResetSubmit} className="space-y-3">
+            ) : forgotStep === "verify" ? (
+              <form onSubmit={handleForgotVerifyOtp} className="space-y-3">
                 {forgotNotice && (
                   <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
                     {forgotNotice}
@@ -917,6 +949,28 @@ export const LandingPage: React.FC = () => {
                     />
                   </div>
                 </div>
+                <button
+                  type="submit"
+                  disabled={forgotSubmitting}
+                  className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a41c4] text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
+                >
+                  {forgotSubmitting ? "Verifying..." : "Verify Code"}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeForgotModal}
+                  className="w-full py-2.5 rounded-xl text-sm font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleForgotResetSubmit} className="space-y-3">
+                {forgotNotice && (
+                  <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
+                    {forgotNotice}
+                  </div>
+                )}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">New Password</label>
                   <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
