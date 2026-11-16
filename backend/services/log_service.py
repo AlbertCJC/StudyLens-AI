@@ -5,12 +5,19 @@ import datetime
 from flask import request
 
 from extensions import db
+from lib.id import generate_id
 from models import ActivityLogModel
 
 def log_action(user_id, user_name, user_role, action, details):
+    """Stage an audit log entry within the current request transaction.
+
+    ``log_action`` no longer commits the session itself: it only stages the
+    row (flush) so the audit entry commits or rolls back atomically with the
+    caller's own database work. A failed log write never fails the request.
+    """
     try:
         log_item = ActivityLogModel(
-            log_id=f"log-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+            log_id=generate_id("log"),
             user_id=user_id,
             user_name=user_name,
             user_role=user_role,
@@ -22,7 +29,7 @@ def log_action(user_id, user_name, user_role, action, details):
             created_at=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         )
         db.session.add(log_item)
-        db.session.commit()
+        db.session.flush()
     except Exception as e:
         print("Failed to record audit log:", e)
         try:

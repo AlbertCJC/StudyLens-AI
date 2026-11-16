@@ -1,14 +1,15 @@
 import json
 
 from extensions import db
-from lib.quiz import _canonical_question_type
+from sqlalchemy import DateTime
+from lib.quiz import normalize_question_shape
 
 def _quiz_questions_for(quiz_id):
     """Returns the questions list for a quiz from the quiz_questions table, or None if none stored."""
     rows = QuizQuestionModel.query.filter_by(quiz_id=quiz_id).order_by(QuizQuestionModel.question_order).all()
     if not rows:
         return None
-    return [row.to_dict() for row in rows]
+    return [normalize_question_shape(row.to_dict()) for row in rows]
 
 
 def _collision_safe_question_id(raw_id, quiz_id, idx):
@@ -25,6 +26,7 @@ def _replace_quiz_questions(quiz_id, questions):
     for idx, q in enumerate(questions or []):
         if not isinstance(q, dict):
             continue
+        q = normalize_question_shape(q)
         options = q.get("options") or []
         letter = None
         if isinstance(q.get("correctAnswer"), int) and 0 <= q["correctAnswer"] < len(options):
@@ -84,7 +86,7 @@ def _merge_questions_json(questions, questions_json):
             q["correctAnswer"] = jq["correctAnswer"]
         elif q.get("correctAnswer") in (None, ""):
             q["correctAnswer"] = jq.get("correctAnswer")
-    return questions
+    return [normalize_question_shape(q) for q in questions]
 
 class QuizModel(db.Model):
     __tablename__ = "quizzes"
@@ -107,7 +109,9 @@ class QuizModel(db.Model):
     attempts_allowed = db.Column(db.Integer, default=0)
     reveal_answers = db.Column(db.Boolean, default=True)
     deadline = db.Column(db.String(64), nullable=True)
+    deadline_dt = db.Column(DateTime(timezone=True), nullable=True)
     created_at = db.Column(db.String(64), nullable=False)
+    created_at_dt = db.Column(DateTime(timezone=True), nullable=True)
 
     def to_dict(self):
         qs = _quiz_questions_for(self.quiz_id)
@@ -116,9 +120,7 @@ class QuizModel(db.Model):
             except Exception: qs = []
         else:
             qs = _merge_questions_json(qs, self.questions_json)
-        for q in qs:
-            if isinstance(q, dict):
-                q["type"] = _canonical_question_type(q)
+        qs = [normalize_question_shape(q) for q in qs if isinstance(q, dict)]
         return {
             "id": self.quiz_id,
             "title": self.title,
@@ -136,8 +138,8 @@ class QuizModel(db.Model):
             "difficulty": self.difficulty,
             "attemptsAllowed": self.attempts_allowed or 0,
             "revealAnswers": True if self.reveal_answers is None else bool(self.reveal_answers),
-            "deadline": self.deadline,
-            "createdAt": self.created_at
+            "deadline": self.deadline_dt.isoformat().replace("+00:00", "Z") if self.deadline_dt else (self.deadline or ""),
+            "createdAt": self.created_at_dt.isoformat().replace("+00:00", "Z") if self.created_at_dt else (self.created_at or "")
         }
 
 class QuizQuestionModel(db.Model):
@@ -181,6 +183,7 @@ class QuizAttemptModel(db.Model):
     score = db.Column(db.Float, nullable=False)
     time_taken = db.Column(db.Integer, default=300)
     submitted_at = db.Column(db.String(64), nullable=False)
+    submitted_at_dt = db.Column(DateTime(timezone=True), nullable=True)
     quiz_title = db.Column(db.String(256), nullable=False)
     student_name = db.Column(db.String(128), nullable=False)
     subject_id = db.Column(db.String(64), nullable=False)
@@ -214,9 +217,9 @@ class QuizAttemptModel(db.Model):
             "passed": self.passed,
             "timeTaken": self.time_taken,
             "answers": ans,
-            "submittedAt": self.submitted_at,
+            "submittedAt": self.submitted_at_dt.isoformat().replace("+00:00", "Z") if self.submitted_at_dt else (self.submitted_at or ""),
             "feedback": ans,
             "weakTopics": wt,
             "strongTopics": st,
-            "completedAt": self.submitted_at
+            "completedAt": self.submitted_at_dt.isoformat().replace("+00:00", "Z") if self.submitted_at_dt else (self.submitted_at or "")
         }

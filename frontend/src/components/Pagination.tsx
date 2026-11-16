@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useEffect, useMemo } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 

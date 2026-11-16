@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (lint + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: |
+          cd backend
+          python -m ruff check . --select E9,F63,F7,F82
+
+      - name: Tests (pytest)
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET || 'ci-test-secret-do-not-use-in-prod' }}
+          FLASK_ENV: development
+          SEED_DEMO_DATA: "false"
+          OTP_DEV_REVEAL: "false"
+          ALLOW_LOCAL_FALLBACK: "false"
+          ALLOW_SQLITE_FALLBACK: "false"
+        run: |
+          cd backend
+          python -m pytest -q
+
+  frontend:
+    name: Frontend (lint + typecheck + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Lint (eslint)
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Typecheck (tsc)
+        run: |
+          cd frontend
+          npx tsc --noEmit
+
+      - name: Tests (vitest)
+        run: |
+          cd frontend
+          npm test
+
+      - name: Build (vite)
+        run: |
+          cd frontend
+          npm run build
+
+  mobile:
+    name: Mobile (typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd mobile
+          npm ci
+
+      - name: Typecheck (tsc)
+        run: |
+          cd mobile
+          npx tsc --noEmit
+
+      - name: Tests (jest)
+        run: |
+          cd mobile
+          npm test -- --runInBand
+
+  security:
+    name: Security (dependency audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install pip-audit + deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+          cd backend && pip install -r requirements-dev.txt
+
+      - name: Python dependency audit (pip-audit)
+        run: |
+          cd backend
+          pip-audit --skip-editable || true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: JS dependency audit (npm audit)
+        run: |
+          cd frontend
+          npm ci --omit=dev || true
+          npm audit --omit=dev --audit-level=moderate || true

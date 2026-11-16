@@ -50,10 +50,112 @@ if (
 
 PORT = int(os.getenv("FLASK_PORT", 5000))
 
-# Demo account passwords for the seeded role-switch accounts. Overridable so a
-# deployment can rotate them without editing code.
-DEMO_TEACHER_PASSWORD = os.getenv("DEMO_TEACHER_PASSWORD", "TeacherTest123!")
-DEMO_ADMIN_PASSWORD = os.getenv("DEMO_ADMIN_PASSWORD", "Admin!123")
+# Deployment environment. Production disables development conveniences such as
+# demo seeding and the OTP reveal flag.
+ENVIRONMENT = os.getenv("FLASK_ENV", "development").strip().lower()
+IS_PRODUCTION = ENVIRONMENT in ("production", "prod")
+
+
+def _env_flag(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Demo data is opt-in. Never seed automatically outside an explicit request.
+SEED_DEMO_DATA = _env_flag("SEED_DEMO_DATA", False)
+
+# Development-only disclosure of one-time codes in API responses. Forbidden in
+# production because it defeats 2FA and email verification.
+OTP_DEV_REVEAL = _env_flag("OTP_DEV_REVEAL", False)
+if IS_PRODUCTION and OTP_DEV_REVEAL:
+    raise RuntimeError(
+        "OTP_DEV_REVEAL cannot be enabled when FLASK_ENV=production."
+    )
+
+# Local-only escape hatch for cloud uploads. When a configured cloud target
+# (Cloudinary / Firebase) fails, the app would otherwise silently fall back to
+# the local uploads directory -- which is ephemeral and inaccessible across
+# instances. Require an explicit opt-in; otherwise a cloud failure raises.
+ALLOW_LOCAL_FALLBACK = _env_flag("ALLOW_LOCAL_FALLBACK", False)
+
+# Local development convenience: fall back to SQLite when a configured MySQL
+# target is unreachable. Disabled by default and never permitted in production.
+ALLOW_SQLITE_FALLBACK = _env_flag("ALLOW_SQLITE_FALLBACK", False)
+
+# HttpOnly session cookie used for the web client. Mobile keeps using bearer
+# JWTs (sent via Authorization header) and must mark itself with
+# X-Client-Type: mobile so login/verify/2FA responses still include a token body.
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "studylens_session")
+AUTH_COOKIE_PATH = os.getenv("AUTH_COOKIE_PATH", "/")
+AUTH_COOKIE_DOMAIN = os.getenv("AUTH_COOKIE_DOMAIN") or None
+AUTH_COOKIE_SECURE = _env_flag("AUTH_COOKIE_SECURE", IS_PRODUCTION)
+AUTH_COOKIE_SAMESITE = (os.getenv("AUTH_COOKIE_SAMESITE", "Lax") or "Lax").strip()
+
+# Double-submit CSRF protection for cookie-authenticated unsafe requests.
+CSRF_COOKIE_NAME = os.getenv("CSRF_COOKIE_NAME", "studylens_csrf")
+MOBILE_CLIENT_HEADER = os.getenv("MOBILE_CLIENT_HEADER", "X-Client-Type")
+MOBILE_CLIENT_VALUE = os.getenv("MOBILE_CLIENT_VALUE", "mobile")
+
+# Refresh token cookie (long-lived, paired with the short-lived access cookie).
+REFRESH_COOKIE_NAME = os.getenv("REFRESH_COOKIE_NAME", "studylens_refresh")
+REFRESH_COOKIE_PATH = os.getenv("REFRESH_COOKIE_PATH", "/")
+REFRESH_COOKIE_DOMAIN = os.getenv("REFRESH_COOKIE_DOMAIN") or None
+REFRESH_COOKIE_SECURE = _env_flag("REFRESH_COOKIE_SECURE", IS_PRODUCTION)
+REFRESH_COOKIE_SAMESITE = (os.getenv("REFRESH_COOKIE_SAMESITE", "Lax") or "Lax").strip()
+
+# Pepper used to HMAC one-time codes at rest. Set explicitly in production;
+# falls back to JWT_SECRET in development so codes are never stored plaintext.
+OTP_PEPPER = os.getenv("OTP_PEPPER", "") or SECRET_KEY
+
+# Demo account passwords must be supplied explicitly when demo seeding is
+# enabled. There are deliberately no fallbacks: a committed default is a
+# published backdoor.
+DEMO_TEACHER_PASSWORD = os.getenv("DEMO_TEACHER_PASSWORD", "").strip() or None
+DEMO_ADMIN_PASSWORD = os.getenv("DEMO_ADMIN_PASSWORD", "").strip() or None
+
+KNOWN_DEFAULT_DEMO_PASSWORDS = {
+    "TeacherTest123!",
+    "Admin!123",
+}
+
+
+def _validate_demo_configuration():
+    if not SEED_DEMO_DATA:
+        return
+    if IS_PRODUCTION:
+        raise RuntimeError(
+            "SEED_DEMO_DATA cannot be enabled when FLASK_ENV=production. "
+            "Provision accounts through an explicit, audited process instead."
+        )
+    missing = [
+        name
+        for name, value in (
+            ("DEMO_TEACHER_PASSWORD", DEMO_TEACHER_PASSWORD),
+            ("DEMO_ADMIN_PASSWORD", DEMO_ADMIN_PASSWORD),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "Demo seeding is enabled but the following variables are missing: "
+            + ", ".join(missing)
+            + ". Set strong, unique values or disable SEED_DEMO_DATA."
+        )
+    for name, value in (
+        ("DEMO_TEACHER_PASSWORD", DEMO_TEACHER_PASSWORD),
+        ("DEMO_ADMIN_PASSWORD", DEMO_ADMIN_PASSWORD),
+    ):
+        if value in KNOWN_DEFAULT_DEMO_PASSWORDS:
+            raise RuntimeError(
+                f"{name} is set to a known default value. Choose a strong, unique password."
+            )
+        if IS_PRODUCTION and len(value) < 12:
+            raise RuntimeError(f"{name} must be at least 12 characters in production.")
+
+
+_validate_demo_configuration()
 
 # Global upload size cap. Materials and AI attachments are rejected above the
 # cap with a clean JSON error instead of a bare 413 page (avatar uploads
@@ -100,7 +202,13 @@ ALLOWED_ORIGINS = [
 
 
 def _resolve_db_target():
-    """Returns the configured MySQL URL when reachable, else SQLite fallback."""
+    """Returns the configured database URL, failing fast when it is unusable.
+
+    The silent SQLite fallback is forbidden in production and requires the
+    explicit ALLOW_SQLITE_FALLBACK=true opt-in during development. Otherwise a
+    transient MySQL outage would silently start the app against an empty,
+    divergent database.
+    """
     mysql_url = os.getenv("MYSQL_DATABASE_URL")
     if not mysql_url and os.getenv("MYSQL_HOST"):
         db_user = os.getenv("MYSQL_USER", "root")
@@ -109,13 +217,20 @@ def _resolve_db_target():
         db_name = os.getenv("MYSQL_DB", "studylens_db")
         mysql_url = f"mysql+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}"
 
-    db_target = "sqlite:///studylens.db"
+    sqlite_target = "sqlite:///studylens.db"
     if not mysql_url:
-        return db_target
+        if IS_PRODUCTION:
+            raise RuntimeError(
+                "MYSQL_DATABASE_URL is required when FLASK_ENV=production. "
+                "Refusing to start against a local SQLite database."
+            )
+        print("[Database] No MySQL target configured; using SQLite (development).")
+        return sqlite_target
 
     # Explicit non-MySQL URLs (e.g. a SQLite test database) are used verbatim;
     # the connectivity probe below is MySQL-specific.
     if not mysql_url.startswith("mysql"):
+        print("[Database] Using explicitly configured non-MySQL database target.")
         return mysql_url
 
     try:
@@ -131,13 +246,15 @@ def _resolve_db_target():
         return mysql_url
     except Exception as db_err:
         short_err = str(db_err).splitlines()[0][:160] if str(db_err) else "unknown error"
+        if IS_PRODUCTION or not ALLOW_SQLITE_FALLBACK:
+            raise RuntimeError(
+                "Configured MySQL database is unreachable and the SQLite fallback "
+                "is disabled. Set ALLOW_SQLITE_FALLBACK=true only for local "
+                f"development. Underlying error: {short_err}"
+            ) from db_err
         print(f"[Database] MySQL not connected ({short_err}).")
-        print("[Database] Continuing with SQLite — StudyLens runs fully on SQLite.")
-        print(
-            "[Database] To enable MySQL, check MYSQL_DATABASE_URL / "
-            "MYSQL_PASSWORD in .env and restart."
-        )
-        return db_target
+        print("[Database] ALLOW_SQLITE_FALLBACK=true; continuing with SQLite.")
+        return sqlite_target
 
 
 DB_TARGET = _resolve_db_target()

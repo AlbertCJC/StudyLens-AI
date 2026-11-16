@@ -1,12 +1,4 @@
-import os
-import io
-import json
-import jwt
-import secrets
-import datetime
-import mimetypes
-import threading
-import time
+import os, io, json, jwt, secrets, datetime, mimetypes, threading, time
 from functools import wraps
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -15,7 +7,6 @@ from sqlalchemy import func
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
-# Import Groq AI (GPT-OSS-120B) & Cloud Storage Services
 from groq_service import (
     call_groq_ai,
     generate_quiz_with_groq,
@@ -39,19 +30,16 @@ from config import (
     ALLOWED_MATERIAL_EXTENSIONS,
     ALLOWED_ORIGINS,
     DB_TARGET,
+    IS_PRODUCTION,
     MAX_EXTRACT_PAGES,
     MAX_UPLOAD_MB,
     PORT,
     SECRET_KEY,
-    _BACKEND_DIR,
-    _UPLOADS_DIR,
 )
 from db import session as db_session
 from db.session import _commit_or_warn
 from extensions import db
 from lib.constants import DEFAULT_SYSTEM_SETTINGS
-from lib.quiz import _answer_index
-from lib.time import _parse_iso, _utcnow_iso_z, _utcnow_naive
 from models import (
     AIGeneratedContentModel,
     ActivityLogArchiveModel,
@@ -78,19 +66,9 @@ from models.quiz import (
     _replace_quiz_questions,
 )
 
-from db.migrations import (
-    _ensure_auth_security_columns,
-    _ensure_demo_email_verified,
-    _ensure_demo_passwords,
-    _ensure_notification_target_column,
-    _ensure_quiz_deadline_column,
-    _ensure_users_2fa_columns,
-    _normalize_avatar_placeholders,
-    _purge_test_announcements,
-)
+from db.migrations import run_startup_repairs
 from lib.auth import (
-    _authenticated_user_from_bearer,
-    _extract_bearer_token,
+    _extract_session_token,
     require_auth,
     require_roles,
     token_required,
@@ -105,7 +83,6 @@ from lib.constants import (
     MAX_AI_QUESTIONS,
     MAX_AI_CALLS_PER_MINUTE,
     MAX_LOGIN_ATTEMPTS,
-    OTP_DEV_REVEAL,
     RESET_OTP_EXPIRY_MINUTES,
     RESET_OTP_MAX_ATTEMPTS,
     TWO_FACTOR_MAX_ATTEMPTS,
@@ -169,7 +146,45 @@ register_blueprints(app)
 
 # Hardened CORS: only known frontend origins may call the API. The Vite dev server
 # runs on localhost:3000 by default; add LAN/host origin(s) via ALLOWED_ORIGINS.
-CORS(app, origins=ALLOWED_ORIGINS)
+# Credentials are required so the HttpOnly session cookie and X-CSRF-Token are
+# sent cross-origin; origins must be explicit (never a wildcard) with credentials.
+CORS(
+    app,
+    origins=ALLOWED_ORIGINS,
+    supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Client-Type"],
+)
+
+# Structured request logging + request ID middleware (P2-14).
+from lib.logging_config import configure_logging, request_id_middleware
+
+configure_logging(app)
+request_id_middleware(app)
+
+
+@app.after_request
+def _security_headers(response):
+    """Apply defense-in-depth security headers to every API response."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    # HSTS only over HTTPS / in production.
+    if IS_PRODUCTION or request.is_secure:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 app.config["SECRET_KEY"] = SECRET_KEY
@@ -183,6 +198,16 @@ def _handle_413(_err):
         "code": "FILE_TOO_LARGE",
     }), 413
 
+
+@app.errorhandler(500)
+def _handle_500(err):
+    """Return JSON instead of HTML for unhandled server errors."""
+    print(f"[Server] Unhandled 500: {err}")
+    return jsonify({
+        "error": "An unexpected server error occurred. Please try again.",
+        "code": "INTERNAL_ERROR",
+    }), 500
+
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_TARGET
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 if DB_TARGET.startswith("mysql"):
@@ -194,70 +219,9 @@ if DB_TARGET.startswith("mysql"):
     }
 db.init_app(app)
 
-# ----------------------------------------------------
-# DATABASE ORM MODELS (14 Tables mapped to Manuscript ERD)
-# ----------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ----------------------------------------------------
-# JWT AUTHENTICATION DECORATORS
-# ----------------------------------------------------
-
-
-
-
-
-
-
+# Apply idempotent schema/data repairs once per process at startup so existing
+# databases provisioned before a column was added keep working.
+run_startup_repairs(app)
 
 
 @app.errorhandler(GroqAPIError)
@@ -277,34 +241,19 @@ def handle_groq_error(err):
     return jsonify({"error": err.message, "code": err.code}), status
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ----------------------------------------------------
 # REST API ENDPOINTS
 # ----------------------------------------------------
 
 # Global maintenance-mode gate applies to all /api/* routes.
-from lib.middleware import enforce_maintenance_mode
+from lib.middleware import enforce_maintenance_mode, enforce_production_demo_account_safety
 
 app.before_request(enforce_maintenance_mode)
+app.before_request(enforce_production_demo_account_safety)
 if __name__ == "__main__":
-    from db.seed import seed_database_if_empty
-
-    seed_database_if_empty()
+    # Demo data is never seeded automatically. Provision it explicitly with:
+    #   python backend/scripts/seed_dev.py
+    #
     # Debug mode is opt-in ONLY (FLASK_DEBUG=true). The Werkzeug debugger is a
     # remote-code-execution vector on a public interface, so it is off by default.
     debug_mode = os.getenv("FLASK_DEBUG", "false").strip().lower() in ("1", "true", "yes", "on")

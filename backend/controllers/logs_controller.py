@@ -2,9 +2,11 @@
 
 from flask import jsonify, request
 
+from db.session import _commit_or_warn
 from extensions import db
-from models import ActivityLogModel
+from models import ActivityLogArchiveModel, ActivityLogModel
 from services.log_service import log_action
+from services.settings_service import _enforce_archiving, _load_system_settings
 
 # Actions considered part of "Learning Materials Moderation" in the admin UI.
 MODERATION_LOG_CODES = [
@@ -17,6 +19,12 @@ MODERATION_LOG_CODES = [
 
 
 def get_activity_logs():
+    try:
+        # Auto audit archiving: old logs are archived when the setting is on,
+        # not only when an admin saves system settings.
+        _enforce_archiving(_load_system_settings())
+    except Exception:
+        pass
     try:
         page = max(1, int(request.args.get("page", 1) or 1))
     except (TypeError, ValueError):
@@ -84,9 +92,26 @@ def add_activity_log():
 
 
 def clear_activity_logs():
+    current_user = getattr(request, "current_user", None) or {}
+    user_id = current_user.get("id") or "sys-admin"
+    user_name = current_user.get("name") or "System Administrator"
+    user_role = current_user.get("role") or "system"
     try:
+        # Archive every active log before deletion so the audit trail is retained.
+        active_logs = ActivityLogModel.query.all()
+        for log in active_logs:
+            db.session.add(ActivityLogArchiveModel(
+                log_id=log.log_id, user_id=log.user_id, user_name=log.user_name,
+                user_role=log.user_role, activity=log.activity, details=log.details,
+                ip_address=log.ip_address, created_at=log.created_at,
+            ))
         ActivityLogModel.query.delete()
-        log_action("usr-admin-1", "System", "admin", "LOGS_CLEARED", "Activity logs cleared by administrator")
-    except Exception:
-        pass
+        _commit_or_warn("clear audit logs")
+
+        # Retain one visible clearing record so administrators can audit who cleared logs.
+        log_action(user_id, user_name, user_role, "LOGS_CLEARED", "Activity logs archived and cleared by administrator")
+        _commit_or_warn("log clear action")
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Could not clear audit logs: {str(e)}", "code": "CLEAR_FAILED"}), 500
     return jsonify({"success": True}), 200

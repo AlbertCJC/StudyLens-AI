@@ -5,6 +5,9 @@ from flask import Blueprint
 from controllers.auth_controller import (
     auth_change_password,
     auth_login,
+    auth_logout,
+    auth_logout_all,
+    auth_refresh,
     auth_register,
     auth_request_reset_otp,
     auth_reset_password,
@@ -68,3 +71,20 @@ def auth_verify_reset_otp_route():
 @bp.route("/api/auth/reset-password", methods=["POST"])
 def auth_reset_password_route():
     return auth_reset_password()
+
+
+@bp.route("/api/auth/logout", methods=["POST"])
+@require_auth
+def auth_logout_route():
+    return auth_logout()
+
+
+@bp.route("/api/auth/logout-all", methods=["POST"])
+@require_auth
+def auth_logout_all_route():
+    return auth_logout_all()
+
+
+@bp.route("/api/auth/refresh", methods=["POST"])
+def auth_refresh_route():
+    return auth_refresh()

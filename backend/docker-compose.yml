@@ -1,0 +1,58 @@
+# StudyLens AI local development stack.
+#   docker-compose up -d
+# Services:
+#   db       - MySQL database
+#   backend  - StudyLens AI Python backend (gunicorn)
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DB:-studylens_db}
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-rootpassword}
+    volumes:
+      - studylens_db_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FLASK_ENV: ${FLASK_ENV:-development}
+      JWT_SECRET: ${JWT_SECRET}
+      MYSQL_DATABASE_URL: mysql+pymysql://${MYSQL_USER:-root}:${MYSQL_PASSWORD:-rootpassword}@db:3306/${MYSQL_DB:-studylens_db}
+      MYSQL_HOST: db
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-rootpassword}
+      MYSQL_DB: ${MYSQL_DB:-studylens_db}
+      PORT: 5000
+      ALLOW_SQLITE_FALLBACK: "false"
+      ALLOW_LOCAL_FALLBACK: "false"
+      OTP_DEV_REVEAL: "false"
+      AUTH_COOKIE_SECURE: "false"
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  studylens_db_data:

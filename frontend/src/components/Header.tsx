@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { Bell, Sparkles, Award, Globe, User, Megaphone } from "lucide-react";
+import { Bell, Sparkles, Award, Globe, User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useAnnouncements } from "../context/AnnouncementsContext";

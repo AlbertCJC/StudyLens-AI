@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Users, FolderKanban, BookCheck, Award, Plus, Download,
-  BarChart2, MessageSquare, Layers, Megaphone, Trash2, X, ChevronRight, Pencil
+  BarChart2, MessageSquare, Layers, Megaphone, Trash2, ChevronRight, Pencil
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { useAuth } from "../../context/AuthContext";
@@ -398,10 +398,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
         message='Are you sure you want to delete this announcement? This action cannot be undone.'
         confirmLabel="Yes, Delete"
         destructive
-        onConfirm={() => {
+        onConfirm={async () => {
           if (annToDelete) {
-            deleteAnnouncement(annToDelete);
-            showToast("Announcement deleted.");
+            const deleted = await deleteAnnouncement(annToDelete);
+            showToast(deleted ? "Announcement deleted." : "Could not delete the announcement.", deleted ? "success" : "error");
           }
           setAnnToDelete(null);
         }}

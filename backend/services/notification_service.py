@@ -3,6 +3,7 @@
 import datetime
 
 from extensions import db
+from lib.id import generate_id
 from models import NotificationModel, StudentSubjectModel, UserModel
 
 
@@ -14,7 +15,7 @@ def _create_notification(user_id, title, message, target=None):
         return
     server_now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     notif = NotificationModel(
-        notification_id=f"notif-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}-{user_id[-8:]}",
+        notification_id=generate_id("notif"),
         user_id=user_id,
         title=title,
         message=message,

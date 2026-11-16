@@ -7,6 +7,7 @@ from sqlalchemy import func
 
 from db.session import _commit_or_warn
 from extensions import db
+from lib.id import generate_id
 from models import (
     AnnouncementModel,
     MaterialModel,
@@ -25,6 +26,9 @@ def get_subjects():
     requester_role = current_user.get("role") or ""
     requester_id = current_user.get("id") or ""
 
+    limit = request.args.get("limit", type=int)
+    offset = request.args.get("offset", type=int)
+
     subs = SubjectModel.query.all()
 
     # Privacy Rule: teachers only see the subjects they are assigned to manage.
@@ -38,22 +42,54 @@ def get_subjects():
         }
         subs = [s for s in subs if s.subject_id in enrolled_ids]
 
-    # Live material counts: the denormalized material_count column drifts over
-    # time (AI mirrors, deletes), so always compute the real number here.
-    counts = dict(
-        db.session.query(MaterialModel.subject_id, func.count(MaterialModel.material_id))
+    # Batch-compute roster counts and material counts in ONE grouped query each,
+    # instead of one query per subject (N+1). Attach to each subject so to_dict
+    # stays pure.
+    roster_counts = dict(
+        db.session.query(
+            StudentSubjectModel.subject_id, func.count(StudentSubjectModel.student_subject_id)
+        )
+        .group_by(StudentSubjectModel.subject_id)
+        .all()
+    )
+    material_counts = dict(
+        db.session.query(
+            MaterialModel.subject_id, func.count(MaterialModel.material_id)
+        )
         .filter(MaterialModel.subject_id.isnot(None))
         .group_by(MaterialModel.subject_id)
         .all()
     )
-    payload = []
+    teacher_ids = {s.teacher_id for s in subs if s.teacher_id}
+    teacher_avatars = dict(
+        db.session.query(UserModel.user_id, UserModel.profile_picture)
+        .filter(UserModel.user_id.in_(teacher_ids))
+        .all()
+    ) if teacher_ids else {}
     for s in subs:
-        d = s.to_dict()
-        if s.subject_id in counts:
-            d["materialCount"] = counts[s.subject_id]
-        payload.append(d)
+        s._roster_count = roster_counts.get(s.subject_id)
+        s.material_count = material_counts.get(s.subject_id, 0)
+        s._teacher_avatar = teacher_avatars.get(s.teacher_id)
 
-    return jsonify(payload)
+    total = len(subs)
+    if limit is None and offset is None:
+        # Legacy array response for clients that have not been updated.
+        results = []
+        for s in subs:
+            d = s.to_dict()
+            d["materialCount"] = material_counts.get(s.subject_id, 0)
+            results.append(d)
+        return jsonify(results)
+    limit = max(1, min(200, limit or 100))
+    offset = max(0, offset or 0)
+    page = subs[offset:offset + limit]
+    return jsonify({
+        "items": [s.to_dict() for s in page],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "hasMore": (offset + len(page)) < total,
+    })
 
 
 def create_subject():
@@ -77,7 +113,7 @@ def create_subject():
         return jsonify({"error": f"A subject with code '{code}' already exists.", "code": "DUPLICATE"}), 409
 
     new_sub = SubjectModel(
-        subject_id=f"sub-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+        subject_id=generate_id("sub"),
         teacher_id=teacher.user_id,
         subject_code=code,
         subject_name=name,
@@ -90,6 +126,7 @@ def create_subject():
         material_count=0,
         created_at=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     )
+    new_sub._teacher_avatar = teacher.profile_picture
     db.session.add(new_sub)
     _commit_or_warn("subject creation")
     log_action(request.current_user["id"], request.current_user["name"], "admin", "SUBJECT_CREATE", f"Created subject '{code} - {name}' and assigned {teacher.to_dict()['name']}")
@@ -120,6 +157,11 @@ def update_subject(subject_id):
             return jsonify({"error": "Only a teacher account can be assigned to manage a subject.", "code": "BAD_REQUEST"}), 400
         sub.teacher_id = teacher.user_id
         sub.teacher_name = teacher.to_dict()["name"]
+        sub._teacher_avatar = teacher.profile_picture
+
+    if not hasattr(sub, "_teacher_avatar"):
+        teacher = db.session.get(UserModel, sub.teacher_id)
+        sub._teacher_avatar = teacher.profile_picture if teacher else None
 
     _commit_or_warn("subject update")
     log_action(request.current_user["id"], request.current_user["name"], "admin", "SUBJECT_UPDATE", f"Updated subject '{sub.subject_code} - {sub.subject_name}'")
@@ -163,6 +205,8 @@ def get_subject(subject_id):
     if role != "admin" and not is_assigned_teacher and not is_enrolled_student:
         return jsonify({"error": "You are not authorized to view this subject.", "code": "FORBIDDEN"}), 403
 
+    teacher = db.session.get(UserModel, sub.teacher_id)
+    sub._teacher_avatar = teacher.profile_picture if teacher else None
     return jsonify(sub.to_dict()), 200
 
 
@@ -191,9 +235,11 @@ def get_subject_students(subject_id):
     for en in enrollments:
         student = db.session.get(UserModel, en.student_id)
         if student:
+            student_data = student.to_dict()
             entry = {
                 "id": student.user_id,
-                "name": student.to_dict()["name"],
+                "name": student_data["name"],
+                "avatar": student_data.get("avatar"),
                 "studentId": student.student_id,
                 "dateEnrolled": en.date_enrolled
             }
@@ -244,9 +290,11 @@ def assign_subject_students(subject_id):
     for en in enrollments:
         student = db.session.get(UserModel, en.student_id)
         if student:
+            student_data = student.to_dict()
             students.append({
                 "id": student.user_id,
-                "name": student.to_dict()["name"],
+                "name": student_data["name"],
+                "avatar": student_data.get("avatar"),
                 "email": student.email,
                 "studentId": student.student_id,
                 "dateEnrolled": en.date_enrolled
@@ -283,9 +331,11 @@ def unassign_subject_students(subject_id):
     for en in enrollments:
         student = db.session.get(UserModel, en.student_id)
         if student:
+            student_data = student.to_dict()
             students.append({
                 "id": student.user_id,
-                "name": student.to_dict()["name"],
+                "name": student_data["name"],
+                "avatar": student_data.get("avatar"),
                 "email": student.email,
                 "studentId": student.student_id,
                 "dateEnrolled": en.date_enrolled
@@ -334,15 +384,12 @@ def get_subject_grades(subject_id):
                 key=lambda a: str(a.get("submittedAt") or ""),
                 reverse=True,
             )
+            latest_pcts = _latest_attempt_percentages(own)
             roster.append({
                 "studentId": student.user_id,
                 "studentName": student.to_dict()["name"],
                 "attemptCount": len(own),
-                "averagePercentage": (
-                    round(sum(_latest_attempt_percentages(own)) / len(latest_pcts))
-                    if (latest_pcts := _latest_attempt_percentages(own))
-                    else 0
-                ),
+                "averagePercentage": round(sum(latest_pcts) / len(latest_pcts)) if latest_pcts else 0,
                 "attempts": display,
             })
         roster.sort(key=lambda r: r["studentName"].lower())

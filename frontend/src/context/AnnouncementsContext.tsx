@@ -51,7 +51,7 @@ interface AnnouncementsContextType {
   notifications: BellItem[];
   addAnnouncement: (announcement: Omit<AnnouncementItem, "id" | "createdAt">) => Promise<void>;
   updateAnnouncement: (id: string, patch: Partial<AnnouncementItem>) => Promise<void>;
-  deleteAnnouncement: (id: string) => void;
+  deleteAnnouncement: (id: string) => Promise<boolean>;
   unreadCount: number;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
@@ -126,7 +126,6 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
       normalizeTimestamps(loadJSON<AnnouncementItem[]>(listKeyFor(userId, userRole), []))
     );
     setDbNotifications([]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, userRole]);
 
   // Per-user viewed sets (lazily hydrated from localStorage on first read).
@@ -224,10 +223,11 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
         .then((res) => (res.ok ? res.json() : []))
         .then((data) => {
           if (!active || !Array.isArray(data)) return;
-          const serverItems: AnnouncementItem[] = data
-            .filter((item: any) => item && !LEGACY_SEED_ANNOUNCEMENT_IDS.has(item.id))
-            .map((item: any) => {
-              const rawCreatedAt: string = item.createdAt || "";
+          const items = data as Record<string, string | undefined>[];
+          const serverItems: AnnouncementItem[] = items
+            .filter((item) => item && item.id && !LEGACY_SEED_ANNOUNCEMENT_IDS.has(item.id))
+            .map((item) => {
+              const rawCreatedAt = item.createdAt || "";
               const createdAt =
                 rawCreatedAt && !isNaN(new Date(rawCreatedAt).getTime())
                   ? rawCreatedAt
@@ -238,8 +238,8 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
                 content: item.content || "",
                 authorName: item.authorName || "Administrator",
                 authorId: item.teacherId || item.authorId,
-                targetAudience: item.targetAudience || "all",
-                priority: item.priority || "medium",
+                targetAudience: (item.targetAudience as AnnouncementItem["targetAudience"]) || "all",
+                priority: (item.priority as AnnouncementItem["priority"]) || "medium",
                 createdAt,
                 tag: item.priority === "high" ? "Urgent" : "Notice",
                 subjectId: item.subjectId,
@@ -256,15 +256,16 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
         .then((res) => (res.ok ? res.json() : []))
         .then((data) => {
           if (!active || !Array.isArray(data)) return;
+          const items = data as Record<string, unknown>[];
           setDbNotifications(
-            data.map((n: any) => ({
-              id: n.id || "",
-              userId: n.userId || "",
-              title: n.title || "",
-              content: n.message || n.content || "",
-              isRead: !!n.isRead,
-              createdAt: n.createdAt || "",
-              target: n.target || null,
+            items.map((n) => ({
+              id: typeof n.id === "string" ? n.id : "",
+              userId: typeof n.userId === "string" ? n.userId : "",
+              title: typeof n.title === "string" ? n.title : "",
+              content: typeof n.message === "string" ? n.message : typeof n.content === "string" ? n.content : "",
+              isRead: Boolean(n.isRead),
+              createdAt: typeof n.createdAt === "string" ? n.createdAt : "",
+              target: typeof n.target === "string" ? n.target : null,
             }))
           );
         })
@@ -337,13 +338,26 @@ export const AnnouncementsProvider: React.FC<{ children: React.ReactNode }> = ({
     [currentUser]
   );
 
-  const deleteAnnouncement = useCallback((id: string) => {
+  const deleteAnnouncement = useCallback(async (id: string): Promise<boolean> => {
+    const snapshot = announcements.find((a) => a.id === id);
     setAnnouncements((prev) => prev.filter((a) => a.id !== id));
     const qs = currentUser
       ? `?userId=${encodeURIComponent(currentUser.id)}&userRole=${encodeURIComponent(currentUser.role)}`
       : "";
-    authFetch(`/api/announcements/${id}${qs}`, { method: "DELETE" }).catch(() => {});
-  }, [currentUser]);
+    try {
+      const res = await authFetch(`/api/announcements/${id}${qs}`, { method: "DELETE" });
+      if (!res.ok) {
+        if (snapshot) setAnnouncements((prev) => (prev.some((a) => a.id === id) ? prev : [snapshot, ...prev]));
+        console.error("Delete announcement failed with status", res.status);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      if (snapshot) setAnnouncements((prev) => (prev.some((a) => a.id === id) ? prev : [snapshot, ...prev]));
+      console.error("Delete announcement error:", err);
+      return false;
+    }
+  }, [announcements, currentUser]);
 
   const updateAnnouncement = useCallback(
     async (id: string, patch: Partial<AnnouncementItem>): Promise<void> => {

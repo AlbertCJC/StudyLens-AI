@@ -3,6 +3,7 @@
 import datetime
 import io
 import json
+import re
 
 from flask import jsonify, request, send_file
 
@@ -22,6 +23,7 @@ from groq_service import (
     reset_generation_source,
 )
 from lib.ai_content import _ai_content_to_dict
+from lib.id import generate_id
 from lib.constants import MAX_AI_FLASHCARDS, MAX_AI_QUESTIONS
 from lib.rate_limit import _ai_rate_limited
 from lib.validation import _clamp_attempts, _clamp_count, _require_within_max, _reveal_answers
@@ -72,11 +74,11 @@ def generate_quiz_ai():
     _require_within_max(data.get("numQuestions", 5), MAX_AI_QUESTIONS)
     num_questions = _clamp_count(data.get("numQuestions", 5), fallback=5, maximum=MAX_AI_QUESTIONS)
     difficulty = data.get("difficulty", "medium")
-    
+
     questions = generate_quiz_with_groq(text_content, num_questions=num_questions, difficulty=difficulty)
-    
+
     new_quiz = QuizModel(
-        quiz_id=f"quiz-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+        quiz_id=generate_id("quiz"),
         title=data.get("title", f"AI Quiz: {text_content[:30]}..."),
         description="",
         subject_id=data.get("subjectId", "sub-101"),
@@ -97,7 +99,7 @@ def generate_quiz_ai():
     db.session.add(new_quiz)
     if not _commit_or_warn("AI quiz"):
         return jsonify({"error": "Could not save the quiz. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
-    
+
     log_action(new_quiz.teacher_id, new_quiz.created_by_name, new_quiz.quiz_type, "AI_QUIZ_GENERATE", f"Generated {len(questions)} items via Groq GPT-OSS-120B")
 
     return jsonify(new_quiz.to_dict()), 201
@@ -111,13 +113,16 @@ def generate_flashcards_ai():
     rate_err = _ai_rate_limited()
     if rate_err:
         return rate_err
+    try:
+        _require_within_max(data.get("cardCount", 5), MAX_AI_FLASHCARDS, label="flashcards")
+    except GroqAPIError as e:
+        return jsonify({"error": e.message, "code": e.code}), 400
     card_count = _clamp_count(data.get("cardCount", 5), fallback=5, maximum=MAX_AI_FLASHCARDS)
     cards = generate_flashcards_with_groq(text_content, count=card_count)
 
-    timestamp_ms = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
     created_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     new_deck = AIGeneratedContentModel(
-        content_id=f"deck-{timestamp_ms}",
+        content_id=generate_id("deck"),
         material_id=data.get("materialId"),
         generated_by=author_id,
         title=data.get("title", f"Flashcards: {text_content[:25]}..."),
@@ -151,10 +156,9 @@ def generate_summary_ai():
     text_content = data.get("textContent", "Lecture material summary.")
     summary_data = generate_summary_with_groq(text_content)
 
-    timestamp_ms = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
     created_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     new_sum = AIGeneratedContentModel(
-        content_id=f"sum-{timestamp_ms}",
+        content_id=generate_id("sum"),
         material_id=data.get("materialId"),
         generated_by=author_id,
         title=data.get("title", f"Summary: {text_content[:30]}..."),
@@ -190,10 +194,9 @@ def generate_reviewer_ai():
     text_content = data.get("textContent", "Study material reviewer.")
     reviewer = generate_reviewer_with_groq(text_content)
 
-    timestamp_ms = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
     created_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     new_rev = AIGeneratedContentModel(
-        content_id=f"rev-{timestamp_ms}",
+        content_id=generate_id("rev"),
         material_id=data.get("materialId"),
         generated_by=author_id,
         title=data.get("title", f"Reviewer: {text_content[:30]}..."),
@@ -234,12 +237,11 @@ def generate_ai_resource():
     if not text_content or not text_content.strip():
         return jsonify({"error": "No source text provided.", "code": "EMPTY_TEXT"}), 400
 
-    timestamp_ms = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
     created_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
     reset_generation_source()
     try:
-        payload = _build_generated_resource(mode, data, text_content, timestamp_ms, created_at)
+        payload = _build_generated_resource(mode, data, text_content, created_at)
     except GroqAPIError as e:
         # Structured generation errors (e.g. COUNT_REQUIRED when the prompt names no
         # count) become friendly 400s instead of a generic 500.
@@ -293,7 +295,7 @@ def generate_ai_resource():
             if not subject or subject.teacher_id != payload.get("createdById"):
                 return jsonify({"error": "You can only save quizzes to a subject assigned to you.", "code": "FORBIDDEN"}), 403
 
-    saved = _persist_generated_resource(mode, payload, data, timestamp_ms, created_at)
+    saved = _persist_generated_resource(mode, payload, data, created_at)
     if saved is None:
         return jsonify({"error": "Could not save the generated resource. The database write failed. Please try again.", "code": "SAVE_FAILED", "reason": db_session._LAST_COMMIT_ERROR}), 500
 
@@ -550,6 +552,83 @@ def export_ai_pdf():
         download_name=f"{slug[:60]}.pdf",
     )
 
+# Safe subset of HTML that reportlab's Paragraph supports. Any other
+# client-supplied tag is stripped when converting markdown to PDF HTML, so user
+# content can never inject <script>, <iframe>, <a>, <div>, <span>, etc. into a
+# generated document.
+_PDF_SAFE_TAGS = {"b", "i", "u", "br"}
+_PDF_TAG_RE = re.compile(r"(<[^>]+>)")
+
+
+def _pdf_clean_tag(tag):
+    """Return a reportlab-safe canonical tag, or None to drop it."""
+    inner = tag.strip()
+    if inner.startswith("<") and inner.endswith(">"):
+        inner = inner[1:-1].strip()
+    closing = inner.startswith("/")
+    if closing:
+        inner = inner[1:].strip()
+    if inner.endswith("/"):
+        inner = inner[:-1].strip()
+    parts = inner.split()
+    name = parts[0].lower() if parts else ""
+    if name not in _PDF_SAFE_TAGS:
+        return None
+    if closing:
+        return f"</{name}>" if name in ("b", "i", "u") else None
+    return "<br/>" if name == "br" else f"<{name}>"
+
+
+def _sanitize_text(text):
+    """Normalize unicode and strip non-printable characters (no HTML stripping)."""
+    s = str(text or "")
+    replacements = {
+        "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
+        "\u2013": "-", "\u2014": "-", "\u2022": "-", "\u00b7": "-",
+        "\u2026": "...", "\u00a0": " ", "\ufeff": "",
+    }
+    for k, v in replacements.items():
+        s = s.replace(k, v)
+    return "".join(ch for ch in s if ch in "\t\n\r" or 32 <= ord(ch) <= 126)
+
+
+def _md_to_pdf_html(text):
+    """Convert markdown-style formatting into reportlab-safe HTML tags.
+
+    Only <b>, <i>, <u> and <br/> survive. All other HTML-like markup is stripped
+    so it cannot be injected into the generated PDF.
+    """
+    s = _sanitize_text(text)
+    if not s:
+        return ""
+
+    tags = []
+
+    def _save_tag(m):
+        tags.append(m.group(0))
+        return f"\x00{len(tags) - 1}\x00"
+
+    s = _PDF_TAG_RE.sub(_save_tag, s)
+
+    # Escape literal markup characters first so stray <, >, & render as text.
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # **bold**
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    # *italic* (but not ** which was already handled)
+    s = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", s)
+    # __bold__
+    s = re.sub(r"__(.+?)__", r"<b>\1</b>", s)
+    # _italic_
+    s = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", s)
+
+    # Restore saved tags, keeping only the safe subset; drop everything else.
+    for idx, tag in enumerate(tags):
+        clean = _pdf_clean_tag(tag)
+        s = s.replace(f"\x00{idx}\x00", clean if clean is not None else "")
+    return s
+
+
 def convert_to_pdf():
     """Renders a simple {title, content, items[]} payload into a downloadable PDF.
 
@@ -574,53 +653,6 @@ def convert_to_pdf():
     except Exception:
         return jsonify({"error": "PDF library (reportlab) is not installed.", "code": "PDF_UNAVAILABLE"}), 500
 
-    def sanitize(text):
-        s = str(text or "")
-        replacements = {
-            "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
-            "\u2013": "-", "\u2014": "-", "\u2022": "-", "\u00b7": "-",
-            "\u2026": "...", "\u00a0": " ", "\ufeff": "",
-        }
-        for k, v in replacements.items():
-            s = s.replace(k, v)
-        return "".join(ch for ch in s if ch in "\t\n\r" or 32 <= ord(ch) <= 126)
-
-    # -- Markdown → reportlab HTML converter --
-    # Converts common markdown markers into the subset of HTML that
-    # reportlab's Paragraph element supports: <b>, <i>, <u>, <br/>.
-
-    _TAG_PLACEHOLDER_RE = re.compile(r"(<[^>]+>)")
-
-    def _md_to_pdf_html(text):
-        """Convert markdown-style formatting into reportlab-safe HTML tags."""
-        s = sanitize(text)
-        if not s:
-            return ""
-
-        # Preserve any HTML-like tags already present (e.g. from content).
-        tags = []
-        def _save_tag(m):
-            tags.append(m.group(0))
-            return f"\x00{len(tags) - 1}\x00"
-        s = _TAG_PLACEHOLDER_RE.sub(_save_tag, s)
-
-        # Escape literal markup characters first so stray <, >, & render as
-        # text instead of being interpreted (or escaping our own tags below).
-        s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-        # **bold**
-        s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
-        # *italic* (but not ** which was already handled)
-        s = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", s)
-        # __bold__
-        s = re.sub(r"__(.+?)__", r"<b>\1</b>", s)
-        # _italic_
-        s = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", s)
-
-        # Restore saved tags.
-        for idx, tag in enumerate(tags):
-            s = s.replace(f"\x00{idx}\x00", tag)
-        return s
 
     def _is_header(line):
         """Return (level, text) if line is a markdown header, else None."""
@@ -709,10 +741,10 @@ def convert_to_pdf():
             # Regular paragraph — split on double-spaces for line breaks
             # and render with inline formatting.
             story.append(Paragraph(_md_to_pdf_html(stripped), body))
-        story.append(HRFlowable(width="100%", thickness=1, color="#e5e7eb", spaceBefore=4, spaceAfter=8))
+            story.append(HRFlowable(width="100%", thickness=1, color="#e5e7eb", spaceBefore=4, spaceAfter=8))
 
     def esc(text):
-        return sanitize(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return _sanitize_text(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     if isinstance(items, list):
         for idx, item in enumerate(items, start=1):
@@ -743,7 +775,6 @@ def save_ai_resource():
         if mode not in ("quiz", "flashcards", "summary", "reviewer"):
             return jsonify({"error": "Missing or invalid mode.", "code": "INVALID_MODE"}), 400
 
-        timestamp_ms = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
         created_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
         # Quiz ownership rule (parity with /api/ai/generate): teacher quizzes may
@@ -773,7 +804,7 @@ def save_ai_resource():
                 if not subject or subject.teacher_id != auth_id:
                     return jsonify({"error": "You can only save quizzes to a subject assigned to you.", "code": "FORBIDDEN"}), 403
 
-        saved = _persist_generated_resource(mode, data, data, timestamp_ms, created_at)
+        saved = _persist_generated_resource(mode, data, data, created_at)
         if saved is None:
             return jsonify({"error": "Could not save the resource. The database write failed. Please try again.", "code": "SAVE_FAILED", "reason": db_session._LAST_COMMIT_ERROR}), 500
 
@@ -866,4 +897,3 @@ def ai_personalized_recommendations():
     result = generate_recommendations_with_groq(profile)
     _save_ai_generated_content(student_id, None, "Personalized Learning Recommendations", "recommendation", result)
     return jsonify(result), 200
-

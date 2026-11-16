@@ -1,8 +1,9 @@
 ﻿import React, { useState, useRef, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import { User, Mail, Shield, Building2, Calendar, Award, Lock, Edit3, Save, Camera, BookOpen, ShieldCheck, Trash2, Activity, PieChart } from "lucide-react";
+import { User, Mail, Shield, Building2, Calendar, Award, Lock, Edit3, Save, Camera, BookOpen, ShieldCheck, Trash2, Activity, PieChart, Eye, EyeOff } from "lucide-react";
 import { authFetch } from "../utils/authFetch";
+import { avatarUrl } from "../utils/avatar";
 import { checkPasswordStrength } from "../utils/password";
 import { PasswordRequirements } from "../components/PasswordRequirements";
 import type { User as UserType } from "../types";
@@ -98,6 +99,49 @@ const translations: Record<string, Record<string, string>> = {
   },
 };
 
+const PasswordToggleInput = ({
+  label,
+  value,
+  onChange,
+  showPassword,
+  setShowPassword,
+  type = "password",
+  placeholder = "••••••••",
+  requirements,
+}: {
+  label: string;
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  showPassword: boolean;
+  setShowPassword: (value: boolean) => void;
+  type?: string;
+  placeholder?: string;
+  requirements?: React.ReactNode;
+}) => (
+  <div className="space-y-1.5">
+    <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">{label}</label>
+    <div className="relative">
+      <input
+        type={showPassword ? "text" : type}
+        required
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        className="w-full pr-10 p-2.5 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
+      />
+      <button
+        type="button"
+        onClick={() => setShowPassword((v) => !v)}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+        aria-label={showPassword ? "Hide password" : "Show password"}
+      >
+        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+      </button>
+    </div>
+    {requirements}
+  </div>
+);
+
 function t(key: string, lang: string): string {
   return translations[lang]?.[key] || translations["en"][key] || key;
 }
@@ -108,7 +152,7 @@ export const ProfilePage: React.FC = () => {
 
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(currentUser?.name || "");
-  const [email, setEmail] = useState(currentUser?.email || "");
+  const [email, setEmail] = useState((currentUser?.email || "").trim());
 
   // Password state
   const [showPasswordChange, setShowPasswordChange] = useState(false);
@@ -116,6 +160,9 @@ export const ProfilePage: React.FC = () => {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordSubmitting, setPasswordSubmitting] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   // Avatar state
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -208,7 +255,7 @@ export const ProfilePage: React.FC = () => {
         showToast(data?.error || "Could not upload the image. Please try again.", "error");
         return;
       }
-      await updateUser(data);
+      refreshSession(data);
       showToast("Profile photo updated.");
     } catch {
       showToast("Could not reach the server. Please try again.", "error");
@@ -219,7 +266,7 @@ export const ProfilePage: React.FC = () => {
   };
 
   const handleRemovePhoto = async () => {
-    if (!currentUser?.avatar || removingAvatar) return;
+    if (!avatarUrl(currentUser?.avatar) || removingAvatar) return;
     setRemovingAvatar(true);
     try {
       const res = await authFetch(`/api/users/${currentUser!.id}`, {
@@ -232,7 +279,7 @@ export const ProfilePage: React.FC = () => {
         showToast(data?.error || "Could not remove the photo. Please try again.", "error");
         return;
       }
-      await updateUser(data);
+      refreshSession(data);
       showToast("Profile photo removed.");
     } catch {
       showToast("Could not reach the server. Please try again.", "error");
@@ -254,6 +301,18 @@ export const ProfilePage: React.FC = () => {
     performSave();
   };
 
+  const startEditing = () => {
+    setName(currentUser.name);
+    setEmail(currentUser.email.trim());
+    setIsEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setName(currentUser.name);
+    setEmail(currentUser.email.trim());
+    setIsEditing(false);
+  };
+
   const performSave = async () => {
     if (!name.trim()) {
       showToast("Full name is required.", "error");
@@ -263,14 +322,19 @@ export const ProfilePage: React.FC = () => {
       showToast("Please enter a valid email address.", "error");
       return;
     }
+    const nextEmail = email.trim();
     const updated: UserType = {
       ...currentUser,
       name: name.trim() || currentUser.name,
-      email: email.trim(),
+      email: nextEmail,
     };
-    await updateUser(updated);
-    setIsEditing(false);
-    showToast("Profile updated successfully!");
+    try {
+      await updateUser(updated);
+      setIsEditing(false);
+      showToast("Profile updated successfully!");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not update your profile. Please try again.", "error");
+    }
   };
 
   const handlePasswordChange = async (e: React.FormEvent) => {
@@ -302,8 +366,8 @@ export const ProfilePage: React.FC = () => {
       showToast("Password updated successfully!");
       // The backend bumped token_version when the password changed, so the old
       // JWT is invalid; swap in the freshly issued token to stay signed in.
-      if (data.token && data.user) {
-        refreshSession(data.user, data.token);
+      if (data.user) {
+        refreshSession(data.user);
       }
       setCurrentPassword("");
       setNewPassword("");
@@ -355,9 +419,9 @@ export const ProfilePage: React.FC = () => {
       <div className="relative overflow-hidden rounded-xl bg-[#5b51d8] p-6 sm:p-8 text-white shadow-md">
         <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start gap-5">
           <div className="relative shrink-0">
-            {currentUser.avatar ? (
+            {avatarUrl(currentUser.avatar) ? (
               <img
-                src={currentUser.avatar}
+                src={avatarUrl(currentUser.avatar)!}
                 alt={currentUser.name}
                 className="h-20 w-20 rounded-full object-cover ring-4 ring-white/30 shadow-inner"
               />
@@ -376,7 +440,7 @@ export const ProfilePage: React.FC = () => {
                 <Camera className="w-3.5 h-3.5" />
               </button>
             )}
-            {isEditing && currentUser.avatar && (
+            {isEditing && avatarUrl(currentUser.avatar) && (
               <button
                 onClick={handleRemovePhoto}
                 disabled={removingAvatar}
@@ -396,7 +460,7 @@ export const ProfilePage: React.FC = () => {
                 {badge.label}
               </span>
             </div>
-            <p className="text-indigo-100 text-sm truncate max-w-full">{currentUser.email}</p>
+            <p className="text-indigo-100 text-sm truncate max-w-full">{currentUser.email.trim()}</p>
             <div className="flex flex-wrap items-start sm:items-center justify-start sm:justify-start gap-4 sm:gap-5 text-xs text-indigo-200 pt-1">
               <span className="flex items-center gap-1 whitespace-nowrap">
                 <Building2 className="w-3.5 h-3.5 shrink-0" /> {currentUser.department || "General Department"}
@@ -414,7 +478,7 @@ export const ProfilePage: React.FC = () => {
 
           {!isEditing ? (
             <button
-              onClick={() => setIsEditing(true)}
+              onClick={startEditing}
               className="px-4 py-2 bg-white/20 hover:bg-white/30 backdrop-blur-md text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm border border-white/20"
             >
               <Edit3 className="w-3.5 h-3.5" /> Edit Profile
@@ -449,6 +513,7 @@ export const ProfilePage: React.FC = () => {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  autoComplete="name"
                   required
                   className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
                 />
@@ -475,6 +540,7 @@ export const ProfilePage: React.FC = () => {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
                   required
                   className="w-full px-3.5 py-2.5 rounded-xl border border-border bg-background text-foreground text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"
                 />
@@ -489,7 +555,7 @@ export const ProfilePage: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsEditing(false)}
+                  onClick={cancelEditing}
                   className="px-4 py-2.5 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
                 >
                   {t("Cancel", language)}
@@ -507,7 +573,7 @@ export const ProfilePage: React.FC = () => {
                 <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">{t("Email Address", language)}</p>
                 <p className="text-sm font-bold text-foreground mt-1 flex items-center gap-1.5">
                   <Mail className="w-3.5 h-3.5 text-muted-foreground" />
-                  {currentUser.email}
+{currentUser.email.trim()}
                 </p>
               </div>
 
@@ -556,39 +622,34 @@ export const ProfilePage: React.FC = () => {
           ) : (
             <form onSubmit={handlePasswordChange} className="space-y-4 p-4 rounded-xl bg-muted/30 border border-border">
               <p className="text-xs font-bold text-foreground">{t("Set New Password", language)}</p>
-              <div>
-                <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">{t("Current Password", language)}</label>
-                <input
-                  type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  placeholder="Enter your current password"
-                  className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
-                />
-              </div>
+              <PasswordToggleInput
+                label={t("Current Password", language)}
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Enter your current password"
+                showPassword={showCurrentPassword}
+                setShowPassword={setShowCurrentPassword}
+              />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">{t("New Password", language)}</label>
-                  <input
-                    type="password"
+                  <PasswordToggleInput
+                    label={t("New Password", language)}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    minLength={8}
-                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
-                    required
-                    className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
+                    placeholder="Enter your new password"
+                    showPassword={showNewPassword}
+                    setShowPassword={setShowNewPassword}
+                    requirements={<PasswordRequirements password={newPassword} />}
                   />
-                  <PasswordRequirements password={newPassword} />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-muted-foreground uppercase mb-1">{t("Confirm Password", language)}</label>
-                  <input
-                    type="password"
+                  <PasswordToggleInput
+                    label={t("Confirm Password", language)}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
-                    required
-                    className="w-full px-3 py-2 rounded-xl border border-border bg-background text-foreground text-xs font-medium"
+                    placeholder="Confirm your new password"
+                    showPassword={showConfirmPassword}
+                    setShowPassword={setShowConfirmPassword}
                   />
                 </div>
               </div>
@@ -683,4 +744,3 @@ export const ProfilePage: React.FC = () => {
   );
 };
 export default ProfilePage;
-

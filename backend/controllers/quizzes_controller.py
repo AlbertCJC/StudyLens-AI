@@ -8,7 +8,8 @@ from flask import jsonify, request, send_file
 from db.session import _commit_or_warn
 from extensions import db
 from lib.auth import require_auth, require_roles
-from lib.quiz import _answer_index
+from lib.id import generate_id
+from lib.quiz import _answer_index, normalize_quiz_questions
 from lib.validation import _clamp_attempts, _reveal_answers
 from models.quiz import (
     QuizAttemptModel,
@@ -29,6 +30,8 @@ def get_quizzes():
     current_user = getattr(request, "current_user", None) or {}
     requester_id = current_user.get("id") or ""
     requester_role = current_user.get("role") or ""
+    limit = request.args.get("limit", type=int)
+    offset = request.args.get("offset", type=int)
     # Privacy Rule: Personal practice quizzes (quizType "student") are strictly
     # private to their creator. Teacher/course quizzes are distributed to enrolled
     # class rosters (per the spec): a student sees them only when enrolled in the
@@ -58,11 +61,21 @@ def get_quizzes():
     else:
         qs = [q for q in qs if q.quiz_type != "student" or q.teacher_id == requester_id]
 
+    total = len(qs)
     used = {}
     last_score = {}
     best_score = {}
     last_raw = {}
     last_max = {}
+    if limit is None and offset is None:
+        # Legacy array response for clients that have not been updated.
+        return jsonify([
+            {**_public_quiz_payload(q, requester_role), **({"attemptsUsed": used.get(q.quiz_id, 0), "lastScore": last_score.get(q.quiz_id), "bestScore": best_score.get(q.quiz_id), "lastScoreRaw": last_raw.get(q.quiz_id), "lastMaxScore": last_max.get(q.quiz_id)} if requester_role == "student" else {})}
+            for q in qs
+        ])
+    limit = max(1, min(200, limit or 100))
+    offset = max(0, offset or 0)
+    page = qs[offset:offset + limit]
     if requester_role == "student" and requester_id:
         for a in QuizAttemptModel.query.filter_by(student_id=requester_id).order_by(QuizAttemptModel.submitted_at.desc()).all():
             used[a.quiz_id] = used.get(a.quiz_id, 0) + 1
@@ -70,10 +83,16 @@ def get_quizzes():
             best_score[a.quiz_id] = max(best_score.get(a.quiz_id, 0.0), a.percentage)
             last_raw.setdefault(a.quiz_id, a.score)
             last_max.setdefault(a.quiz_id, a.max_score)
-    return jsonify([
-        {**_public_quiz_payload(q, requester_role), **({"attemptsUsed": used.get(q.quiz_id, 0), "lastScore": last_score.get(q.quiz_id), "bestScore": best_score.get(q.quiz_id), "lastScoreRaw": last_raw.get(q.quiz_id), "lastMaxScore": last_max.get(q.quiz_id)} if requester_role == "student" else {})}
-        for q in qs
-    ])
+    return jsonify({
+        "items": [
+            {**_public_quiz_payload(q, requester_role), **({"attemptsUsed": used.get(q.quiz_id, 0), "lastScore": last_score.get(q.quiz_id), "bestScore": best_score.get(q.quiz_id), "lastScoreRaw": last_raw.get(q.quiz_id), "lastMaxScore": last_max.get(q.quiz_id)} if requester_role == "student" else {})}
+            for q in page
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "hasMore": (offset + len(page)) < total,
+    })
 
 def download_quiz_pdf(quiz_id):
     """Download a quiz as a formatted PDF (question sheet + answer key).
@@ -151,6 +170,7 @@ def create_quiz():
     questions = data.get("questions") or []
     if not isinstance(questions, list):
         return jsonify({"error": "questions must be a list.", "code": "BAD_REQUEST"}), 400
+    questions = normalize_quiz_questions(questions)
 
     # Ownership rule: teacher quizzes may only target a subject the creator manages
     # (or stay subjectless). Admins may target any subject. Students cannot create
@@ -162,7 +182,7 @@ def create_quiz():
             return jsonify({"error": "You can only create quizzes in a subject assigned to you.", "code": "FORBIDDEN"}), 403
 
     new_quiz = QuizModel(
-        quiz_id=f"quiz-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+        quiz_id=generate_id("quiz"),
         teacher_id=created_by_id,
         title=title,
         description=data.get("description"),
@@ -261,6 +281,7 @@ def update_quiz(quiz_id):
         qs = data.get("questions") or []
         if not isinstance(qs, list):
             return jsonify({"error": "questions must be a list.", "code": "BAD_REQUEST"}), 400
+        qs = normalize_quiz_questions(qs)
         quiz.questions_json = json.dumps(qs)
         _replace_quiz_questions(quiz.quiz_id, qs)
     if "isPublished" in data and data.get("isPublished") != quiz.is_published and role not in ("teacher", "admin"):
@@ -387,6 +408,7 @@ def submit_quiz_attempt(quiz_id):
             questions = _merge_questions_json(questions, quiz.questions_json)
     except Exception:
         questions = []
+    questions = normalize_quiz_questions(questions)
 
     data = request.json or {}
     payload_answers = data.get("answers") or data.get("userAnswers") or []
@@ -494,7 +516,7 @@ def submit_quiz_attempt(quiz_id):
 
     now_str = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     attempt = QuizAttemptModel(
-        attempt_id=f"att-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+        attempt_id=generate_id("att"),
         quiz_id=quiz_id,
         student_id=student_id,
         attempt_status="Completed",
@@ -587,4 +609,3 @@ def submit_quiz_attempt(quiz_id):
                 fb.pop("options", None)
 
     return jsonify({"attempt": response_attempt}), 200
-

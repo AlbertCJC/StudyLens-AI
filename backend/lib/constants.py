@@ -1,6 +1,8 @@
-"""Application-wide constants that are not environment dependent."""
+"""Application-wide constants and runtime policy helpers."""
 
 import os
+
+from config import IS_PRODUCTION, OTP_DEV_REVEAL
 
 # System settings (persisted in the system_settings table).
 DEFAULT_SYSTEM_SETTINGS = {
@@ -19,13 +21,30 @@ RESET_OTP_MAX_ATTEMPTS = 5
 RESET_OTP_EXPIRY_MINUTES = 10
 EMAIL_VERIFY_EXPIRY_MINUTES = 10
 EMAIL_VERIFY_MAX_ATTEMPTS = 5
-OTP_DEV_REVEAL = os.getenv("OTP_DEV_REVEAL", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def otp_reveal_enabled():
+    """True only in an explicit development runtime with the flag enabled.
+
+    The flag alone is not enough: a copied .env must never disclose OTPs in a
+    production deployment.
+    """
+    if not OTP_DEV_REVEAL or IS_PRODUCTION:
+        return False
+    if os.getenv("FLASK_ENV", "development").strip().lower() == "development":
+        return True
+    try:
+        from flask import current_app
+
+        return bool(current_app.debug)
+    except Exception:
+        return False
 
 # --- AI generation caps ---
 # Cap counts so single requests stay within the model's output-token budget.
 # Large counts are batch-chunked across multiple AI calls (see groq_service.MAX_PER_CHUNK).
-MAX_AI_QUESTIONS = 100
-MAX_AI_FLASHCARDS = 100
+MAX_AI_QUESTIONS = 50
+MAX_AI_FLASHCARDS = 50
 
 # Sliding-window rate limit for AI generation calls (per caller, per minute).
 MAX_AI_CALLS_PER_MINUTE = 15

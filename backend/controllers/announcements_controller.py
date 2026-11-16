@@ -4,9 +4,12 @@ import datetime
 
 from flask import jsonify, request
 
+from sqlalchemy.orm import selectinload
+
 from db.session import _commit_or_warn
 from extensions import db
-from models import AnnouncementModel, StudentSubjectModel, SubjectModel
+from lib.id import generate_id
+from models import AnnouncementModel, NotificationModel, StudentSubjectModel, SubjectModel
 from services.log_service import log_action
 
 
@@ -14,7 +17,13 @@ def list_announcements():
     current_user = getattr(request, "current_user", None) or {}
     requester_id = current_user.get("id") or ""
     requester_role = current_user.get("role") or ""
-    anns = AnnouncementModel.query.order_by(AnnouncementModel.created_at.desc()).all()
+    limit = request.args.get("limit", type=int)
+    offset = request.args.get("offset", type=int)
+    anns = (
+        AnnouncementModel.query.options(selectinload(AnnouncementModel.subject))
+        .order_by(AnnouncementModel.created_at.desc())
+        .all()
+    )
     # Strict visibility policy: fresh accounts see nothing until data exists for
     # them. Students receive ONLY subject-scoped announcements for subjects they
     # are enrolled in; teachers see ONLY their own posts; admins see everything.
@@ -50,7 +59,19 @@ def list_announcements():
             a for a in anns
             if (a.teacher_id or "").startswith("usr-admin")
         ]
-    return jsonify([a.to_dict() for a in anns])
+    total = len(anns)
+    if limit is None and offset is None:
+        return jsonify([a.to_dict() for a in anns])
+    limit = max(1, min(200, limit or 100))
+    offset = max(0, offset or 0)
+    page = anns[offset:offset + limit]
+    return jsonify({
+        "items": [a.to_dict() for a in page],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "hasMore": (offset + len(page)) < total,
+    })
 
 
 def post_announcement():
@@ -86,7 +107,7 @@ def post_announcement():
     # placeholders like "Just now") are never persisted.
     server_now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     new_ann = AnnouncementModel(
-        announcement_id=f"ann-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+        announcement_id=generate_id("ann"),
         teacher_id=author_id,
         subject_id=subject_id,
         title=data["title"],
@@ -110,12 +131,12 @@ def post_announcement():
 
 
 def update_announcement(announcement_id):
-    """Edit an existing announcement (author only).
+    """Edit an existing announcement (author, or an admin for system notices).
 
-    Editable: title, message/content, priority. Administrators authoring a
-    notice may also change targetAudience. The subject cannot be changed: it
-    defines who received the notice, so edits never silently re-target a
-    different class.
+    Editable: title, message/content, priority. Administrators may also retarget
+    system-wide announcements. The subject of a course announcement cannot be
+    changed: it defines who received the notice, so edits never silently
+    re-target a different class.
     """
     ann = db.session.get(AnnouncementModel, announcement_id)
     if not ann:
@@ -123,10 +144,9 @@ def update_announcement(announcement_id):
     current_user = getattr(request, "current_user", None) or {}
     role = current_user.get("role") or ""
     is_admin = role == "admin"
-    if is_admin:
-        return jsonify({"error": "Administrators have read-only access to announcements and cannot edit them.", "code": "FORBIDDEN"}), 403
     is_author = bool(ann.teacher_id) and ann.teacher_id == current_user.get("id")
-    if not is_author:
+    is_admin_system = is_admin and not ann.subject_id
+    if not (is_author or is_admin_system):
         return jsonify({"error": "You can only edit announcements you posted.", "code": "FORBIDDEN"}), 403
 
     data = request.json or {}
@@ -141,10 +161,9 @@ def update_announcement(announcement_id):
     if data.get("priority") in ("high", "medium", "low"):
         ann.priority = data["priority"]
         changed = True
-    if is_admin and "targetAudience" in data and data["targetAudience"]:
+    if is_admin_system and data.get("targetAudience") in ("all", "students", "teachers"):
         ann.target_audience = data["targetAudience"]
         changed = True
-
     if not changed:
         return jsonify({"error": "Nothing to update.", "code": "NO_CHANGES"}), 400
 
@@ -160,12 +179,18 @@ def delete_announcement(announcement_id):
     if not ann:
         return jsonify({"error": "Announcement not found.", "code": "NOT_FOUND"}), 404
     current_user = getattr(request, "current_user", None) or {}
-    if current_user.get("role") == "admin":
-        return jsonify({"error": "Administrators have read-only access to announcements and cannot delete them.", "code": "FORBIDDEN"}), 403
+    role = current_user.get("role") or ""
     is_author = bool(ann.teacher_id) and ann.teacher_id == current_user.get("id")
-    if not is_author:
+    is_admin_system = role == "admin" and not ann.subject_id
+    if not (is_author or is_admin_system):
         return jsonify({"error": "You can only delete announcements you posted.", "code": "FORBIDDEN"}), 403
     db.session.delete(ann)
+    # Cascade-delete any notifications tied to this announcement so the bell
+    # does not keep surfacing a removed announcement. target is set to
+    # "announcement:<id>" whenever an announcement is fan-out to users.
+    NotificationModel.query.filter(
+        NotificationModel.target == f"announcement:{announcement_id}"
+    ).delete(synchronize_session=False)
     _commit_or_warn("announcement deletion")
     log_action(current_user.get("id") or "unknown", current_user.get("name") or "Unknown",
                current_user.get("role") or "user", "ANNOUNCEMENT_DELETED",

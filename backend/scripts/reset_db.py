@@ -1,15 +1,15 @@
 """
 StudyLens database reset / repair tool.
 
-Rebuilds the database schema to match the current SQLAlchemy models and
-re-seeds the UC CCS capstone demo data.
+Rebuilds the database schema to match the current SQLAlchemy models. Demo data
+is only re-seeded when SEED_DEMO_DATA=true and the demo passwords are set.
 
 DANGER: this DROPS all tables in the configured database (MySQL or SQLite)
 and replaces them with a fresh 14-table schema. It is intended for local
 development/demo databases only.
 
 Usage:
-    py scripts/reset_db.py --yes          # drop, create, seed
+    py scripts/reset_db.py --yes            # drop + create (seed if enabled)
     py scripts/reset_db.py --yes --no-seed  # drop + create only
 """
 
@@ -66,8 +66,13 @@ def main() -> int:
         db.create_all()
 
         if "--no-seed" not in flags:
-            print("[reset] Seeding capstone demo data...")
-            app_module.seed_database_if_empty()
+            print("[reset] Demo seeding is opt-in; attempting explicit seed...")
+            from db.seed import seed_database_if_empty
+
+            result = seed_database_if_empty()
+            if result.get("reason"):
+                print(f"[reset] Demo seed skipped: {result['reason']}")
+                print("[reset] Set SEED_DEMO_DATA=true and both demo passwords to seed.")
 
     print("[reset] Done. Restart the Flask backend with: py app.py")
     return 0

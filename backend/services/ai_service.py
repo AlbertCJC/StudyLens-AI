@@ -5,12 +5,13 @@ import json
 
 from db.session import _commit_or_warn
 from extensions import db
+from lib.id import generate_id
 from models import AIGeneratedContentModel
 
 def _save_ai_generated_content(generated_by, material_id, title, content_type, result):
     """Stores explain/recommendation outputs in the ai_generated_content table (best-effort)."""
     entry = AIGeneratedContentModel(
-        content_id=f"ai-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+        content_id=generate_id("ai"),
         material_id=material_id,
         generated_by=generated_by,
         title=title,

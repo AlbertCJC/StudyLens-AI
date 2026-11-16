@@ -11,8 +11,22 @@ from models import NotificationModel
 def get_notifications():
     current_user = getattr(request, "current_user", None) or {}
     user_id = current_user.get("id") or ""
+    limit = request.args.get("limit", type=int)
+    offset = request.args.get("offset", type=int)
     notifs = NotificationModel.query.filter_by(user_id=user_id).order_by(NotificationModel.created_at.desc()).all()
-    return jsonify([n.to_dict() for n in notifs])
+    total = len(notifs)
+    if limit is None and offset is None:
+        return jsonify([n.to_dict() for n in notifs])
+    limit = max(1, min(200, limit or 100))
+    offset = max(0, offset or 0)
+    page = notifs[offset:offset + limit]
+    return jsonify({
+        "items": [n.to_dict() for n in page],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "hasMore": (offset + len(page)) < total,
+    })
 
 
 def mark_notification_read(notification_id):

@@ -111,7 +111,6 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
   const [detailCard, setDetailCard] = useState<'users' | 'subjects' | 'quizzes' | 'logs' | null>(null);
   const [selectedLog, setSelectedLog] = useState<ActivityLog | null>(null);
 
-  // Users filters
   const [userSearch, setUserSearch] = useState('');
   const [userRoleFilter, setUserRoleFilter] = useState('all');
   const [userStatusFilter, setUserStatusFilter] = useState('all');

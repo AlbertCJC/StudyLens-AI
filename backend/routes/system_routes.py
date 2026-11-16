@@ -5,12 +5,24 @@ from flask import Blueprint
 from controllers.system_controller import (
     get_system_info,
     get_system_settings,
+    health,
     save_system_settings,
     system_backup,
 )
 from lib.auth import require_auth, require_roles
 
 bp = Blueprint("system", __name__)
+
+
+@bp.route("/api/health", methods=["GET"])
+def health_route():
+    return health()
+
+
+@bp.route("/api/ready", methods=["GET"])
+def ready_route():
+    """Readiness probe: 200 when the database is reachable, 503 otherwise."""
+    return health()
 
 
 @bp.route("/api/system/info", methods=["GET"])

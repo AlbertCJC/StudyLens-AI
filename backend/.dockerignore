@@ -1,0 +1,23 @@
+# StudyLens AI backend .dockerignore
+__pycache__/
+*.py[c]
+*.pyo
+*.pyd
+.env
+uploads/
+*.db
+*.sqlite
+*.sqlite3
+.coverage
+.pytest_cache/
+.tox/
+.venv/
+venv/
+.env.example
+.git/
+.gitignore
+Dockerfile
+docker-compose.yml
+.dockerignore
+README.md
+tests/

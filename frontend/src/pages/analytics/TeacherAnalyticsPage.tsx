@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Users, GraduationCap, FileCheck, AlertTriangle, TrendingUp, RefreshCw, BarChart2, ChevronRight } from "lucide-react";
+import { GraduationCap, AlertTriangle, RefreshCw, BarChart2, ChevronRight } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useAuth } from "../../context/AuthContext";
-import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
 import { CardDetailModal } from "../../components/CardDetailModal";
 
@@ -43,7 +42,6 @@ interface TeacherAnalytics {
 export const TeacherAnalyticsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const { showToast } = useToast();
   const [analytics, setAnalytics] = useState<TeacherAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,9 +67,10 @@ export const TeacherAnalyticsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [currentUser?.id]);
+  }, [currentUser]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAnalytics();
   }, [fetchAnalytics]);
 

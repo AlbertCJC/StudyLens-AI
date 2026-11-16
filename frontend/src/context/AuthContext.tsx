@@ -1,10 +1,10 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import type { User, UserRole } from "../types";
-import { authFetch, setStoredToken } from "../utils/authFetch";
+import { authFetch, setCsrfToken } from "../utils/authFetch";
+import { avatarUrl } from "../utils/avatar";
 
 interface AuthContextType {
   currentUser: User | null;
-  token: string | null;
   pendingEmailVerification: { userId: string; email: string; devCode?: string } | null;
   pending2FA: { userId: string; email: string; expiresInMinutes?: number; devCode?: string } | null;
   login: (emailOrUser: string | Partial<User>, role?: UserRole, password?: string) => Promise<void>;
@@ -16,7 +16,7 @@ interface AuthContextType {
   resend2FA: (userId: string) => Promise<void>;
   clear2FA: () => void;
   updateUser: (updated: User) => Promise<void>;
-  refreshSession: (user: User, userToken: string) => void;
+  refreshSession: (user: User) => void;
   logout: () => void;
 }
 
@@ -31,10 +31,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const sanitizeAvatar = (u: User | null): User | null => {
     if (!u) return u;
     const raw = (u as { avatar?: unknown }).avatar;
-    if (!raw || ["none", "null", "undefined"].includes(String(raw).trim().toLowerCase())) {
-      return { ...u, avatar: undefined } as User;
-    }
-    return u;
+    const resolved = typeof raw === "string" ? avatarUrl(raw) : null;
+    return { ...u, avatar: resolved ?? undefined } as User;
   };
 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -44,9 +42,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       return null;
     }
-  });
-  const [token, setToken] = useState<string | null>(() => {
-    return localStorage.getItem("studylens_token") || null;
   });
   const [pendingEmailVerification, setPendingEmailVerification] = useState<{ userId: string; email: string; devCode?: string } | null>(() => {
     try {
@@ -65,12 +60,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   });
 
-  const saveUserSession = (user: User, userToken?: string) => {
+  const saveUserSession = (user: User) => {
     const cleanUser = sanitizeAvatar(user);
     setCurrentUser(cleanUser);
-    const tok = userToken || null;
-    setToken(tok);
-    setStoredToken(tok);
     try {
       localStorage.setItem("studylens_user", JSON.stringify(cleanUser));
     } catch (e) {
@@ -128,12 +120,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const res = await fetch("/api/auth/login", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: emailStr, role: userRole, user: customUser, password: userPassword }),
       });
 
       if (res.ok) {
         const data = await res.json();
+        if (data.csrfToken) {
+          setCsrfToken(data.csrfToken);
+        }
         if (data.requiresEmailVerification) {
           setPendingVerification({
             userId: data.userId,
@@ -154,7 +150,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         setPendingVerification(null);
         setPending2FA(null);
-        saveUserSession(data.user, data.token);
+        saveUserSession(data.user);
       } else {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || "Login failed. Please check your credentials.");
@@ -169,6 +165,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await fetch("/api/auth/register", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, role, department, password }),
       });
@@ -183,7 +180,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
         setPendingVerification(null);
-        saveUserSession(data.user, data.token);
+        saveUserSession(data.user);
       } else {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || "Registration failed.");
@@ -198,6 +195,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await fetch("/api/auth/verify-email", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, code }),
       });
@@ -213,7 +211,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
         return;
       }
-      saveUserSession(data.user, data.token);
+      if (data.csrfToken) {
+        setCsrfToken(data.csrfToken);
+      }
+      saveUserSession(data.user);
       setPendingVerification(null);
     } catch (err) {
       console.warn("Email verification notice:", err);
@@ -223,10 +224,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const resendEmailCode = async (userId: string) => {
     const res = await fetch("/api/auth/resend-email-code", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId }),
-    });
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(data.error || "Could not resend the verification code.");
@@ -242,10 +244,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const verify2FA = async (userId: string, code: string) => {
     const res = await fetch("/api/auth/verify-2fa", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, code }),
-    });
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, code }),
+      });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       // Terminal states force a fresh sign-in; invalid codes keep the panel open.
@@ -254,17 +257,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       throw new Error(data.error || "Verification failed. Please try again.");
     }
+    if (data.csrfToken) {
+      setCsrfToken(data.csrfToken);
+    }
     setPending2FA(null);
     setPendingVerification(null);
-    saveUserSession(data.user, data.token);
+    saveUserSession(data.user);
   };
 
   const resend2FA = async (userId: string) => {
     const res = await fetch("/api/auth/resend-2fa", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId }),
-    });
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (["NO_PENDING_2FA", "NOT_FOUND", "2FA_NOT_REQUIRED", "ACCOUNT_LOCKED"].includes(data.code)) {
@@ -282,34 +289,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateUser = async (updated: User) => {
-    saveUserSession(updated, token || undefined);
-    try {
-      await authFetch(`/api/users/${updated.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updated),
-      });
-    } catch (err) {
-      console.error("Failed to sync updated user with backend:", err);
+    const res = await authFetch(`/api/users/${updated.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      // Send only editable fields; never echo role/status/tokenVersion.
+      body: JSON.stringify({ name: updated.name, email: updated.email }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || "Could not update your profile. Please try again.");
     }
+    saveUserSession(data as User);
   };
 
   // Replaces the stored session after a server-side security event (e.g. a
   // password change bumped token_version, so the old JWT is now invalid and a
   // fresh one was issued in the response).
-  const refreshSession = (user: User, userToken: string) => {
-    saveUserSession(user, userToken);
+  const refreshSession = (user: User) => {
+    saveUserSession(user);
   };
 
   const logout = () => {
     setCurrentUser(null);
-    setToken(null);
-    setStoredToken(null);
     setPendingVerification(null);
     setPending2FA(null);
+    setCsrfToken(null);
     try {
       localStorage.removeItem("studylens_user");
-
+      localStorage.removeItem("studylens_remembered_email");
     } catch (e) {
       console.error("Failed to clear localStorage session", e);
     }
@@ -318,10 +325,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const onSessionExpired = () => {
       setCurrentUser(null);
-      setToken(null);
-      setStoredToken(null);
       setPendingVerification(null);
       setPending2FA(null);
+      setCsrfToken(null);
       try {
         localStorage.removeItem("studylens_user");
       } catch (e) {
@@ -334,7 +340,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider
-      value={{ currentUser, token, pendingEmailVerification, pending2FA, login, register, verifyEmail, resendEmailCode, clearEmailVerification, verify2FA, resend2FA, clear2FA, updateUser, refreshSession, logout }}
+      value={{ currentUser, pendingEmailVerification, pending2FA, login, register, verifyEmail, resendEmailCode, clearEmailVerification, verify2FA, resend2FA, clear2FA, updateUser, refreshSession, logout }}
     >
       {children}
     </AuthContext.Provider>

@@ -50,3 +50,76 @@ def _answer_index(value, options):
         if str(opt).strip().lower() == text.lower():
             return i
     return None
+
+
+def _true_false_index(value):
+    """Normalizes a true/false answer to 0 (True) or 1 (False), or None.
+
+    Accepts booleans, 0/1, "0"/"1", "A"/"B", and true/false-style words so
+    legacy rows and every producer encoding behave consistently.
+    """
+    if isinstance(value, bool):
+        return 0 if value else 1
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if int(value) == 0:
+            return 0
+        if int(value) == 1:
+            return 1
+        return None
+    if isinstance(value, (list, tuple)) and value:
+        return _true_false_index(value[0])
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("0", "true", "t", "yes", "a", "correct"):
+            return 0
+        if text in ("1", "false", "f", "no", "b", "incorrect"):
+            return 1
+    return None
+
+
+def normalize_question_shape(q):
+    """Returns a canonical copy of a quiz question with a self-consistent answer.
+
+    Canonical shapes:
+      - true_false: ``options=["True", "False"]`` and ``correctAnswer`` 0/1
+      - identification: ``options=[]`` and a string ``correctAnswer``
+      - multiple_choice: real options and a valid 0-based index (or an index list
+        for multi-answer questions)
+
+    This keeps read paths, create/update paths, and grading aligned without
+    requiring a data migration for legacy quizzes.
+    """
+    if not isinstance(q, dict):
+        return q
+    out = dict(q)
+    qtype = _canonical_question_type(out)
+    out["type"] = qtype
+
+    if qtype == "true_false":
+        out["options"] = ["True", "False"]
+        idx = _true_false_index(out.get("correctAnswer"))
+        out["correctAnswer"] = 0 if idx is None else idx
+        return out
+
+    if qtype == "identification":
+        out["options"] = []
+        correct = out.get("correctAnswer")
+        out["correctAnswer"] = "" if correct is None else str(correct)
+        return out
+
+    options = out.get("options")
+    options = [str(o) for o in options] if isinstance(options, list) else []
+    out["options"] = options
+    correct = out.get("correctAnswer")
+    if isinstance(correct, list):
+        resolved = [_answer_index(value, options) for value in correct]
+        out["correctAnswer"] = [idx for idx in resolved if idx is not None]
+    else:
+        idx = _answer_index(correct, options)
+        out["correctAnswer"] = 0 if idx is None else idx
+    return out
+
+
+def normalize_quiz_questions(questions):
+    """Normalizes every dict question in a list; ignores non-dict entries."""
+    return [normalize_question_shape(q) for q in (questions or []) if isinstance(q, dict)]

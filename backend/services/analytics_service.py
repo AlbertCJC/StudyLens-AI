@@ -1,5 +1,6 @@
 """Student analytics and learning-profile aggregation."""
 
+import datetime
 import json
 
 from extensions import db
@@ -149,17 +150,58 @@ def _latest_attempt_percentages(attempts):
 
     Grading policy: when a quiz is retaken, the recorded score is the latest
     attempt only — earlier attempts never dilute the student's average.
-    Accepts model instances or to_dict() mappings.
+    Accepts model instances or to_dict() mappings (camelCase keys).
     """
-    def _get(item, name):
-        return item.get(name) if isinstance(item, dict) else getattr(item, name)
+    def _get(item, *names):
+        for name in names:
+            if isinstance(item, dict):
+                if name in item:
+                    return item[name]
+            else:
+                val = getattr(item, name, None)
+                if val is not None:
+                    return val
+        return None
 
     latest = {}
-    for a in sorted(attempts, key=lambda x: (_get(x, "submitted_at") or ""), reverse=True):
-        qid = _get(a, "quiz_id")
+    for a in sorted(attempts, key=lambda x: (_get(x, "submitted_at", "submittedAt") or ""), reverse=True):
+        qid = _get(a, "quiz_id", "quizId")
         if qid not in latest:
             latest[qid] = float(_get(a, "percentage") or 0)
     return list(latest.values())
+
+
+def _latest_attempts_by_student_quiz(attempts):
+    """Return the most recent attempt for every (student_id, quiz_id) pair.
+
+    Grading policy: when a quiz is retaken, only the latest attempt counts
+    toward averages, pass rates, and at-risk status. Earlier attempts are
+    activity history and must not dilute the current score.
+    Accepts model instances or to_dict() mappings (camelCase keys).
+    """
+    def _get(item, *names):
+        for name in names:
+            if isinstance(item, dict):
+                if name in item:
+                    return item[name]
+            else:
+                val = getattr(item, name, None)
+                if val is not None:
+                    return val
+        return None
+
+    def _submitted_at(item):
+        val = _get(item, "submitted_at", "submittedAt")
+        if isinstance(val, datetime.datetime):
+            return val.isoformat()
+        return val or ""
+
+    latest = {}
+    for a in sorted(attempts, key=_submitted_at, reverse=True):
+        key = (_get(a, "student_id", "studentId"), _get(a, "quiz_id", "quizId"))
+        if key not in latest:
+            latest[key] = a
+    return latest
 
 
 def _accuracy_before_latest_tagged_attempt(attempts, topic):

@@ -15,13 +15,14 @@ from groq_service import (
 )
 from lib.ai_content import _trim_preview
 from lib.constants import MAX_AI_FLASHCARDS, MAX_AI_QUESTIONS
+from lib.id import generate_id
 from lib.validation import _clamp_attempts, _clamp_count, _require_within_max, _reveal_answers
 from models.material import AIGeneratedContentModel, MaterialModel
 from models.quiz import QuizModel, _replace_quiz_questions
 from models.subject import SubjectModel
 from services.material_service import _render_ai_resource_text
 
-def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at):
+def _build_generated_resource(mode, data, text_content, created_at):
     """Generates AI content and returns it as a dict (shaped like the model to_dict).
 
     Used both for preview (save=False) and as the payload for /api/ai/save.
@@ -35,15 +36,30 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
     instructions = data.get("instructions") or ""
 
     if mode == "quiz":
-        _require_within_max(data.get("quizCount") or data.get("numQuestions") or 5, MAX_AI_QUESTIONS)
-        num_questions = _clamp_count(data.get("quizCount") or data.get("numQuestions") or 5, fallback=5, maximum=MAX_AI_QUESTIONS)
-        # The quiz count box was removed from the UI: the prompt is the single source of
-        # truth for how many questions to make. Callers that still send an explicit count
-        # (legacy /api/quizzes/generate) keep the old default behavior.
-        explicit_count = "quizCount" in data or "numQuestions" in data
+        quiz_counts = data.get("quizCounts")
+        if not isinstance(quiz_counts, dict):
+            quiz_counts = None
+        quiz_total = 0
+        if quiz_counts:
+            for raw_count in quiz_counts.values():
+                try:
+                    quiz_total += max(0, int(raw_count))
+                except (TypeError, ValueError):
+                    continue
+        if quiz_counts and quiz_total > 0:
+            _require_within_max(quiz_total, MAX_AI_QUESTIONS)
+            num_questions = _clamp_count(quiz_total, fallback=5, maximum=MAX_AI_QUESTIONS)
+            explicit_count = True
+        else:
+            quiz_counts = None
+            _require_within_max(data.get("quizCount") or data.get("numQuestions") or 5, MAX_AI_QUESTIONS)
+            num_questions = _clamp_count(data.get("quizCount") or data.get("numQuestions") or 5, fallback=5, maximum=MAX_AI_QUESTIONS)
+            # The prompt is the single source of truth unless the UI sends explicit
+            # per-format counts or a legacy total count.
+            explicit_count = "quizCount" in data or "numQuestions" in data
         questions = generate_quiz_with_groq(
             text_content, num_questions=num_questions, difficulty=difficulty, instructions=instructions,
-            require_count=not explicit_count,
+            require_count=not explicit_count, quiz_counts=quiz_counts,
         )
         ai_title = generate_title_with_groq("quiz", questions)
         quiz_title = data.get("title") or ai_title or f"AI Quiz: {_trim_preview(text_content)}..."
@@ -52,7 +68,7 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
             QuizModel.teacher_id == created_by_id,
         ).first() is not None
         return {
-            "id": f"quiz-{timestamp_ms}",
+            "id": generate_id("quiz"),
             "title": quiz_title,
             "description": "",
             "subjectId": subject_id,
@@ -70,11 +86,16 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
             "titleExists": title_exists
         }
     if mode == "flashcards":
+        _require_within_max(
+            data.get("flashcardCount") or data.get("cardCount") or 5,
+            MAX_AI_FLASHCARDS,
+            label="flashcards",
+        )
         card_count = _clamp_count(data.get("flashcardCount") or data.get("cardCount") or 5, fallback=5, maximum=MAX_AI_FLASHCARDS)
         cards = generate_flashcards_with_groq(text_content, count=card_count, instructions=instructions)
         ai_title = generate_title_with_groq("flashcards", cards)
         return {
-            "id": f"deck-{timestamp_ms}",
+            "id": generate_id("deck"),
             "title": data.get("title") or ai_title or f"Flashcards: {_trim_preview(text_content, 25)}...",
             "subjectId": subject_id,
             "subjectName": subject_name,
@@ -89,7 +110,7 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
         summary_data = generate_summary_with_groq(text_content, instructions=instructions)
         ai_title = generate_title_with_groq("summary", summary_data)
         return {
-            "id": f"sum-{timestamp_ms}",
+            "id": generate_id("sum"),
             "title": data.get("title") or ai_title or f"Summary: {_trim_preview(text_content)}...",
             "subjectId": subject_id,
             "subjectName": subject_name,
@@ -105,7 +126,7 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
         reviewer = generate_reviewer_with_groq(text_content, instructions=instructions)
         ai_title = generate_title_with_groq("reviewer", reviewer)
         return {
-            "id": f"rev-{timestamp_ms}",
+            "id": generate_id("rev"),
             "title": data.get("title") or ai_title or f"Reviewer: {_trim_preview(text_content)}...",
             "subjectId": subject_id,
             "subjectName": subject_name,
@@ -118,12 +139,12 @@ def _build_generated_resource(mode, data, text_content, timestamp_ms, created_at
         }
     return None
 
-def _build_quiz_model(payload, data, timestamp_ms, saved_at):
+def _build_quiz_model(payload, data, saved_at):
     """Constructs (but does not add) a QuizModel from a generated resource dict."""
     quiz_type = payload.get("quizType") or "student"
     effective_subject = payload.get("subjectId") or ("" if quiz_type == "teacher" else "personal")
     return QuizModel(
-        quiz_id=payload.get("id") or f"quiz-{timestamp_ms}",
+        quiz_id=payload.get("id") or generate_id("quiz"),
         title=payload.get("title", "AI Quiz"),
         description=payload.get("description", ""),
         # Teacher quizzes without a subject are subjectless drafts (""), hidden from
@@ -144,13 +165,13 @@ def _build_quiz_model(payload, data, timestamp_ms, saved_at):
         created_at=payload.get("createdAt") or saved_at,
     )
 
-def _build_ai_content_model(payload, timestamp_ms, saved_at, content_type):
+def _build_ai_content_model(payload, saved_at, content_type):
     """Constructs (but does not add) an AIGeneratedContentModel from a generated dict."""
     payload_persisted = dict(payload)
     payload_persisted.setdefault("isPublished", True)
     payload_persisted["createdById"] = payload.get("createdById") or "usr-teacher-1"
     return AIGeneratedContentModel(
-        content_id=payload.get("id") or f"ai-{content_type.lower()}-{timestamp_ms}",
+        content_id=payload.get("id") or generate_id(f"ai-{content_type.lower()}"),
         material_id=payload.get("materialId"),
         generated_by=payload.get("createdById") or "usr-teacher-1",
         title=payload.get("title", content_type),
@@ -159,7 +180,7 @@ def _build_ai_content_model(payload, timestamp_ms, saved_at, content_type):
         created_at=payload.get("createdAt") or saved_at,
     )
 
-def _persist_generated_resource(mode, payload, data, timestamp_ms, created_at):
+def _persist_generated_resource(mode, payload, data, created_at):
     """Persists a generated AI resource dict (idempotent). Returns the saved model or None.
 
     Quizzes are stored in the quizzes + quiz_questions tables; flashcards, summaries,
@@ -175,7 +196,7 @@ def _persist_generated_resource(mode, payload, data, timestamp_ms, created_at):
             return existing
 
         def _stage_quiz():
-            model = _build_quiz_model(payload, data, timestamp_ms, saved_at)
+            model = _build_quiz_model(payload, data, saved_at)
             db.session.add(model)
             _replace_quiz_questions(model.quiz_id, payload.get("questions", []))
             return model
@@ -200,7 +221,7 @@ def _persist_generated_resource(mode, payload, data, timestamp_ms, created_at):
     created_by_name = (current_user or {}).get("name") or data.get("createdByName") or payload.get("createdByName") or "User"
 
     def _stage_content():
-        model = _build_ai_content_model(payload, timestamp_ms, saved_at, content_type)
+        model = _build_ai_content_model(payload, saved_at, content_type)
         db.session.add(model)
         # Course material mirror: summaries, reviewers, and flashcards are saved
         # straight into the Upload & Manage Materials library (subjectless for
@@ -212,7 +233,7 @@ def _persist_generated_resource(mode, payload, data, timestamp_ms, created_at):
             return model
         title = (payload.get("title") or "").strip() or f"AI {content_type}"
         db.session.add(MaterialModel(
-            material_id=f"mat-{timestamp_ms}",
+            material_id=generate_id("mat"),
             # subject_id is a real FK to subjects.subject_id, so it must be NULL
             # (unassigned) rather than ""/"personal" -- those are not subject ids
             # and MySQL rejects the insert. Matches upload_material and
@@ -267,4 +288,3 @@ def _can_access_saved_resource(item, mode, current_user):
             return bool(subject and subject.teacher_id == auth_id)
         return False
     return False
-

@@ -7,6 +7,7 @@ from flask import jsonify, request
 
 from db.session import _commit_or_warn
 from extensions import db
+from lib.id import generate_id
 from models import ReportModel
 from services.log_service import log_action
 from services.report_service import REPORT_TYPES, _build_report_summary
@@ -25,12 +26,12 @@ def handle_reports():
     offset = max(0, offset)
     query = ReportModel.query
     current_user = getattr(request, "current_user", None) or {}
-    if current_user.get("role") == "student":
-        # Students only ever see the reports they generated for themselves.
-        query = query.filter_by(generated_by=current_user.get("id"))
-    elif current_user.get("role") == "teacher":
-        # Teachers only see reports they generated (no cross-teacher reads).
-        query = query.filter_by(generated_by=current_user.get("id"))
+    requester_id = current_user.get("id")
+    requester_role = current_user.get("role") or ""
+    # Privacy Rule: every role sees only reports they generated. The generatedBy
+    # filter is ignored so one user cannot page through another user's reports.
+    if requester_role in ("student", "teacher", "admin") and requester_id:
+        query = query.filter_by(generated_by=requester_id)
     elif generated_by:
         query = query.filter_by(generated_by=generated_by)
     if report_type:
@@ -67,15 +68,15 @@ def create_report():
         report_type,
         str(data.get("targetId") or ""),
         str(data.get("teacherId") or ""),
+        current_user.get("role") or "",
     )
     if status != 200:
         return jsonify(summary), status
     # Token identity wins over any client-supplied attribution
     generated_by = current_user.get("id") or data.get("generatedBy") or "usr-admin-1"
-    timestamp_ms = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
     title = str(data.get("title") or f"{report_type} Report")
     report = ReportModel(
-        report_id=f"rpt-{timestamp_ms}",
+        report_id=generate_id("rpt"),
         generated_by=generated_by,
         report_type=report_type,
         generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -94,7 +95,7 @@ def handle_report_detail(report_id):
     if not report:
         return jsonify({"error": "Report not found.", "code": "NOT_FOUND"}), 404
     current_user = getattr(request, "current_user", None) or {}
-    if current_user.get("role") in ("student", "teacher") and report.generated_by != current_user.get("id"):
+    if report.generated_by != current_user.get("id"):
         return jsonify({"error": "You can only view reports you generated.", "code": "FORBIDDEN"}), 403
     return jsonify(report.to_dict()), 200
 
@@ -104,7 +105,7 @@ def delete_report(report_id):
     if not report:
         return jsonify({"error": "Report not found.", "code": "NOT_FOUND"}), 404
     current_user = getattr(request, "current_user", None) or {}
-    if current_user.get("role") != "admin" and report.generated_by != current_user.get("id"):
+    if report.generated_by != current_user.get("id"):
         return jsonify({"error": "You can only delete reports you generated.", "code": "FORBIDDEN"}), 403
     db.session.delete(report)
     _commit_or_warn("report deletion")

@@ -5,7 +5,9 @@ from models.audit import (
     ActivityLogModel,
     SystemSettingModel,
 )
+from models.auth_session import AuthSessionModel
 from models.communication import AnnouncementModel, NotificationModel
+from models.refresh_token import RefreshTokenModel
 from models.material import (
     AIGeneratedContentModel,
     MaterialFlagModel,
@@ -22,6 +24,8 @@ __all__ = [
     "ActivityLogArchiveModel",
     "ActivityLogModel",
     "AnnouncementModel",
+    "AuthSessionModel",
+    "RefreshTokenModel",
     "MaterialFlagModel",
     "MaterialModel",
     "NotificationModel",

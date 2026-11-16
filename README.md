@@ -16,7 +16,7 @@ The platform adapts dynamically to student performance trends, providing persona
 
 ## 🛠️ Technology Stack (per Specification)
 
-- **Frontend (Web)**: React 18, Vite, Tailwind CSS, Lucide React Icons, Recharts, Motion
+- **Frontend (Web)**: React 19, Vite 7, Tailwind CSS 4, Lucide React Icons, Recharts, Motion
 - **Mobile App**: React-Native (Mobile learning mode for on-the-go study)
 - **Backend API**: Python - Flask (`backend/app.py`, REST API framework)
 - **Database**: MySQL (via Flask-SQLAlchemy ORM with SQLite fallback support)
@@ -112,13 +112,19 @@ npm install
 
 ### 2. Configure Environment
 
-Copy `backend/.env.example` to `backend/.env` and add your Groq key (see *Environment Setup* above). MySQL is optional — the app auto-falls back to SQLite if MySQL is unreachable.
+Copy `backend/.env.example` to `backend/.env` and add your Groq key (see *Environment Setup* above). MySQL is optional — the app falls back to SQLite only in development.
 
 > **First-time MySQL setup (optional):** if an older/imported `studylens_db` schema already exists, the app detects the mismatch and prints an instruction. Rebuild it once with:
 > ```bash
 > python backend/scripts/reset_db.py --yes
 > ```
-> *(This drops and recreates all tables in the configured database, then re-seeds the capstone demo data.)*
+> *(This drops and recreates all tables in the configured database. It does **not** seed demo accounts.)*
+
+**Demo data is never seeded automatically.** To provision the demo accounts locally, set `SEED_DEMO_DATA=true` and both strong values for `DEMO_TEACHER_PASSWORD` / `DEMO_ADMIN_PASSWORD` in `backend/.env`, then run:
+```bash
+python backend/scripts/seed_dev.py
+```
+Production (`FLASK_ENV=production`) refuses demo seeding.
 
 ### 3. Start the Full Stack (Backend + Frontend Together)
 
@@ -140,6 +146,16 @@ cd mobile
 npm start
 ```
 
+### 5. Run the Test Suites
+
+```bash
+cd backend && python -m pytest -q
+cd frontend && npm test
+cd mobile && npm test
+```
+
+CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests, and the production build on every push and pull request to `main`.
+
 ---
 
 ## 👤 Capstone Project Team & Pre-configured Accounts
@@ -149,9 +165,9 @@ npm start
 
 ### 🔑 Demo Credentials
 
-The system ships with two seeded demo accounts (a teacher and an administrator) for local development only. Students and additional teachers can **self-register** from the sign-up form. Portal switching / 1-click quick logins were removed for security — **sign in normally** (web or mobile).
+The system can provision two demo accounts (a teacher and an administrator) for local development only, via the explicit seed command described above. Students and additional teachers can **self-register** from the sign-up form. Portal switching / 1-click quick logins were removed for security — **sign in normally** (web or mobile).
 
-> Note: Seeded demo account passwords are **not published** and are generated/configured at deploy time. Demo seeding is disabled outside development environments.
+> Note: Demo account passwords are **not published**, have no defaults in code, and are configured by the operator. Demo seeding is opt-in and disabled outside development environments.
 
 > After **5 consecutive failed login attempts**, an account is temporarily locked for **5 minutes**. Forgot-password uses a 6-digit one-time code (see *OTP delivery* below).
 
@@ -160,7 +176,7 @@ The system ships with two seeded demo accounts (a teacher and an administrator) 
 One-time codes (email verification, password reset, and staff 2FA) are delivered depending on configuration:
 
 - **Production (email enabled):** set `GMAIL_SENDER` and `GMAIL_APP_PASSWORD` in `backend/.env` — codes are emailed through Gmail SMTP (`smtp.gmail.com`), from your Gmail address to any recipient, and are **never** returned in API responses. Requires 2-Step Verification + an App Password on the sending account.
-- **Development (no mailer):** with `OTP_DEV_REVEAL=true` (the dev default), codes are printed to the backend console (`[Auth] ... OTP for <email>: <code>`) and echoed as `devCode` in the API response so the web/mobile UI can display them as a hint. Set `OTP_DEV_REVEAL=false` in production.
+- **Development (no mailer):** explicitly set `OTP_DEV_REVEAL=true` and join OTPs from the backend console (`[Auth] ... OTP for <email>: <code>`) or the `devCode` response field. This flag is **off by default** and is ignored outside development; production refuses to start with it enabled.
 
 ### Seed Accounts (seeded profiles)
 

@@ -31,13 +31,25 @@ export interface AIGeneratedResult {
   practiceQuestions?: Array<{ question: string; sampleAnswer: string }>;
 }
 
+export interface QuizCounts {
+  multiple_choice: string;
+  identification: string;
+  true_false: string;
+}
+
+export const EMPTY_QUIZ_COUNTS: QuizCounts = {
+  multiple_choice: "",
+  identification: "",
+  true_false: "",
+};
+
 export interface AIWorkspace {
   mode: AIMode;
   prompt: string;
   sourceText: string;
   selectedMaterialId: string;
   uploadedFileName?: string;
-  quizCount?: string;
+  quizCounts?: QuizCounts;
   flashcardCount: string;
   quizRevealAnswers: boolean;
   drafts: Partial<Record<AIMode, AIGeneratedResult | null>>;
@@ -68,6 +80,7 @@ const EMPTY_WORKSPACE: AIWorkspace = {
   prompt: "",
   sourceText: "",
   selectedMaterialId: "",
+  quizCounts: { ...EMPTY_QUIZ_COUNTS },
   flashcardCount: "5",
   quizRevealAnswers: true,
   drafts: {},

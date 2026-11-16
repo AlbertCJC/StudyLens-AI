@@ -5,6 +5,11 @@ from extensions import db
 _LAST_COMMIT_ERROR = ""
 
 
+def get_last_commit_error():
+    """Return the most recent commit failure summary for error mapping."""
+    return _LAST_COMMIT_ERROR
+
+
 def _commit_or_warn(description, restage=None):
     """Best-effort persistence: content is still returned if the DB write fails.
 

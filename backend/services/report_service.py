@@ -18,11 +18,13 @@ from models import (
 REPORT_TYPES = ("Student Performance", "Quiz Analytics", "Subject Summary", "AI Usage")
 
 
-def _build_report_summary(report_type, target_id="", teacher_id=""):
+def _build_report_summary(report_type, target_id="", teacher_id="", role=""):
     """Aggregates academic data into a structured report summary.
 
     When teacher_id is provided the report is scoped to that teacher's own
-    subjects, students, quizzes, and AI-generated content.
+    subjects, students, quizzes, and AI-generated content. When target_id is
+    omitted for Student Performance and the caller is a teacher or admin, the
+    summary aggregates every student the caller may see.
     """
     subject_ids = set()
     teacher_quiz_ids = set()
@@ -39,37 +41,80 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
         own_ai_query = AIGeneratedContentModel.query.filter_by(generated_by=teacher_id)
 
     if report_type == "Student Performance":
-        student = db.session.get(UserModel, target_id) if target_id else None
-        if not student:
-            return {"error": "A valid student is required for a Student Performance report.", "code": "BAD_REQUEST"}, 400
-        if teacher_id and target_id not in enrolled_student_ids:
-            return {"error": "This student is not enrolled in any of your subjects.", "code": "FORBIDDEN"}, 403
-        attempts = QuizAttemptModel.query.filter_by(student_id=target_id).order_by(QuizAttemptModel.submitted_at.desc()).all()
+        if target_id:
+            student = db.session.get(UserModel, target_id)
+            if not student:
+                return {"error": "A valid student is required for a Student Performance report.", "code": "BAD_REQUEST"}, 400
+            if teacher_id and target_id not in enrolled_student_ids:
+                return {"error": "This student is not enrolled in any of your subjects.", "code": "FORBIDDEN"}, 403
+            attempts = QuizAttemptModel.query.filter_by(student_id=target_id).order_by(QuizAttemptModel.submitted_at.desc()).all()
+            if teacher_id:
+                attempts = [a for a in attempts if a.subject_id in subject_ids or a.quiz_id in teacher_quiz_ids]
+            total = len(attempts)
+            avg = round(sum(a.percentage or 0 for a in attempts) / total) if total else 0
+            passed = sum(1 for a in attempts if a.passed)
+            weak, strong = [], []
+            for att in attempts:
+                try: weak += json.loads(att.weak_topics_json) or []
+                except Exception: pass
+                try: strong += json.loads(att.strong_topics_json) or []
+                except Exception: pass
+            progress_rows = StudentProgressModel.query.filter_by(student_id=target_id).all()
+            summary = {
+                "studentId": target_id,
+                "studentName": (student.first_name or "") + (" " + student.last_name if student.last_name else ""),
+                "quizzesTaken": total,
+                "averageScore": avg,
+                "passRate": round(passed / total * 100) if total else 0,
+                "weakTopics": list(dict.fromkeys(weak)),
+                "strongTopics": list(dict.fromkeys(strong)),
+                "subjects": [
+                    {"subjectId": p.subject_id, "completionPercentage": p.completion_percentage, "averageScore": p.average_score, "learningLevel": p.learning_level}
+                    for p in progress_rows
+                ],
+                "recentAttempts": [a.to_dict() for a in attempts][:10],
+            }
+            return summary, 200
+
         if teacher_id:
-            attempts = [a for a in attempts if a.subject_id in subject_ids or a.quiz_id in teacher_quiz_ids]
-        total = len(attempts)
-        avg = round(sum(a.percentage for a in attempts) / total) if total else 0
-        passed = sum(1 for a in attempts if a.passed)
-        weak, strong = [], []
-        for att in attempts:
-            try: weak += json.loads(att.weak_topics_json) or []
-            except Exception: pass
-            try: strong += json.loads(att.strong_topics_json) or []
-            except Exception: pass
-        progress_rows = StudentProgressModel.query.filter_by(student_id=target_id).all()
+            candidate_ids = sorted(enrolled_student_ids)
+        elif role == "admin":
+            candidate_ids = sorted({u.user_id for u in UserModel.query.filter_by(role="student").all()})
+        else:
+            return {"error": "A valid student is required for a Student Performance report.", "code": "BAD_REQUEST"}, 400
+
+        student_rows = []
+        aggregate_attempts = []
+        for sid in candidate_ids:
+            student = db.session.get(UserModel, sid)
+            if not student:
+                continue
+            attempts = QuizAttemptModel.query.filter_by(student_id=sid).order_by(QuizAttemptModel.submitted_at.desc()).all()
+            if teacher_id:
+                attempts = [a for a in attempts if a.subject_id in subject_ids or a.quiz_id in teacher_quiz_ids]
+            total = len(attempts)
+            avg = round(sum(a.percentage or 0 for a in attempts) / total) if total else 0
+            passed = sum(1 for a in attempts if a.passed)
+            aggregate_attempts.extend(attempts)
+            student_rows.append({
+                "studentId": sid,
+                "studentName": (student.first_name or "") + (" " + student.last_name if student.last_name else ""),
+                "quizzesTaken": total,
+                "averageScore": avg,
+                "passRate": round(passed / total * 100) if total else 0,
+                "recentAttempts": [a.to_dict() for a in attempts][:5],
+            })
+        student_rows.sort(key=lambda r: r["studentName"].lower())
+        total = len(aggregate_attempts)
+        avg = round(sum(a.percentage or 0 for a in aggregate_attempts) / total) if total else 0
+        passed = sum(1 for a in aggregate_attempts if a.passed)
         summary = {
-            "studentId": target_id,
-            "studentName": (student.first_name or "") + (" " + student.last_name if student.last_name else ""),
+            "allStudents": True,
+            "studentCount": len(student_rows),
             "quizzesTaken": total,
             "averageScore": avg,
             "passRate": round(passed / total * 100) if total else 0,
-            "weakTopics": list(dict.fromkeys(weak)),
-            "strongTopics": list(dict.fromkeys(strong)),
-            "subjects": [
-                {"subjectId": p.subject_id, "completionPercentage": p.completion_percentage, "averageScore": p.average_score, "learningLevel": p.learning_level}
-                for p in progress_rows
-            ],
-            "recentAttempts": [a.to_dict() for a in attempts][:10],
+            "students": student_rows,
         }
         return summary, 200
 
@@ -84,9 +129,9 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
             key = a.quiz_id
             q = quiz_totals.setdefault(key, {"quizId": key, "quizTitle": a.quiz_title, "subjectName": a.subject_name, "attempts": 0, "totalScore": 0.0, "passed": 0, "scores": []})
             q["attempts"] += 1
-            q["totalScore"] += a.percentage
+            q["totalScore"] += a.percentage or 0
             q["passed"] += 1 if a.passed else 0
-            q["scores"].append(a.percentage)
+            q["scores"].append(a.percentage or 0)
         quiz_rows = []
         for q in quiz_totals.values():
             quiz_rows.append({
@@ -100,7 +145,7 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
                 "lowestScore": round(min(q["scores"])) if q["scores"] else 0,
             })
         # Attempt-weighted overall average (not an average of per-quiz averages)
-        weighted_avg = round(sum(a.percentage for a in attempts) / len(attempts)) if attempts else 0
+        weighted_avg = round(sum(a.percentage or 0 for a in attempts) / len(attempts)) if attempts else 0
         summary = {
             "totalAttempts": len(attempts),
             "quizzes": quiz_rows,
@@ -119,7 +164,7 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
             materials = MaterialModel.query.filter_by(subject_id=sub.subject_id).count()
             quizzes = QuizModel.query.filter_by(subject_id=sub.subject_id).count()
             attempts = QuizAttemptModel.query.filter_by(subject_id=sub.subject_id).all()
-            avg = round(sum(a.percentage for a in attempts) / len(attempts)) if attempts else 0
+            avg = round(sum(a.percentage or 0 for a in attempts) / len(attempts)) if attempts else 0
             passed = sum(1 for a in attempts if a.passed)
             # AI items linked to this subject's mirrored materials
             material_rows = MaterialModel.query.filter_by(subject_id=sub.subject_id).all()
@@ -146,7 +191,8 @@ def _build_report_summary(report_type, target_id="", teacher_id=""):
     items = own_ai_query.all() if own_ai_query is not None else AIGeneratedContentModel.query.all()
     by_type = {}
     for item in items:
-        by_type[item.content_type] = by_type.get(item.content_type, 0) + 1
+        content_type = item.content_type or "Unknown"
+        by_type[content_type] = by_type.get(content_type, 0) + 1
     if teacher_id:
         quiz_count = QuizModel.query.filter_by(teacher_id=teacher_id).count()
         ai_quiz_count = QuizModel.query.filter_by(teacher_id=teacher_id, quiz_type="student").count()

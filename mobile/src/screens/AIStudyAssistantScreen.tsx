@@ -259,7 +259,7 @@ export default function AIStudyAssistantScreen({
       }
       setOfflineNotice((draft as { source?: string }).source === 'offline-fallback');
       setOfflineReason(typeof (draft as { offlineReason?: string }).offlineReason === 'string' ? (draft as { offlineReason?: string }).offlineReason! : '');
-      setDraftTitle(draft.title || modeLabel);
+      setDraftTitle(typeof draft.title === 'string' ? draft.title : modeLabel);
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') {
         setError('AI generation cancelled.');

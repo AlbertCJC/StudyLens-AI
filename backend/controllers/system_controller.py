@@ -4,6 +4,7 @@ import datetime
 
 from flask import jsonify, request
 
+from extensions import db
 from lib.constants import DEFAULT_SYSTEM_SETTINGS
 from models import (
     AIGeneratedContentModel,
@@ -22,12 +23,51 @@ from models import (
     SystemSettingModel,
     UserModel,
 )
+from services.log_service import log_action
 from services.settings_service import (
     _boolify_settings,
     _enforce_archiving,
     _load_system_settings,
     _save_system_settings,
 )
+
+
+def health():
+    """Liveness probe with the active database backend (no credentials).
+
+    Also verifies the database is reachable (readiness): returns 503 when a
+    simple query fails so orchestrators can stop routing traffic to an instance
+    whose database is down.
+    """
+    from config import DB_TARGET
+    from sqlalchemy import text
+
+    target = (DB_TARGET or "").lower()
+    if target.startswith("mysql"):
+        backend = "mysql"
+    elif target.startswith("sqlite"):
+        backend = "sqlite"
+    else:
+        backend = target.split(":", 1)[0] or "unknown"
+
+    database_ready = False
+    try:
+        db.session.execute(text("SELECT 1"))
+        database_ready = True
+    except Exception:
+        database_ready = False
+
+    if not database_ready:
+        return jsonify({
+            "status": "fail",
+            "databaseBackend": backend,
+            "databaseReady": False,
+        }), 503
+    return jsonify({
+        "status": "ok",
+        "databaseBackend": backend,
+        "databaseReady": True,
+    })
 
 
 def get_system_info():
@@ -82,6 +122,16 @@ def save_system_settings():
     settings["sessionTimeoutMins"] = str(max(5, min(1440, timeout)))
     _save_system_settings(settings)
     _enforce_archiving(settings)
+
+    current_user = getattr(request, "current_user", None) or {}
+    changed_keys = [key for key in DEFAULT_SYSTEM_SETTINGS if key in data]
+    log_action(
+        current_user.get("id") or "sys-admin",
+        current_user.get("name") or "System Administrator",
+        current_user.get("role") or "system",
+        "SETTINGS_UPDATED",
+        f"System settings updated: {', '.join(changed_keys) or 'none'}",
+    )
     return jsonify(_boolify_settings(settings))
 
 

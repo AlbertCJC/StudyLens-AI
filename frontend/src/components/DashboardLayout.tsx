@@ -11,6 +11,7 @@ import { useAnnouncements, type BellItem } from "../context/AnnouncementsContext
 import { useAuth } from "../context/AuthContext";
 import { RelativeTime } from "../utils/time";
 import { authFetch } from "../utils/authFetch";
+import { avatarUrl } from "../utils/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -259,9 +260,9 @@ export function DashboardLayout({
               className={`flex items-center gap-3 px-2 cursor-pointer hover:bg-muted/50 p-1.5 rounded-xl transition-colors group ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}
               title="Click to view full user profile"
             >
-              {currentUser?.avatar ? (
+              {avatarUrl(currentUser?.avatar) ? (
                 <img
-                  src={currentUser.avatar}
+                  src={avatarUrl(currentUser?.avatar)!}
                   alt={userName}
                   className="h-9 w-9 rounded-full object-cover ring-2 ring-[#5b51d8]/20 shrink-0 group-hover:scale-105 transition-transform"
                 />
@@ -411,8 +412,8 @@ export function DashboardLayout({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform cursor-pointer overflow-hidden">
-                  {currentUser?.avatar ? (
-                    <img src={currentUser.avatar} alt={userName} className="h-full w-full object-cover" />
+                  {avatarUrl(currentUser?.avatar) ? (
+                    <img src={avatarUrl(currentUser?.avatar)!} alt={userName} className="h-full w-full object-cover" />
                   ) : (
                     (userName ? userName.slice(0, 2).toUpperCase() : "SL")
                   )}

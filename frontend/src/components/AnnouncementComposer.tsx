@@ -64,6 +64,7 @@ export const AnnouncementComposer: React.FC<AnnouncementComposerProps> = ({
   useEffect(() => {
     if (!open) return;
     if (editingAnn) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTitle(editingAnn.title);
       setContent(editingAnn.content);
       setPriority((editingAnn.priority as "high" | "medium" | "low") || "medium");

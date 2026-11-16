@@ -1,139 +1,16 @@
 import React, { useState, useEffect, useCallback } from "react";
-import {
-  FileText, BarChart2, Download, Trash2, RefreshCw, ChevronDown, X, Users, GraduationCap, Sparkles, Loader2, Search, Filter, Pencil,
-} from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import type { GeneratedReport } from "../../types";
+import type { ReportType } from "./reportMeta";
+import { ReportDeleteModal } from "./ReportDeleteModal";
+import { ReportGenerateModal } from "./ReportGenerateModal";
+import { ReportViewModal } from "./ReportViewModal";
+import { ReportsList } from "./ReportsList";
+import { exportReportCSV, filterReports, type QuizOption, type StudentOption, type SubjectOption } from "./reportUtils";
 
-const REPORT_TYPES = ["Student Performance", "Quiz Analytics", "Subject Summary", "AI Usage"] as const;
-type ReportType = (typeof REPORT_TYPES)[number];
-
-const REPORT_ICONS: Record<ReportType, React.ElementType> = {
-  "Student Performance": Users,
-  "Quiz Analytics": BarChart2,
-  "Subject Summary": GraduationCap,
-  "AI Usage": Sparkles,
-};
-
-interface StudentOption { id: string; name: string; }
-interface QuizOption { id: string; title: string; subjectName: string; subjectId?: string; }
-interface SubjectOption { id: string; name: string; }
-
-interface DateQueryResult {
-  date: Date;
-  granularity: "day" | "month" | "year";
-  yearOnly?: boolean;
-}
-
-const MONTH_MAP: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-};
-
-function parseDateQuery(q: string): DateQueryResult | null {
-  const trimmed = q.trim();
-  if (!trimmed) return null;
-  // Don't treat a bare 4-digit year as a full date (e.g. "2026" should match
-  // all reports from that year, not January 1 of that year).
-  if (!/^\d{4}$/.test(trimmed)) {
-    const direct = new Date(trimmed);
-    if (!isNaN(direct.getTime())) {
-      return { date: direct, granularity: "day" };
-    }
-  }
-  const lower = trimmed.toLowerCase();
-
-  // "January 15 2026", "Jan 15 2026", "January 15, 2026"
-  const m1 = lower.match(/^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)\s+(\d{1,2})[,\s]+\s*(\d{4})$/);
-  if (m1) {
-    const month = MONTH_MAP[m1[1].slice(0, 3)];
-    const day = parseInt(m1[2], 10);
-    const year = parseInt(m1[4], 10);
-    const d = new Date(year, month, day);
-    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getDate() === day && d.getFullYear() === year) {
-      return { date: d, granularity: "day" };
-    }
-  }
-
-  // "15 January 2026", "15 Jan 2026"
-  const m2 = lower.match(/^(\d{1,2})\s+(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)[,\s]+\s*(\d{4})$/);
-  if (m2) {
-    const day = parseInt(m2[1], 10);
-    const month = MONTH_MAP[m2[2].slice(0, 3)];
-    const year = parseInt(m2[4], 10);
-    const d = new Date(year, month, day);
-    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getDate() === day && d.getFullYear() === year) {
-      return { date: d, granularity: "day" };
-    }
-  }
-
-  // "January 2026", "Jan 2026" -> month + year
-  const m3 = lower.match(/^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)[,\s]+\s*(\d{4})$/);
-  if (m3) {
-    const month = MONTH_MAP[m3[1].slice(0, 3)];
-    const year = parseInt(m3[3], 10);
-    const d = new Date(year, month, 1);
-    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getFullYear() === year) {
-      return { date: d, granularity: "month" };
-    }
-  }
-
-  // "September", "Sep", "Sept" -> month only (any year)
-  const m7 = lower.match(/^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)$/);
-  if (m7) {
-    const month = MONTH_MAP[m7[1].slice(0, 3)];
-    const d = new Date(2000, month, 1);
-    if (!isNaN(d.getTime()) && d.getMonth() === month) {
-      return { date: d, granularity: "month", yearOnly: false };
-    }
-  }
-
-  // "2026" -> year only
-  const m4 = lower.match(/^(\d{4})$/);
-  if (m4) {
-    const year = parseInt(m4[1], 10);
-    const d = new Date(year, 0, 1);
-    if (!isNaN(d.getTime()) && d.getFullYear() === year) {
-      return { date: d, granularity: "year" };
-    }
-  }
-
-  // "2026-01-15", "2026-1-5" (ISO date only)
-  const m5 = lower.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (m5) {
-    const year = parseInt(m5[1], 10);
-    const month = parseInt(m5[2], 10) - 1;
-    const day = parseInt(m5[3], 10);
-    const d = new Date(year, month, day);
-    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getDate() === day && d.getFullYear() === year) {
-      return { date: d, granularity: "day" };
-    }
-  }
-
-  // "01/15/2026", "1/15/2026" (MM/DD/YYYY)
-  const m6 = lower.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (m6) {
-    const month = parseInt(m6[1], 10) - 1;
-    const day = parseInt(m6[2], 10);
-    const year = parseInt(m6[3], 10);
-    const d = new Date(year, month, day);
-    if (!isNaN(d.getTime()) && d.getMonth() === month && d.getDate() === day && d.getFullYear() === year) {
-      return { date: d, granularity: "day" };
-    }
-  }
-
-  return null;
-}
-
-function parseReportDate(dateStr: string): Date | null {
-  const d = new Date(dateStr);
-  if (!isNaN(d.getTime())) return d;
-  return null;
-}
+const REPORT_PAGE_SIZE = 50;
 
 export const ReportsPage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -160,12 +37,9 @@ export const ReportsPage: React.FC = () => {
   const [deleting, setDeleting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Pagination state
   const [reportsPage, setReportsPage] = useState(1);
   const [reportsTotal, setReportsTotal] = useState(0);
-  const REPORT_PAGE_SIZE = 50;
 
-  // Filters
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
 
@@ -304,6 +178,7 @@ export const ReportsPage: React.FC = () => {
       const data = await res.json().catch(() => null);
       if (res.ok) {
         setReports((prev) => [data, ...prev]);
+        setReportsTotal((prev) => prev + 1);
         setShowGenerate(false);
         showToast("Report generated successfully.");
       } else {
@@ -316,16 +191,23 @@ export const ReportsPage: React.FC = () => {
     }
   };
 
-  const requestDelete = (report: GeneratedReport) => {
-    setDeleteTarget(report);
-  };
+  const requestDelete = (report: GeneratedReport) => setDeleteTarget(report);
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
     try {
-      await authFetch(`/api/reports/${deleteTarget.id}`, { method: "DELETE" });
+      const res = await authFetch(`/api/reports/${deleteTarget.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData?.error || "Could not delete the report.", "error");
+        return;
+      }
       setReports((prev) => prev.filter((r) => r.id !== deleteTarget.id));
+      setReportsTotal((prev) => Math.max(0, prev - 1));
+      if (filteredReports.length === 1 && reportsPage > 1) {
+        setReportsPage((prev) => Math.max(1, prev - 1));
+      }
       setDeleteTarget(null);
       showToast("Report deleted.");
     } catch {
@@ -335,593 +217,80 @@ export const ReportsPage: React.FC = () => {
     }
   };
 
-  const summaryRows = (report: GeneratedReport): { label: string; value: string }[] => {
-    const s = (report.summary || {}) as Record<string, unknown>;
-    const rows: { label: string; value: string }[] = [];
-    if (s.studentName) rows.push({ label: "Student", value: String(s.studentName) });
-    if (typeof s.quizzesTaken === "number") rows.push({ label: "Quizzes Taken", value: String(s.quizzesTaken) });
-    if (typeof s.averageScore === "number") rows.push({ label: "Average Score", value: `${s.averageScore}%` });
-    if (typeof s.passRate === "number") rows.push({ label: "Pass Rate", value: `${s.passRate}%` });
-    if (Array.isArray(s.weakTopics)) rows.push({ label: "Weak Topics", value: (s.weakTopics as string[]).join(", ") || "None" });
-    if (Array.isArray(s.strongTopics)) rows.push({ label: "Strong Topics", value: (s.strongTopics as string[]).join(", ") || "None" });
-    if (typeof s.totalAttempts === "number") rows.push({ label: "Total Attempts", value: String(s.totalAttempts) });
-    if (Array.isArray(s.quizzes)) rows.push({ label: "Quizzes Analyzed", value: String((s.quizzes as unknown[]).length) });
-    if (typeof s.overallAverage === "number") rows.push({ label: "Overall Average", value: `${s.overallAverage}%` });
-    if (Array.isArray(s.subjects)) rows.push({ label: "Subjects Covered", value: String((s.subjects as unknown[]).length) });
-    if (typeof s.totalGenerated === "number") rows.push({ label: "Total AI Generated", value: String(s.totalGenerated) });
-    if (typeof s.quizCount === "number") rows.push({ label: "Quizzes (Total)", value: String(s.quizCount) });
-    if (typeof s.generationEvents === "number") rows.push({ label: "AI Generation Events", value: String(s.generationEvents) });
-    if (s.breakdown && typeof s.breakdown === "object") {
-      const b = s.breakdown as Record<string, unknown>;
-      rows.push({ label: "By Type", value: Object.entries(b).map(([k, v]) => `${k}: ${v}`).join(" | ") });
-    }
-    return rows;
-  };
-
-  const csvFromRows = (report: GeneratedReport): string => {
-    const rows = summaryRows(report);
-    return rows.map((r) => `"${r.label.replace(/"/g, '""')}","${r.value.replace(/"/g, '""')}"`).join("\n");
-  };
-
-  const exportReportCSV = (report: GeneratedReport) => {
-    const content = `Report,${report.reportType}\nTitle,${report.title}\nGenerated,${report.generatedAt}\n\n` + csvFromRows(report);
-    const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${report.title.replace(/[^a-z0-9]+/gi, "_")}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const filteredReports = reports.filter((r) => {
-    if (typeFilter !== "all" && r.reportType !== typeFilter) return false;
-    if (searchTerm) {
-      const q = searchTerm.trim().toLowerCase();
-      const parsedQuery = parseDateQuery(q);
-      const reportDate = parseReportDate(r.generatedAt);
-
-      const matchesTitleType =
-        r.title.toLowerCase().includes(q) ||
-        r.reportType.toLowerCase().includes(q);
-
-      if (parsedQuery && reportDate) {
-        const qYear = parsedQuery.date.getFullYear();
-        const qMonth = parsedQuery.date.getMonth();
-        const qDay = parsedQuery.date.getDate();
-        const rYear = reportDate.getFullYear();
-        const rMonth = reportDate.getMonth();
-        const rDay = reportDate.getDate();
-
-        let matches = false;
-        if (parsedQuery.granularity === "day") {
-          matches = qYear === rYear && qMonth === rMonth && qDay === rDay;
-        } else if (parsedQuery.granularity === "month") {
-          // yearOnly === false means "September" (any year); otherwise match month+year
-          matches = qMonth === rMonth && (parsedQuery.yearOnly === false ? true : qYear === rYear);
-        } else if (parsedQuery.granularity === "year") {
-          matches = qYear === rYear;
-        }
-        if (!matches && !matchesTitleType) return false;
-      } else {
-        const matchesDate = r.generatedAt.toLowerCase().includes(q);
-        if (!matchesTitleType && !matchesDate) return false;
-      }
-    }
-    return true;
-  });
-
-  const renderDetails = (report: GeneratedReport) => {
-    const s = (report.summary || {}) as Record<string, unknown>;
-
-    if (report.reportType === "Quiz Analytics" && Array.isArray(s.quizzes)) {
-      const qrows = s.quizzes as Record<string, unknown>[];
-      return (
-        <div className="space-y-4">
-          {qrows.length === 0 && <p className="text-xs text-muted-foreground py-4 text-center">No quiz analytics data available.</p>}
-          {qrows.length > 0 && (
-            <div className="space-y-3">
-              <div className="h-44 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={qrows.map((q) => ({ name: (q.quizTitle || "Quiz").slice(0, 24), avg: q.averageScore ?? 0 }))} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-                    <XAxis dataKey="name" tick={{ fontSize: 9, fill: "currentColor" }} interval={0} />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "currentColor" }} />
-                    <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", color: "#fff", fontSize: "11px" }} />
-                    <Bar dataKey="avg" fill="#2563eb" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
-                    <th className="py-2 pr-2">Quiz</th>
-                    <th className="py-2 px-2">Subject</th>
-                    <th className="py-2 px-2 text-right">Attempts</th>
-                    <th className="py-2 px-2 text-right">Avg</th>
-                    <th className="py-2 px-2 text-right">Pass Rate</th>
-                    <th className="py-2 px-2 text-right">High / Low</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {qrows.map((q, i) => (
-                    <tr key={i} className="border-b border-border/50">
-                      <td className="py-2 pr-2 font-semibold text-foreground">{String(q.quizTitle || "Quiz")}</td>
-                      <td className="py-2 px-2 text-muted-foreground">{String(q.subjectName || "—")}</td>
-                      <td className="py-2 px-2 text-right tabular-nums">{Number(q.attempts ?? 0)}</td>
-                      <td className="py-2 px-2 text-right tabular-nums">{Number(q.averageScore ?? 0)}%</td>
-                      <td className="py-2 px-2 text-right tabular-nums">{Number(q.passRate ?? 0)}%</td>
-                      <td className="py-2 px-2 text-right tabular-nums">{Number(q.highestScore ?? 0)} / {Number(q.lowestScore ?? 0)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    if (report.reportType === "Subject Summary" && Array.isArray(s.subjects)) {
-      const srows = s.subjects as Record<string, unknown>[];
-      return (
-        <div className="space-y-4">
-          {srows.length === 0 && <p className="text-xs text-muted-foreground py-4 text-center">No subject summary data available.</p>}
-          {srows.length > 0 && (
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
-                  <th className="py-2 pr-2">Subject</th>
-                  <th className="py-2 px-2">Teacher</th>
-                  <th className="py-2 px-2 text-right">Materials</th>
-                  <th className="py-2 px-2 text-right">Quizzes</th>
-                  <th className="py-2 px-2 text-right">AI Items</th>
-                  <th className="py-2 px-2 text-right">Attempts</th>
-                  <th className="py-2 px-2 text-right">Avg</th>
-                </tr>
-              </thead>
-              <tbody>
-                {srows.map((srow, i) => (
-                  <tr key={i} className="border-b border-border/50">
-                    <td className="py-2 pr-2 font-semibold text-foreground">{String(srow.subjectName || "—")}</td>
-                    <td className="py-2 px-2 text-muted-foreground">{String(srow.teacherName || "—")}</td>
-                    <td className="py-2 px-2 text-right tabular-nums">{Number(srow.materials ?? 0)}</td>
-                    <td className="py-2 px-2 text-right tabular-nums">{Number(srow.quizzes ?? 0)}</td>
-                    <td className="py-2 px-2 text-right tabular-nums">{Number(srow.aiGeneratedItems ?? 0)}</td>
-                    <td className="py-2 px-2 text-right tabular-nums">{Number(srow.quizAttempts ?? 0)}</td>
-                    <td className="py-2 px-2 text-right tabular-nums">{Number(srow.averageScore ?? 0)}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      );
-    }
-
-    if (report.reportType === "Student Performance") {
-      const attempts = Array.isArray(s.recentAttempts) ? (s.recentAttempts as Record<string, unknown>[]) : [];
-      return (
-        <div className="space-y-4">
-          {attempts.length === 0 && <p className="text-xs text-muted-foreground py-4 text-center">No recent attempts for this student.</p>}
-          {attempts.length > 0 && (
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
-                  <th className="py-2 pr-2">Quiz</th>
-                  <th className="py-2 px-2">Subject</th>
-                  <th className="py-2 px-2 text-right">Score</th>
-                  <th className="py-2 px-2 text-right">%</th>
-                  <th className="py-2 px-2 text-center">Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {attempts.map((a, i) => (
-                  <tr key={i} className="border-b border-border/50">
-                    <td className="py-2 pr-2 font-semibold text-foreground">{String(a.quizTitle || "Quiz")}</td>
-                    <td className="py-2 px-2 text-muted-foreground">{String(a.subjectName || "—")}</td>
-                    <td className="py-2 px-2 text-right tabular-nums">{Number(a.score ?? 0)}/{Number(a.maxScore ?? a.totalPoints ?? 0)}</td>
-                    <td className="py-2 px-2 text-right tabular-nums">{Number(a.percentage ?? 0)}%</td>
-                    <td className="py-2 px-2 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${a.passed ? "bg-emerald-500/10 text-emerald-600" : "bg-rose-500/10 text-rose-600"}`}>
-                        {a.passed ? "Passed" : "Failed"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      );
-    }
-
-    if (report.reportType === "AI Usage" && s.breakdown && typeof s.breakdown === "object") {
-      const b = s.breakdown as Record<string, unknown>;
-      return (
-        <div className="space-y-3">
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(b).map(([k, v]) => (
-              <span key={k} className="px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 text-xs font-bold text-primary">
-                {k}: {String(v)}
-              </span>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    return null;
-  };
-
   const clearFilters = () => {
     setSearchTerm("");
     setTypeFilter("all");
   };
 
-  // Reset page when filters change.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setReportsPage(1);
   }, [searchTerm, typeFilter]);
 
+  const filteredReports = filterReports(reports, searchTerm, typeFilter);
   const hasFilters = searchTerm !== "" || typeFilter !== "all";
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-        <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-wrap">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer">
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Generate Report</span>
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>Choose a report type</DropdownMenuLabel>
-                {REPORT_TYPES.map((type) => {
-                  const Icon = REPORT_ICONS[type];
-                  return (
-                    <DropdownMenuItem key={type} onClick={() => openGenerate(type)} className="gap-2.5">
-                      <Icon className="w-4 h-4 text-primary" />
-                      <span>{type}</span>
-                    </DropdownMenuItem>
-                  );
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <div className="space-y-2 flex flex-col items-start lg:flex lg:flex-row lg:items-center gap-2">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-bold text-foreground">Generated Reports</h3>
-                <button
-                  onClick={fetchReports}
-                  title="Reload the report list from the server"
-                  className="p-1.5 bg-muted/50 hover:bg-muted text-foreground rounded-lg transition-all border border-border cursor-pointer"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Showing {filteredReports.length} of {reports.length} generated reports
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search reports..."
-                className="pl-8 pr-3 py-1.5 bg-muted/40 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary w-44"
-              />
-            </div>
-            <select
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
-              className="p-1.5 bg-muted/40 border border-border rounded-xl text-xs text-foreground focus:outline-none"
-            >
-              <option value="all">All types</option>
-              {REPORT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-            {hasFilters && (
-              <button
-                onClick={clearFilters}
-                className="px-2.5 py-1.5 bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 rounded-xl text-[11px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
-              >
-                <Filter className="w-3 h-3" /> Clear
-              </button>
-            )}
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="flex items-center justify-center py-10 text-muted-foreground text-xs">
-            <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading reports...
-          </div>
-        ) : filteredReports.length === 0 ? (
-          <p className="text-center text-xs text-muted-foreground py-10">
-            {reports.length === 0
-              ? "No reports generated yet. Use the Generate Report button above to create one."
-              : "No reports match the current filters."}
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {filteredReports.map((report) => {
-              const preview = summaryRows(report).slice(0, 2).map((r) => `${r.label}: ${r.value}`).join(" · ");
-              return (
-                <div
-                  key={report.id}
-                  onClick={() => setViewing(report)}
-                  className="p-4 rounded-xl border border-border bg-muted/20 space-y-2 cursor-pointer hover:border-primary/50 hover:bg-muted/40 transition-all"
-                  title="View Report"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <h4 className="text-sm font-bold text-foreground truncate">{report.title}</h4>
-                    </div>
-                    <div className="flex items-center space-x-2 shrink-0">
-                      <span className="text-[11px] text-muted-foreground font-mono">{report.generatedAt}</span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); openGenerate(report.reportType, report); }}
-                        className="p-1.5 text-muted-foreground hover:text-emerald-600 rounded-lg cursor-pointer"
-                        title="Edit Report"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); exportReportCSV(report); }}
-                        className="p-1.5 text-muted-foreground hover:text-primary rounded-lg cursor-pointer"
-                        title="Export CSV"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); requestDelete(report); }}
-                        className="p-1.5 text-rose-600 hover:bg-rose-500/10 rounded-lg cursor-pointer"
-                        title="Delete Report"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                  {preview && (
-                    <p className="text-[11px] text-muted-foreground truncate">{preview}</p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Pagination controls */}
-      {reportsTotal > 0 && (
-        <div className="flex items-center justify-between gap-4 p-4 bg-muted/30 border border-border rounded-xl">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>Page {reportsPage}</span>
-            <span>of {Math.ceil(reportsTotal / REPORT_PAGE_SIZE)}</span>
-            <span>({reportsTotal} total)</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setReportsPage((p) => Math.max(1, p - 1))}
-              disabled={reportsPage === 1 || loading}
-              className="px-3 py-1.5 rounded-xl border border-border bg-card hover:bg-muted/50 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Prev
-            </button>
-            <button
-              onClick={() => setReportsPage((p) => p + 1)}
-              disabled={!(reportsPage * REPORT_PAGE_SIZE < reportsTotal) || loading}
-              className="px-3 py-1.5 rounded-xl border border-border bg-card hover:bg-muted/50 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      )}
+      <ReportsList
+        reports={reports}
+        filteredReports={filteredReports}
+        reportsTotal={reportsTotal}
+        loading={loading}
+        refreshing={refreshing}
+        reportsPage={reportsPage}
+        pageSize={REPORT_PAGE_SIZE}
+        searchTerm={searchTerm}
+        typeFilter={typeFilter}
+        hasFilters={hasFilters}
+        onRefresh={fetchReports}
+        onSearchTermChange={setSearchTerm}
+        onTypeFilterChange={setTypeFilter}
+        onClearFilters={clearFilters}
+        onGenerateType={(type) => openGenerate(type)}
+        onView={setViewing}
+        onEdit={(report) => openGenerate(report.reportType, report)}
+        onExport={exportReportCSV}
+        onDelete={requestDelete}
+        onPrevPage={() => setReportsPage((p) => Math.max(1, p - 1))}
+        onNextPage={() => setReportsPage((p) => p + 1)}
+      />
 
       {showGenerate && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={(e) => { if (e.target === e.currentTarget) setShowGenerate(false); }}
-        >
-          <form onSubmit={handleGenerate} className="bg-card border border-border p-6 rounded-2xl max-w-lg w-full shadow-xl space-y-4 animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <div className="flex items-center space-x-2">
-                <div className="p-2 bg-primary/10 text-primary rounded-xl">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-foreground">Generate {reportType} Report</h3>
-                  <p className="text-xs text-muted-foreground">Compile academic data into a structured report</p>
-                </div>
-              </div>
-              <button type="button" onClick={() => setShowGenerate(false)} className="p-1 text-muted-foreground hover:text-foreground rounded-lg">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-foreground mb-1">Report Title</label>
-                <input
-                  type="text"
-                  required
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-
-              {reportType === "Student Performance" && (
-                <div>
-                  <label className="block text-xs font-bold text-foreground mb-1">Target Student</label>
-                  <select
-                    value={targetId}
-                    onChange={(e) => setTargetId(e.target.value)}
-                    required
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="">
-                      {loadingStudents
-                        ? "Loading students..."
-                        : students.length === 0
-                          ? "No students enrolled in your subjects yet"
-                          : "Select a student..."}
-                    </option>
-                    {students.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                </div>
-              )}
-
-              {reportType === "Quiz Analytics" && (
-                <div>
-                  <label className="block text-xs font-bold text-foreground mb-1">Target Quiz (optional)</label>
-                  <select
-                    value={targetId}
-                    onChange={(e) => setTargetId(e.target.value)}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="">{loadingQuizzes ? "Loading quizzes..." : "All quizzes"}</option>
-                    {quizzes.map((q) => <option key={q.id} value={q.id}>{q.title} ({q.subjectName})</option>)}
-                  </select>
-                </div>
-              )}
-
-              {reportType === "Subject Summary" && (
-                <div>
-                  <label className="block text-xs font-bold text-foreground mb-1">Target Subject (optional)</label>
-                  <select
-                    value={targetId}
-                    onChange={(e) => setTargetId(e.target.value)}
-                    className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="">{loadingSubjects ? "Loading subjects..." : "All subjects"}</option>
-                    {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                </div>
-              )}
-
-              {reportType === "AI Usage" && (
-                <p className="text-[11px] text-muted-foreground bg-muted/30 p-3 rounded-xl border border-border">
-                  {isTeacher
-                    ? "Generates an AI Usage report for your own generated content."
-                    : "Generates an AI Usage report summarizing all AI-generated content across the platform."}
-                </p>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-border">
-              <button type="button" onClick={() => setShowGenerate(false)} className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted">
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={generating}
-                className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                <span>{generating ? "Generating..." : "Generate Report"}</span>
-              </button>
-            </div>
-          </form>
-        </div>
+        <ReportGenerateModal
+          reportType={reportType}
+          title={title}
+          targetId={targetId}
+          students={students}
+          quizzes={quizzes}
+          subjects={subjects}
+          loadingStudents={loadingStudents}
+          loadingQuizzes={loadingQuizzes}
+          loadingSubjects={loadingSubjects}
+          isTeacher={isTeacher}
+          generating={generating}
+          onTitleChange={setTitle}
+          onTargetIdChange={setTargetId}
+          onSubmit={handleGenerate}
+          onClose={() => setShowGenerate(false)}
+        />
       )}
 
       {deleteTarget && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={(e) => { if (e.target === e.currentTarget) setDeleteTarget(null); }}
-        >
-          <div className="bg-card border border-border p-6 rounded-2xl max-w-sm w-full shadow-xl space-y-4 animate-in fade-in zoom-in-95">
-            <div className="flex items-start justify-between gap-3 pb-3 border-b border-border">
-              <div className="space-y-1">
-                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                  <Trash2 className="w-4 h-4 text-rose-600" /> Delete Report
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Are you sure you want to delete "{deleteTarget.title}"? This action cannot be undone.
-                </p>
-              </div>
-              <button onClick={() => setDeleteTarget(null)} className="p-1 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
-              <button
-                type="button"
-                onClick={() => setDeleteTarget(null)}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={confirmDelete}
-                disabled={deleting}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
-              >
-                {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                <span>{deleting ? "Deleting..." : "Yes, Delete"}</span>
-              </button>
-            </div>
-          </div>
-        </div>
+        <ReportDeleteModal
+          report={deleteTarget}
+          deleting={deleting}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={confirmDelete}
+        />
       )}
 
       {viewing && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={(e) => { if (e.target === e.currentTarget) setViewing(null); }}
-        >
-          <div className="bg-card border border-border p-6 rounded-2xl max-w-2xl w-full shadow-xl space-y-4 animate-in fade-in zoom-in-95">
-            <div className="flex items-start justify-between gap-3 pb-3 border-b border-border">
-              <div className="space-y-1 min-w-0">
-                <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-primary/10 text-primary uppercase tracking-wider">
-                  {viewing.reportType}
-                </span>
-                <h3 className="text-lg font-bold text-foreground leading-snug">{viewing.title}</h3>
-                <p className="text-[11px] text-muted-foreground">Generated {viewing.generatedAt}</p>
-              </div>
-              <button onClick={() => setViewing(null)} className="p-1 text-muted-foreground hover:text-foreground rounded-lg cursor-pointer">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
-              {renderDetails(viewing)}
-
-              {summaryRows(viewing).length === 0 && !renderDetails(viewing) ? (
-                <p className="text-xs text-muted-foreground py-6 text-center">No summary data available for this report.</p>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {summaryRows(viewing).map((row, i) => (
-                    <div key={i} className="flex items-center justify-between gap-3 p-3 rounded-xl bg-muted/20 border border-border/60 text-xs">
-                      <span className="font-bold text-foreground">{row.label}</span>
-                      <span className="text-muted-foreground text-right">{row.value}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
-              <button
-                onClick={() => exportReportCSV(viewing)}
-                className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" /> CSV
-              </button>
-              <button onClick={() => setViewing(null)} className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer">
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <ReportViewModal
+          report={viewing}
+          onClose={() => setViewing(null)}
+          onExport={exportReportCSV}
+        />
       )}
     </div>
   );

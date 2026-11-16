@@ -310,6 +310,7 @@ export const SubjectsPage: React.FC = () => {
   });
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSubjectPage(1);
   }, [subjectQuery, semesterFilter, courseFilter, teacherFilter]);
 
@@ -328,6 +329,7 @@ export const SubjectsPage: React.FC = () => {
   );
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRosterPage(1);
   }, [rosterQuery]);
 
@@ -346,6 +348,7 @@ export const SubjectsPage: React.FC = () => {
     return matchesQuery && matchesStatus;
   });
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAssignPage(1);
   }, [assignQuery, assignStatusFilter]);
   const pagedAssignStudents = slicePage(filteredAssignStudents, assignPage);

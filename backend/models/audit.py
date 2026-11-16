@@ -1,4 +1,5 @@
 from extensions import db
+from sqlalchemy import DateTime
 
 class ActivityLogModel(db.Model):
     __tablename__ = "activity_logs"
@@ -7,6 +8,7 @@ class ActivityLogModel(db.Model):
     activity = db.Column(db.String(255), nullable=False)
     ip_address = db.Column(db.String(45), nullable=True)
     created_at = db.Column(db.String(64), nullable=False)
+    created_at_dt = db.Column(DateTime(timezone=True), nullable=True)
     device = db.Column(db.String(100), nullable=True)
     browser = db.Column(db.String(100), nullable=True)
     user_name = db.Column(db.String(128), nullable=False, default="User")
@@ -24,7 +26,7 @@ class ActivityLogModel(db.Model):
             "ipAddress": self.ip_address,
             "device": self.device,
             "browser": self.browser,
-            "timestamp": self.created_at
+            "timestamp": self.created_at_dt.isoformat().replace("+00:00", "Z") if self.created_at_dt else (self.created_at or "")
         }
 
 class SystemSettingModel(db.Model):
@@ -43,3 +45,4 @@ class ActivityLogArchiveModel(db.Model):
     details = db.Column(db.Text)
     ip_address = db.Column(db.String(45))
     created_at = db.Column(db.String(64))
+    created_at_dt = db.Column(DateTime(timezone=True), nullable=True)

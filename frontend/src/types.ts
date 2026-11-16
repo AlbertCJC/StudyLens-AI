@@ -19,6 +19,7 @@ export interface Subject {
   description: string;
   teacherId: string;
   teacherName: string;
+  teacherAvatar?: string | null;
   studentCount: number;
   materialCount: number;
   semester?: string;

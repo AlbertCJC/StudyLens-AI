@@ -1,4 +1,5 @@
 from extensions import db
+from sqlalchemy import DateTime
 
 class StudentProgressModel(db.Model):
     __tablename__ = "student_progress"
@@ -9,4 +10,6 @@ class StudentProgressModel(db.Model):
     average_score = db.Column(db.Float, default=0.0)
     learning_level = db.Column(db.String(32), default="Intermediate")
     updated_at = db.Column(db.String(64), nullable=False)
+    updated_at_dt = db.Column(DateTime(timezone=True), nullable=True)
     last_activity = db.Column(db.String(64), nullable=False)
+    last_activity_dt = db.Column(DateTime(timezone=True), nullable=True)

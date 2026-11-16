@@ -2,7 +2,7 @@
   "name": "StudyLens AI",
   "description": "An Adaptive Learning and Automated Assessment Generation Platform for Students, Teachers, and Admins",
   "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+    "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GROQ_API"
   ]
 }

@@ -5,6 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
 import { Pagination, slicePage } from "../../components/Pagination";
+import { DeleteFlashcardDeckModal } from "./DeleteFlashcardDeckModal";
 
 interface FlashcardsPageProps {
   onNavigate: (tab: string, options?: { mode?: "flashcards" }) => void;
@@ -18,13 +19,15 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
   const [cardIndex, setCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [shuffled, setShuffled] = useState<Flashcard[] | null>(null);
-  const [confirmDeleteDeckId, setConfirmDeleteDeckId] = useState<string | null>(null);
+  const [deckToDelete, setDeckToDelete] = useState<FlashcardDeck | null>(null);
+  const [deletingDeck, setDeletingDeck] = useState(false);
   const [deckPage, setDeckPage] = useState(1);
   const [previewDeck, setPreviewDeck] = useState<FlashcardDeck | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
   const [previewFlipped, setPreviewFlipped] = useState(false);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setShuffled(null);
     setCardIndex(0);
     setIsFlipped(false);
@@ -124,25 +127,30 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
   }, [previewDeck]);
 
   const handleDeleteDeck = async (deckId: string) => {
+    setDeletingDeck(true);
     try {
       const res = await authFetch(`/api/flashcards/${deckId}`, { method: "DELETE" });
-      if (res.ok) {
-        const remaining = decks.filter((d) => d.id !== deckId);
-        setDecks(remaining);
-        if (activeDeck?.id === deckId) {
-          setActiveDeck(null);
-          setCardIndex(0);
-          setIsFlipped(false);
-        }
-        if (previewDeck?.id === deckId) {
-          setPreviewDeck(null);
-        }
-        setConfirmDeleteDeckId(null);
-        showToast("Deck deleted.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data?.error || "Could not delete the deck. Please try again.", "error");
+        return;
       }
+      setDecks((prev) => prev.filter((deck) => deck.id !== deckId));
+      if (activeDeck?.id === deckId) {
+        setActiveDeck(null);
+        setCardIndex(0);
+        setIsFlipped(false);
+      }
+      if (previewDeck?.id === deckId) {
+        setPreviewDeck(null);
+      }
+      setDeckToDelete(null);
+      showToast("Deck deleted.");
     } catch (err) {
       console.error("Delete deck error:", err);
       showToast("Could not delete the deck. Please try again.", "error");
+    } finally {
+      setDeletingDeck(false);
     }
   };
 
@@ -220,40 +228,18 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                           {d.cards.length} Card{d.cards.length === 1 ? "" : "s"}
                         </span>
                       </div>
-                      {(currentUser?.role === "teacher" || currentUser?.role === "admin" || d.createdById === currentUser?.id) &&
-                        (confirmDeleteDeckId === d.id ? (
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteDeck(d.id);
-                              }}
-                              className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-bold cursor-pointer"
-                            >
-                              Confirm
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setConfirmDeleteDeckId(null);
-                              }}
-                              className="px-2 py-1 bg-muted text-foreground rounded-lg text-[10px] font-bold cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConfirmDeleteDeckId(d.id);
-                            }}
-                            title="Delete deck"
-                            className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-lg cursor-pointer shrink-0"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        ))}
+                      {(currentUser?.role === "teacher" || currentUser?.role === "admin" || d.createdById === currentUser?.id) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeckToDelete(d);
+                          }}
+                          title="Delete deck"
+                          className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-lg cursor-pointer shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
 
                     <button
@@ -316,33 +302,14 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                 {(currentUser?.role === "teacher" ||
                   currentUser?.role === "admin" ||
                   activeDeck.createdById === currentUser?.id) && (
-                  <div>
-                    {confirmDeleteDeckId === activeDeck.id ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleDeleteDeck(activeDeck.id)}
-                          className="px-2 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-bold cursor-pointer"
-                        >
-                          Confirm
-                        </button>
-                        <button
-                          onClick={() => setConfirmDeleteDeckId(null)}
-                          className="px-2 py-1.5 bg-muted text-foreground rounded-lg text-[10px] font-bold cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmDeleteDeckId(activeDeck.id)}
-                        title="Delete active deck"
-                        className="px-2 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete Deck</span>
-                      </button>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => setDeckToDelete(activeDeck)}
+                    title="Delete active deck"
+                    className="px-2 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Deck</span>
+                  </button>
                 )}
               </div>
             </div>
@@ -614,6 +581,8 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
           </div>
         );
       })()}
+
+      {deckToDelete && <DeleteFlashcardDeckModal deck={deckToDelete} busy={deletingDeck} onClose={() => setDeckToDelete(null)} onConfirm={() => handleDeleteDeck(deckToDelete.id)} />}
     </div>
   );
 };

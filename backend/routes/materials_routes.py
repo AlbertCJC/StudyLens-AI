@@ -10,6 +10,7 @@ from controllers.materials_controller import (
     flag_material,
     get_material_flags,
     get_materials,
+    issue_material_view_token_for_material,
     resolve_material_flag,
     save_ai_resource_as_material,
     update_material,
@@ -39,8 +40,16 @@ def convert_material_to_pdf_route(material_id):
     return convert_material_to_pdf(material_id)
 
 
+@bp.route("/api/materials/<material_id>/view-token", methods=["POST"])
+@require_auth
+def issue_material_view_token_route(material_id):
+    return issue_material_view_token_for_material(material_id)
+
+
 @bp.route("/api/materials/<material_id>/view", methods=["GET"])
 def view_material_file_route(material_id):
+    # Auth is enforced inside the controller so Office Viewer can present a
+    # short-lived signed token instead of a bearer header.
     return view_material_file(material_id)
 
 

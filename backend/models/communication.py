@@ -1,5 +1,6 @@
 from extensions import db
-from models.subject import SubjectModel
+from sqlalchemy import DateTime
+from sqlalchemy.orm import relationship
 
 class NotificationModel(db.Model):
     __tablename__ = "notifications"
@@ -8,7 +9,9 @@ class NotificationModel(db.Model):
     title = db.Column(db.String(255), nullable=False)
     message = db.Column(db.Text, nullable=False)
     read_at = db.Column(db.String(64), nullable=True)
+    read_at_dt = db.Column(DateTime(timezone=True), nullable=True)
     created_at = db.Column(db.String(64), nullable=False)
+    created_at_dt = db.Column(DateTime(timezone=True), nullable=True)
     target = db.Column(db.String(255), nullable=True)
 
     def to_dict(self):
@@ -18,7 +21,7 @@ class NotificationModel(db.Model):
             "title": self.title,
             "message": self.message,
             "isRead": bool(self.read_at),
-            "createdAt": self.created_at,
+            "createdAt": self.created_at_dt.isoformat().replace("+00:00", "Z") if self.created_at_dt else (self.created_at or ""),
             "target": self.target or None
         }
 
@@ -30,18 +33,38 @@ class AnnouncementModel(db.Model):
     title = db.Column(db.String(255), nullable=False)
     message = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.String(64), nullable=False)
+    created_at_dt = db.Column(DateTime(timezone=True), nullable=True)
     updated_at = db.Column(db.String(64), nullable=True)
+    updated_at_dt = db.Column(DateTime(timezone=True), nullable=True)
     posted_at = db.Column(db.String(64), nullable=True)
+    posted_at_dt = db.Column(DateTime(timezone=True), nullable=True)
     author_name = db.Column(db.String(128), nullable=False, default="Faculty")
     target_audience = db.Column(db.String(32), default="all")
     priority = db.Column(db.String(32), default="medium")
 
+    subject = db.relationship("SubjectModel", foreign_keys=[subject_id])
+
+    def _subject_name_loaded(self):
+        """Resolve the subject display name from an already-loaded relationship.
+
+        Never queries the database: returns None when the relationship has not
+        been eagerly loaded.
+        """
+        from sqlalchemy.inspection import inspect
+        try:
+            if not inspect(self).attrs.subject.loaded:
+                return None
+        except Exception:
+            return None
+        sub = self.subject
+        if sub is None:
+            return None
+        return f"{sub.subject_code} - {sub.subject_name}"
+
     def to_dict(self):
-        subject_name = ""
-        if self.subject_id:
-            sub = db.session.get(SubjectModel, self.subject_id)
-            if sub:
-                subject_name = f"{sub.subject_code} - {sub.subject_name}"
+        subject_name = self._subject_name_loaded()
+        if subject_name is None:
+            subject_name = ""
         return {
             "id": self.announcement_id,
             "teacherId": self.teacher_id,
@@ -52,5 +75,5 @@ class AnnouncementModel(db.Model):
             "priority": self.priority,
             "subjectId": self.subject_id,
             "subjectName": subject_name,
-            "createdAt": self.created_at
+            "createdAt": self.created_at_dt.isoformat().replace("+00:00", "Z") if self.created_at_dt else (self.created_at or ""),
         }

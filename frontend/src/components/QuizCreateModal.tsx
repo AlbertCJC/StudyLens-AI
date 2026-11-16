@@ -1,9 +1,10 @@
-import { Plus, X, Sparkles, CheckCircle2, User, GraduationCap } from "lucide-react";
+import { Plus, X, Sparkles, CheckCircle2, User, GraduationCap, Pencil } from "lucide-react";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { authFetch } from "../utils/authFetch";
 import { useToast } from "../context/ToastContext";
 import type { Quiz, QuizQuestion, Subject, DifficultyLevel, BloomsTaxonomy } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { resolveOptionIndex, resolveTrueFalseIndex } from "../pages/learning/assessment/assessmentUtils";
 
 const FIXED_PASS_PERCENTAGE = 75;
 const FIXED_DIFFICULTY: DifficultyLevel = "medium";
@@ -120,12 +121,14 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
     (quizToEdit?.questions || []).map((q, i) => {
       let correctAnswer = "";
       if (q.type === "true_false") {
-        const tf = Array.isArray(q.correctAnswer) ? Number(q.correctAnswer[0]) : Number(q.correctAnswer);
+        const tf = resolveTrueFalseIndex(q.correctAnswer);
         correctAnswer = tf === 1 ? "False" : tf === 0 ? "True" : "";
       } else if (q.type === "multiple_choice") {
         const options = q.options || [];
-        const idx = Array.isArray(q.correctAnswer) ? Number(q.correctAnswer[0]) : Number(q.correctAnswer);
-        correctAnswer = Number.isInteger(idx) && options[idx] !== undefined ? options[idx] : String(q.correctAnswer ?? "");
+        const idx = Array.isArray(q.correctAnswer)
+          ? resolveOptionIndex(q.correctAnswer[0], options)
+          : resolveOptionIndex(q.correctAnswer, options);
+        correctAnswer = idx >= 0 && options[idx] !== undefined ? options[idx] : String(q.correctAnswer ?? "");
       } else {
         correctAnswer = String(q.correctAnswer ?? "");
       }
@@ -150,6 +153,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
   const [draftExplanation, setDraftExplanation] = useState("");
   const [draftOpts, setDraftOpts] = useState<string[]>(["", "", "", ""]);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const selectedSubject = subjects.find((s) => s.id === subjectId);
@@ -211,9 +215,42 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [open, dirty]);
 
+  const clearDraftForm = useCallback(() => {
+    setEditingDraftId(null);
+    setDraftQuestion("");
+    setDraftCorrect("");
+    setDraftExplanation("");
+    setDraftOpts(["", "", "", ""]);
+    setDraftError(null);
+  }, []);
+
+  const startEditDraft = useCallback((q: CreateDraft) => {
+    setEditingDraftId(q.localId);
+    setDraftQuestion(q.question);
+    setDraftType(q.type);
+    setDraftExplanation(q.explanation);
+    setDraftError(null);
+
+    if (q.type === "multiple_choice") {
+      const options = [...q.options];
+      while (options.length < 4) options.push("");
+      setDraftOpts(options.slice(0, 4));
+      const rawCorrect = Array.isArray(q.correctAnswer) ? q.correctAnswer[0] : q.correctAnswer;
+      const correctIdx = resolveOptionIndex(rawCorrect, q.options);
+      setDraftCorrect(correctIdx >= 0 ? correctIdx : "");
+    } else if (q.type === "true_false") {
+      const tfIdx = resolveTrueFalseIndex(q.correctAnswer);
+      setDraftOpts(["", "", "", ""]);
+      setDraftCorrect(tfIdx === 1 ? "False" : tfIdx === 0 ? "True" : "");
+    } else {
+      setDraftOpts(["", "", "", ""]);
+      setDraftCorrect(String(q.correctAnswer ?? ""));
+    }
+  }, []);
+
   const addDraftQuestion = useCallback(() => {
     const draft: CreateDraft = {
-      localId: `q-${Date.now()}`,
+      localId: editingDraftId || `q-${Date.now()}`,
       question: draftQuestion.trim(),
       type: draftType,
       options: draftType === "multiple_choice" ? draftOpts.map((o) => o.trim()) : [],
@@ -231,19 +268,20 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
       return;
     }
 
-    setDraftQuestions((prev) => [...prev, draft]);
-    setDraftQuestion("");
-    setDraftCorrect("");
-    setDraftExplanation("");
-    setDraftOpts(["", "", "", ""]);
-    setDraftError(null);
+    setDraftQuestions((prev) =>
+      editingDraftId
+        ? prev.map((q) => (q.localId === editingDraftId ? draft : q))
+        : [...prev, draft]
+    );
+    clearDraftForm();
     markDirty();
-  }, [draftQuestion, draftType, draftCorrect, draftExplanation, draftOpts, topicTag, markDirty]);
+  }, [editingDraftId, draftQuestion, draftType, draftCorrect, draftExplanation, draftOpts, topicTag, clearDraftForm, markDirty, showToast]);
 
   const removeDraftQuestion = useCallback((localId: string) => {
     setDraftQuestions((prev) => prev.filter((q) => q.localId !== localId));
+    if (editingDraftId === localId) clearDraftForm();
     markDirty();
-  }, [markDirty]);
+  }, [editingDraftId, clearDraftForm, markDirty]);
 
   const buildQuizQuestions = useCallback((): QuizQuestion[] =>
     draftQuestions.map((q) => ({
@@ -251,16 +289,20 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
       question: q.question,
       type: q.type,
       options:
-        q.type === "multiple_choice" ? q.options.filter((o) => o.trim() !== "") : undefined,
+        q.type === "multiple_choice"
+          ? q.options.filter((o) => o.trim() !== "")
+          : q.type === "true_false"
+            ? ["True", "False"]
+            : [],
       correctAnswer:
         q.type === "multiple_choice"
           ? typeof q.correctAnswer === "number" && q.correctAnswer >= 0 && q.correctAnswer < q.options.length
             ? q.correctAnswer
             : q.options.indexOf(String(q.correctAnswer))
           : q.type === "true_false"
-            ? q.correctAnswer === "True"
-              ? 0
-              : 1
+            ? resolveTrueFalseIndex(q.correctAnswer) === 1
+              ? 1
+              : 0
             : q.correctAnswer,
       explanation: q.explanation,
       bloomsLevel: q.bloomsLevel,
@@ -596,14 +638,26 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                 <h4 className="font-bold text-foreground text-xs">Manual Question Builder</h4>
                 <p className="text-[11px] text-muted-foreground">{draftQuestions.length} Question(s) Added</p>
               </div>
-              <button
-                type="button"
-                onClick={addDraftQuestion}
-                className="px-3.5 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1 shadow-xs"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Question</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                {editingDraftId && (
+                  <button
+                    type="button"
+                    onClick={clearDraftForm}
+                    className="px-3 py-1.5 bg-muted text-foreground rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Cancel Edit</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={addDraftQuestion}
+                  className="px-3.5 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1 shadow-xs"
+                >
+                  {editingDraftId ? <Pencil className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                  <span>{editingDraftId ? "Update Question" : "Add Question"}</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-3 pt-1">
@@ -768,13 +822,24 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                         </span>
                         <span className="truncate font-medium">{i + 1}. {q.question}</span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => removeDraftQuestion(q.localId)}
-                        className="text-rose-600 hover:text-rose-700 p-1 rounded hover:bg-rose-500/10 cursor-pointer"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => startEditDraft(q)}
+                          className="text-primary hover:text-primary/80 p-1 rounded hover:bg-primary/10 cursor-pointer"
+                          title="Edit question"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeDraftQuestion(q.localId)}
+                          className="text-rose-600 hover:text-rose-700 p-1 rounded hover:bg-rose-500/10 cursor-pointer"
+                          title="Remove question"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

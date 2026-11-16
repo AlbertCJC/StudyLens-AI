@@ -51,6 +51,25 @@ class TestBuildReportSummary:
             )
             assert status == 403
 
+    def test_student_performance_report_all_students_admin(self, init_database, app_instance):
+        with app_instance.app_context():
+            summary, status = _build_report_summary("Student Performance", role="admin")
+            assert status == 200
+            assert summary.get("allStudents") is True
+            assert isinstance(summary.get("students"), list)
+            assert summary.get("studentCount", 0) >= 1
+
+    def test_student_performance_report_all_students_teacher_scoped(self, init_database, app_instance):
+        with app_instance.app_context():
+            summary, status = _build_report_summary("Student Performance", teacher_id="tea-1", role="teacher")
+            assert status == 200
+            assert summary.get("allStudents") is True
+            assert isinstance(summary.get("students"), list)
+            assert summary.get("studentCount", 0) >= 1
+            for st in summary["students"]:
+                assert "studentId" in st and "studentName" in st
+                assert "quizzesTaken" in st and "averageScore" in st and "passRate" in st
+
     def test_quiz_analytics_report(self, init_database, app_instance):
         with app_instance.app_context():
             summary, status = _build_report_summary("Quiz Analytics", teacher_id="tea-1")
@@ -314,3 +333,47 @@ class TestReportsEndpoints:
             data = resp.get_json()
             # The generated_at should NOT be the far future date
             assert data["generatedAt"] != far_future
+
+    def test_admin_reports_are_own_only(self, client, init_database, app_instance):
+        with app_instance.app_context():
+            from app import UserModel
+            admin = db.session.get(UserModel, "adm-1")
+            teacher = db.session.get(UserModel, "tea-1")
+            admin_headers = auth_headers_for(admin)
+            teacher_headers = auth_headers_for(teacher)
+
+            client.post("/api/reports",
+                data=json.dumps({
+                    "reportType": "Student Performance",
+                    "title": "Teacher Report",
+                    "targetId": "stu-1",
+                    "teacherId": "tea-1",
+                    "userRole": "teacher",
+                }),
+                content_type="application/json",
+                headers=teacher_headers,
+            )
+            client.post("/api/reports",
+                data=json.dumps({
+                    "reportType": "Student Performance",
+                    "title": "Admin Report",
+                    "targetId": "stu-1",
+                    "teacherId": "tea-1",
+                    "userRole": "admin",
+                }),
+                content_type="application/json",
+                headers=admin_headers,
+            )
+
+            teacher_list = client.get("/api/reports", headers=teacher_headers).get_json()
+            assert teacher_list["total"] >= 1
+            teacher_report_id = teacher_list["reports"][0]["id"]
+
+            admin_list = client.get("/api/reports", headers=admin_headers).get_json()
+            assert all(r["generatedBy"] == "adm-1" for r in admin_list["reports"])
+
+            resp = client.get(f"/api/reports/{teacher_report_id}", headers=admin_headers)
+            assert resp.status_code == 403
+
+            resp = client.delete(f"/api/reports/{teacher_report_id}", headers=admin_headers)
+            assert resp.status_code == 403

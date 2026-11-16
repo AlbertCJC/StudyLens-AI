@@ -141,7 +141,7 @@ def init_database(app_instance):
 
 def auth_headers_for(user):
     """Generate auth headers for a user using the app's generate_token."""
-    token = generate_token({
+    token, _jti = generate_token({
         "id": user.user_id,
         "email": user.email,
         "role": user.role,

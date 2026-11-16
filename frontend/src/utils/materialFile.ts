@@ -52,10 +52,27 @@ export const fetchMaterialBlob = async (mat: LearningMaterial): Promise<Blob> =>
   return res.blob();
 };
 
+// Microsoft's Office viewer fetches the file server-side and cannot send an
+// Authorization header. Exchange the session for a short-lived signed URL.
+export const fetchMaterialViewUrl = async (
+  mat: LearningMaterial | null | undefined
+): Promise<string | null> => {
+  if (!mat?.id) return null;
+  const res = await authFetch(`/api/materials/${encodeURIComponent(mat.id)}/view-token`, {
+    method: "POST",
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { url?: string };
+  return data.url || null;
+};
+
 // Microsoft's Office viewer fetches the file server-side, so it only works when
 // the file URL is publicly reachable (never for local /uploads or localhost).
-export const officeEmbedUrl = (mat: LearningMaterial | null | undefined): string | null => {
-  const url = resolveFileUrl(mat);
+export const officeEmbedUrl = (
+  mat: LearningMaterial | null | undefined,
+  signedViewUrl?: string | null
+): string | null => {
+  const url = signedViewUrl || resolveFileUrl(mat);
   if (!url || !/^https?:\/\//i.test(url)) return null;
   if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(url)) return null;
   return `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`;

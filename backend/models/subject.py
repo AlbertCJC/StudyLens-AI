@@ -1,4 +1,6 @@
 from extensions import db
+from sqlalchemy import DateTime
+from sqlalchemy.orm import relationship
 
 class SubjectModel(db.Model):
     __tablename__ = "subjects"
@@ -14,13 +16,11 @@ class SubjectModel(db.Model):
     student_count = db.Column(db.Integer, default=51)
     material_count = db.Column(db.Integer, default=0)
     created_at = db.Column(db.String(64), nullable=False)
+    created_at_dt = db.Column(DateTime(timezone=True), nullable=True)
+
+    teacher = db.relationship("UserModel", foreign_keys=[teacher_id])
 
     def to_dict(self):
-        roster_count = None
-        try:
-            roster_count = StudentSubjectModel.query.filter_by(subject_id=self.subject_id).count()
-        except Exception:
-            roster_count = None
         return {
             "id": self.subject_id,
             "code": self.subject_code,
@@ -28,12 +28,13 @@ class SubjectModel(db.Model):
             "description": self.description,
             "teacherId": self.teacher_id,
             "teacherName": self.teacher_name,
+            "teacherAvatar": getattr(self, "_teacher_avatar", None),
             "semester": self.semester,
             "course": self.course,
             "schoolYear": self.school_year,
-            "studentCount": roster_count if roster_count is not None else self.student_count,
+            "studentCount": self.student_count,
             "materialCount": self.material_count,
-            "createdAt": self.created_at
+            "createdAt": self.created_at_dt.isoformat().replace("+00:00", "Z") if self.created_at_dt else (self.created_at or ""),
         }
 
 class StudentSubjectModel(db.Model):

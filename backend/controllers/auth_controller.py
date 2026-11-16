@@ -2,20 +2,38 @@
 
 import datetime
 import secrets
+import jwt
 
 from flask import jsonify, request
-from werkzeug.security import check_password_hash, generate_password_hash
+from lib.password import hash_password, rehash_if_legacy, verify_password
+from pymysql.err import IntegrityError
 
 from db.session import _commit_or_warn
 from email_service import send_otp_email
 from extensions import db
+from config import (
+    AUTH_COOKIE_NAME,
+    AUTH_COOKIE_DOMAIN,
+    AUTH_COOKIE_PATH,
+    AUTH_COOKIE_SECURE,
+    AUTH_COOKIE_SAMESITE,
+    CSRF_COOKIE_NAME,
+    REFRESH_COOKIE_DOMAIN,
+    REFRESH_COOKIE_NAME,
+    REFRESH_COOKIE_PATH,
+    REFRESH_COOKIE_SECURE,
+    REFRESH_COOKIE_SAMESITE,
+    SECRET_KEY,
+)
+from lib.auth import is_mobile_client
 from lib.constants import (
     EMAIL_VERIFY_MAX_ATTEMPTS,
-    OTP_DEV_REVEAL,
     RESET_OTP_EXPIRY_MINUTES,
     RESET_OTP_MAX_ATTEMPTS,
     TWO_FACTOR_MAX_ATTEMPTS,
+    otp_reveal_enabled,
 )
+from lib.id import generate_id
 from lib.rate_limit import _rate_limit_exceeded
 from lib.security import _DUMMY_PASSWORD_HASH
 from lib.time import _parse_iso, _utcnow_iso_z, _utcnow_naive
@@ -27,15 +45,109 @@ from services.auth_service import (
     _clear_login_failures,
     _email_verify_payload,
     _generate_otp,
+    _hash_otp,
     _is_account_locked,
     _issue_email_verify_code,
     _lock_minutes_remaining,
     _register_login_failure,
     _user_is_email_verified,
+    _verify_otp,
+    find_user_by_email,
+    generate_refresh_token,
     generate_token,
+    refresh_access_token,
+    REFRESH_TOKEN_DAYS,
+    revoke_all_refresh_tokens,
+    revoke_all_sessions,
+    revoke_refresh_token,
+    revoke_session,
+    session_timeout_minutes,
 )
 from services.log_service import log_action
 from services.settings_service import _load_system_settings
+
+
+def _session_cookie_kwargs(max_age):
+    kwargs = {
+        "path": AUTH_COOKIE_PATH,
+        "httponly": True,
+        "samesite": AUTH_COOKIE_SAMESITE,
+        "max_age": max_age,
+    }
+    if AUTH_COOKIE_DOMAIN:
+        kwargs["domain"] = AUTH_COOKIE_DOMAIN
+    if AUTH_COOKIE_SECURE:
+        kwargs["secure"] = True
+    return kwargs
+
+
+def _csrf_cookie_kwargs(max_age):
+    kwargs = {
+        "path": AUTH_COOKIE_PATH,
+        "samesite": AUTH_COOKIE_SAMESITE,
+        "max_age": max_age,
+    }
+    if AUTH_COOKIE_DOMAIN:
+        kwargs["domain"] = AUTH_COOKIE_DOMAIN
+    if AUTH_COOKIE_SECURE:
+        kwargs["secure"] = True
+    return kwargs
+
+
+def _apply_session_cookies(response, token, csrf_token=None):
+    max_age = session_timeout_minutes() * 60
+    response.set_cookie(AUTH_COOKIE_NAME, token, **_session_cookie_kwargs(max_age))
+    response.set_cookie(
+        CSRF_COOKIE_NAME, csrf_token or secrets.token_urlsafe(32), **_csrf_cookie_kwargs(max_age)
+    )
+    return response
+
+
+def _refresh_cookie_kwargs(max_age):
+    kwargs = {
+        "path": REFRESH_COOKIE_PATH,
+        "httponly": True,
+        "samesite": REFRESH_COOKIE_SAMESITE,
+        "max_age": max_age,
+    }
+    if REFRESH_COOKIE_DOMAIN:
+        kwargs["domain"] = REFRESH_COOKIE_DOMAIN
+    if REFRESH_COOKIE_SECURE:
+        kwargs["secure"] = True
+    return kwargs
+
+
+def _apply_refresh_cookie(response, refresh_token):
+    max_age = REFRESH_TOKEN_DAYS * 24 * 60 * 60
+    response.set_cookie(REFRESH_COOKIE_NAME, refresh_token, **_refresh_cookie_kwargs(max_age))
+    return response
+
+
+def _auth_json(user_dict, token, jti, status=200, extra=None):
+    """Login/verify/password-change response: access token (cookie/body), refresh token (cookie/body).
+
+    Records both tokens as active server-side sessions so they can be revoked
+    (logout, password change, suspension, refresh rotation).
+
+    For web (non-mobile) clients, also issues a double-submit CSRF token that
+    the frontend must echo back as the ``X-CSRF-Token`` header on unsafe
+    cookie-authenticated requests.
+    """
+    body = {"user": user_dict}
+    if extra:
+        body.update(extra)
+    refresh_token, refresh_jti = generate_refresh_token(user_dict)
+    if is_mobile_client():
+        body["token"] = token
+        body["refreshToken"] = refresh_token
+    response = jsonify(body)
+    if not is_mobile_client():
+        csrf_token = secrets.token_urlsafe(32)
+        body["csrfToken"] = csrf_token
+        response = jsonify(body)
+        _apply_session_cookies(response, token, csrf_token)
+        _apply_refresh_cookie(response, refresh_token)
+    return response, status
 
 
 def auth_login():
@@ -55,13 +167,13 @@ def auth_login():
     # Accounts are provisioned by administrators or self-registration; they are
     # NEVER minted on the fly from client-supplied identity (name/role/id). Login
     # must match an account that already exists in the user directory.
-    user = UserModel.query.filter(db.func.lower(UserModel.email) == email_str.lower()).first() if email_str else None
+    user = find_user_by_email(email_str)
 
     if not user:
         # Burn the same time a real password verification costs, then reply with
         # the identical generic wording used for a wrong password so attackers
         # cannot tell which emails exist in the user directory (enumeration).
-        check_password_hash(_DUMMY_PASSWORD_HASH, data.get("password") if isinstance(data.get("password"), str) else "")
+        verify_password(data.get("password") if isinstance(data.get("password"), str) else "", _DUMMY_PASSWORD_HASH)
         return jsonify({"error": "Invalid email or password. Please try again.", "code": "INVALID_CREDENTIALS"}), 401
 
     # Accounts throttled at the lockout cap cannot keep guessing.
@@ -80,7 +192,7 @@ def auth_login():
     password = data.get("password")
     if not isinstance(password, str) or not password:
         return jsonify({"error": "Invalid email or password. Please try again.", "code": "INVALID_CREDENTIALS"}), 401
-    if not check_password_hash(user.password_hash or "", password):
+    if not verify_password(password, user.password_hash or ""):
         _register_login_failure(user)
         locked = _is_account_locked(user)
         log_action(user.user_id, user.to_dict()["name"], user.role, "ACCOUNT_LOCKED" if locked else "LOGIN_FAILED", f"Failed login attempt for {user.email} (incorrect password)")
@@ -91,6 +203,13 @@ def auth_login():
                 "code": "ACCOUNT_LOCKED",
             }), 429
         return jsonify({"error": "Invalid email or password. Please try again.", "code": "INVALID_CREDENTIALS"}), 401
+
+    # Rehash legacy Werkzeug hash with Argon2 on successful login
+    new_hash = rehash_if_legacy(password, user.password_hash or "")
+    if new_hash:
+        user.password_hash = new_hash
+        if not _commit_or_warn("rehash_password"):
+            print("[Auth] Password rehash failed for user", user.user_id)
 
     # Cleared by a successful password check; a fresh 2FA ping also resets the
     # attempts meter so a legitimately signed-in user isn't double-counted.
@@ -116,10 +235,10 @@ def auth_login():
     settings = _load_system_settings()
     if settings.get("require2FA") == "true" and user.role in ("teacher", "admin"):
         code = _generate_otp()
-        user.two_factor_code = code
+        user.two_factor_code = _hash_otp(code)
         user.two_factor_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=5)).isoformat()
-        db.session.commit()
-        if not send_otp_email(user.email, "2fa", code, 5) and OTP_DEV_REVEAL:
+        _commit_or_warn("2FA code issue")
+        if not send_otp_email(user.email, "2fa", code, 5) and otp_reveal_enabled():
             print(f"[Auth] 2FA OTP for {user.email}: {code}")
         log_action(user.user_id, user.to_dict()["name"], user.role, "TWO_FACTOR_REQUIRED", f"2FA code issued for {user.email}")
         payload = {
@@ -128,15 +247,15 @@ def auth_login():
             "email": user.email,
             "expiresInMinutes": 5,
         }
-        if OTP_DEV_REVEAL:
+        if otp_reveal_enabled():
             payload["devCode"] = code
         return jsonify(payload), 200
 
     user_dict = user.to_dict()
-    token = generate_token(user_dict)
+    token, jti = generate_token(user_dict)
     log_action(user.user_id, user_dict["name"], user.role, "USER_LOGIN", f"User {user_dict['name']} ({user.email}) logged in with JWT token")
 
-    return jsonify({"token": token, "user": user_dict})
+    return _auth_json(user_dict, token, jti)
 
 
 def verify_two_factor():
@@ -159,11 +278,11 @@ def verify_two_factor():
             "error": f"Account temporarily locked due to too many failed attempts. Try again in about {show_minutes} minute(s).",
             "code": "ACCOUNT_LOCKED",
         }), 429
-    if not user.two_factor_code or not secrets.compare_digest(user.two_factor_code, code):
+    if not user.two_factor_code or not _verify_otp(code, user.two_factor_code):
         user.two_factor_attempts = (user.two_factor_attempts or 0) + 1
         if (user.two_factor_attempts or 0) >= TWO_FACTOR_MAX_ATTEMPTS:
             _apply_lockout(user)
-        db.session.commit()
+        _commit_or_warn("2FA failure attempt")
         return jsonify({"error": "Invalid verification code. Please try again.", "code": "INVALID_2FA"}), 401
     expires = _parse_iso(user.two_factor_expires_at)
     if expires and _utcnow_naive() > expires:
@@ -172,11 +291,11 @@ def verify_two_factor():
     user.two_factor_code = None
     user.two_factor_expires_at = None
     user.last_login = _utcnow_iso_z()
-    db.session.commit()
+    _commit_or_warn("2FA login")
     user_dict = user.to_dict()
-    token = generate_token(user_dict)
+    token, jti = generate_token(user_dict)
     log_action(user.user_id, user_dict["name"], user.role, "USER_LOGIN", f"User {user_dict['name']} ({user.email}) completed 2FA login")
-    return jsonify({"token": token, "user": user_dict})
+    return _auth_json(user_dict, token, jti)
 
 
 def auth_register():
@@ -203,37 +322,88 @@ def auth_register():
     if not email or "@" not in email:
         return jsonify({"error": "A valid email address is required."}), 400
 
-    existing = UserModel.query.filter(db.func.lower(UserModel.email) == email).first()
+    existing = find_user_by_email(email)
     if existing:
+        # An unfinished sign-up can be resumed safely when the caller proves
+        # ownership of the account by knowing its password: resend the email
+        # verification code instead of making them start over. Verified
+        # accounts, disabled accounts, and wrong passwords still get the same
+        # generic USER_EXISTS response (no account enumeration).
+        password = data.get("password")
+        can_resume = (
+            not _user_is_email_verified(existing)
+            and (existing.status or "active") == "active"
+            and isinstance(password, str)
+            and bool(password)
+            and verify_password(password, existing.password_hash or "")
+        )
+        if can_resume:
+            _issue_email_verify_code(existing)
+            existing_dict = existing.to_dict()
+            log_action(
+                existing.user_id,
+                existing_dict["name"],
+                existing.role,
+                "EMAIL_VERIFY_RESUMED",
+                f"Registration resumed for unverified account: {email}",
+            )
+            return jsonify(_email_verify_payload(existing)), 200
         return jsonify({
             "error": f"Account with email {email} is already registered.",
             "code": "USER_EXISTS"
         }), 409
 
-    names = name.split(" ", 1)
-    new_user = UserModel(
-        user_id=f"usr-{role}-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
-        first_name=names[0] if names else "Registered",
-        last_name=names[1] if len(names) > 1 else "User",
-        email=email,
-        role=role,
-        department=data.get("department") or "College of Computer Studies",
-        student_id=data.get("studentId") or (f"2024-STU-{int(datetime.datetime.now(datetime.timezone.utc).timestamp()) % 8999 + 1000}" if role == "student" else None),
-        status="active",
-        created_at=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-    )
-    password = data.get("password")
-    strength_error = _validate_password_strength(password)
-    if strength_error:
-        return jsonify({"error": strength_error, "code": "PASSWORD_REQUIRED"}), 400
-    new_user.password_hash = generate_password_hash(password)
-    new_user.email_verified = 0
-    db.session.add(new_user)
-    db.session.commit()
+    try:
+        names = name.split(" ", 1)
+        new_user = UserModel(
+            user_id=generate_id(f"usr-{role}"),
+            first_name=names[0] if names else "Registered",
+            last_name=names[1] if len(names) > 1 else "User",
+            email=email,
+            role=role,
+            department=data.get("department") or "College of Computer Studies",
+            student_id=data.get("studentId") or (f"2024-STU-{int(datetime.datetime.now(datetime.timezone.utc).timestamp()) % 8999 + 1000}" if role == "student" else None),
+            status="active",
+            created_at=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        password = data.get("password")
+        strength_error = _validate_password_strength(password)
+        if strength_error:
+            return jsonify({"error": strength_error, "code": "PASSWORD_REQUIRED"}), 400
+        new_user.password_hash = hash_password(password)
+        new_user.email_verified = 0
+        db.session.add(new_user)
+        if not _commit_or_warn("user registration"):
+            return jsonify({
+                "error": "Registration could not be completed. The database write failed. Please try again.",
+                "code": "SAVE_FAILED",
+            }), 500
 
-    _issue_email_verify_code(new_user)
-    log_action(new_user.user_id, new_user.to_dict()["name"], new_user.role, "USER_REGISTER", f"Registered new {role} account: {email} (awaiting email verification)")
-    return jsonify(_email_verify_payload(new_user)), 201
+        user_dict = new_user.to_dict()
+        verify_payload = _email_verify_payload(new_user)
+        _issue_email_verify_code(new_user)
+        log_action(new_user.user_id, user_dict["name"], new_user.role, "USER_REGISTER", f"Registered new {role} account: {email} (awaiting email verification)")
+        return jsonify(verify_payload), 201
+    except IntegrityError as err:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        print(f"[Auth] Registration IntegrityError for {email}: {err}", flush=True)
+        return jsonify({
+            "error": f"Account with email {email} is already registered.",
+            "code": "USER_EXISTS",
+        }), 409
+    except Exception as err:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        print(f"[Auth] Registration failed for {email}: {err}", flush=True)
+        return jsonify({
+            "error": "Registration could not be completed. Please try again.",
+            "code": "REGISTRATION_FAILED",
+        }), 500
 
 
 def verify_email():
@@ -271,18 +441,25 @@ def verify_email():
     if (user.email_verify_attempts or 0) >= EMAIL_VERIFY_MAX_ATTEMPTS:
         _issue_email_verify_code(user)
         return jsonify(_email_verify_payload(user)), 200
-    if not code or not user.email_verify_code or not secrets.compare_digest(user.email_verify_code, code):
+    if not code or not user.email_verify_code or not _verify_otp(code, user.email_verify_code):
         user.email_verify_attempts = (user.email_verify_attempts or 0) + 1
-        db.session.commit()
+        _commit_or_warn("email verification failure attempt")
         return jsonify({"error": "Incorrect verification code. Please try again.", "code": "INVALID_EMAIL_CODE"}), 401
 
-    _clear_email_verify_state(user)
-    user.last_login = _utcnow_iso_z()
-    db.session.commit()
-    user_dict = user.to_dict()
-    token = generate_token(user_dict)
-    log_action(user.user_id, user_dict["name"], user.role, "EMAIL_VERIFIED", f"Email address verified for {user.email}")
-    return jsonify({"token": token, "user": user_dict}), 200
+    try:
+        _clear_email_verify_state(user)
+        user.last_login = _utcnow_iso_z()
+        _commit_or_warn("email verification")
+        user_dict = user.to_dict()
+        token, jti = generate_token(user_dict)
+        log_action(user.user_id, user_dict["name"], user.role, "EMAIL_VERIFIED", f"Email address verified for {user.email}")
+        return _auth_json(user_dict, token, jti)
+    except Exception as e:
+        print(f"[Auth] Email verification failed for {user.email}: {e}")
+        return jsonify({
+            "error": "Email verified but session creation failed. Please sign in with your password.",
+            "code": "VERIFIED_SESSION_FAILED",
+        }), 200
 
 
 def resend_email_code():
@@ -299,7 +476,14 @@ def resend_email_code():
         return jsonify({"error": "Account not found. Please register again.", "code": "NOT_FOUND"}), 404
     if _user_is_email_verified(user):
         return jsonify(_email_verify_payload(user)), 200
-    _issue_email_verify_code(user)
+    try:
+        _issue_email_verify_code(user)
+    except Exception as e:
+        print(f"[Auth] Resend code failed for {user.email}: {e}")
+        return jsonify({
+            "error": "Could not resend the verification code. Please try again.",
+            "code": "RESEND_FAILED",
+        }), 500
     return jsonify(_email_verify_payload(user)), 200
 
 
@@ -335,14 +519,14 @@ def resend_two_factor_code():
             "code": "NO_PENDING_2FA",
         }), 400
     code = _generate_otp()
-    user.two_factor_code = code
+    user.two_factor_code = _hash_otp(code)
     user.two_factor_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=5)).isoformat()
     user.two_factor_attempts = None
-    db.session.commit()
-    if not send_otp_email(user.email, "2fa", code, 5) and OTP_DEV_REVEAL:
+    _commit_or_warn("2FA code resend")
+    if not send_otp_email(user.email, "2fa", code, 5) and otp_reveal_enabled():
         print(f"[Auth] 2FA OTP for {user.email}: {code}")
     payload = {"message": f"A new verification code was sent to {user.email}.", "expiresInMinutes": 5}
-    if OTP_DEV_REVEAL:
+    if otp_reveal_enabled():
         payload["devCode"] = code
     return jsonify(payload), 200
 
@@ -361,12 +545,13 @@ def auth_change_password():
 
     if user.password_hash:
         current_password = data.get("currentPassword")
-        if not isinstance(current_password, str) or not check_password_hash(user.password_hash, current_password):
+        if not isinstance(current_password, str) or not verify_password(current_password, user.password_hash or ""):
             _register_login_failure(user)
             return jsonify({"error": "Current password is incorrect.", "code": "INVALID_CURRENT_PASSWORD"}), 401
 
     _clear_login_failures(user)
-    user.password_hash = generate_password_hash(new_password)
+    new_hash = rehash_if_legacy(new_password, user.password_hash or "")
+    user.password_hash = new_hash or hash_password(new_password)
     # Invalidate every other session this user holds (password knowledge changed).
     user.token_version = (user.token_version or 0) + 1
     if not _commit_or_warn("password change"):
@@ -374,9 +559,16 @@ def auth_change_password():
     # The current session is refreshed with a fresh token (the bumped token_version
     # has just invalidated the old one), so the user stays signed in.
     user_dict = user.to_dict()
-    fresh_token = generate_token(user_dict)
+    fresh_token, fresh_jti = generate_token(user_dict)
     log_action(user.user_id, user_dict["name"], user.role, "PASSWORD_CHANGED", f"User changed their own password")
-    return jsonify({"success": True, "message": "Password updated successfully.", "token": fresh_token, "user": user_dict}), 200
+    # Invalidate every other session this user holds (password changed).
+    revoked = revoke_all_sessions(user.user_id)
+    return _auth_json(
+        user_dict,
+        fresh_token,
+        fresh_jti,
+        extra={"success": True, "message": "Password updated successfully.", "revokedSessions": revoked},
+    )
 
 
 def auth_request_reset_otp():
@@ -391,7 +583,7 @@ def auth_request_reset_otp():
     if not email or "@" not in email:
         return jsonify({"error": "A valid email address is required.", "code": "BAD_REQUEST"}), 400
 
-    user = UserModel.query.filter(db.func.lower(UserModel.email) == email).first()
+    user = find_user_by_email(email)
     if not user:
         # Generic reply so attackers can't enumerate which emails are registered.
         return jsonify({
@@ -411,11 +603,11 @@ def auth_request_reset_otp():
     # Issuing a new code is always allowed: it supersedes any prior code and
     # resets its attempts, so mistaken users aren't stuck behind a burned code.
     code = _generate_otp()
-    user.reset_otp = code
+    user.reset_otp = _hash_otp(code)
     user.reset_otp_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=RESET_OTP_EXPIRY_MINUTES)).isoformat()
     user.reset_otp_attempts = 0
-    db.session.commit()
-    if not send_otp_email(user.email, "reset", code, RESET_OTP_EXPIRY_MINUTES) and OTP_DEV_REVEAL:
+    _commit_or_warn("password reset OTP issue")
+    if not send_otp_email(user.email, "reset", code, RESET_OTP_EXPIRY_MINUTES) and otp_reveal_enabled():
         print(f"[Auth] Password reset OTP for {user.email}: {code}")
     log_action(user.user_id, user.to_dict()["name"], user.role, "RESET_OTP_REQUESTED", f"Password reset code issued for {user.email}")
 
@@ -424,7 +616,7 @@ def auth_request_reset_otp():
         "message": f"A 6-digit verification code was sent to {user.email}. It expires in {RESET_OTP_EXPIRY_MINUTES} minutes.",
         "expiresInMinutes": RESET_OTP_EXPIRY_MINUTES,
     }
-    if OTP_DEV_REVEAL:
+    if otp_reveal_enabled():
         payload["devCode"] = code
     return jsonify(payload), 200
 
@@ -440,13 +632,13 @@ def _check_reset_otp(user, otp):
         user.reset_otp = None
         user.reset_otp_expires_at = None
         user.reset_otp_attempts = None
-        db.session.commit()
+        _commit_or_warn("expired reset OTP cleanup")
         return jsonify({"error": "This code has expired. Request a new one.", "code": "RESET_OTP_EXPIRED"}), 401
     if (user.reset_otp_attempts or 0) >= RESET_OTP_MAX_ATTEMPTS:
         return jsonify({"error": "Too many incorrect reset codes. Request a new code.", "code": "RESET_OTP_LOCKED"}), 429
-    if not otp or not user.reset_otp or not secrets.compare_digest(user.reset_otp, otp):
+    if not otp or not user.reset_otp or not _verify_otp(otp, user.reset_otp):
         user.reset_otp_attempts = (user.reset_otp_attempts or 0) + 1
-        db.session.commit()
+        _commit_or_warn("password reset OTP failure attempt")
         return jsonify({"error": "Incorrect verification code. Please try again.", "code": "INVALID_OTP"}), 401
     return None
 
@@ -471,7 +663,7 @@ def auth_verify_reset_otp():
     if not otp:
         return jsonify({"error": "Please enter the 6-digit verification code.", "code": "BAD_REQUEST"}), 400
 
-    user = UserModel.query.filter(db.func.lower(UserModel.email) == email).first()
+    user = find_user_by_email(email)
     if not user:
         return jsonify({
             "error": "No matching reset request was found for that email. Please request a new code and try again.",
@@ -506,7 +698,7 @@ def auth_reset_password():
     if strength_error:
         return jsonify({"error": strength_error, "code": "WEAK_PASSWORD"}), 400
 
-    user = UserModel.query.filter(db.func.lower(UserModel.email) == email).first()
+    user = find_user_by_email(email)
     if not user:
         # Generic reply so attackers can't use this step to enumerate registered emails.
         return jsonify({
@@ -525,7 +717,7 @@ def auth_reset_password():
         return error
 
     _clear_login_failures(user)
-    user.password_hash = generate_password_hash(new_password)
+    user.password_hash = hash_password(new_password)
     user.reset_otp = None
     user.reset_otp_expires_at = None
     user.reset_otp_attempts = None
@@ -535,3 +727,92 @@ def auth_reset_password():
         return jsonify({"error": "Could not update the password. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
     log_action(user.user_id, user.to_dict()["name"], user.role, "PASSWORD_RESET", f"Password reset via forgot-password flow for {email}")
     return jsonify({"success": True, "message": "Password reset successfully. You can now sign in with your new password."}), 200
+
+
+def auth_logout():
+    """Revokes the current server-side session and refresh token, clears cookies (POST /api/auth/logout)."""
+    response = jsonify({"success": True, "message": "Signed out."})
+    response.delete_cookie(AUTH_COOKIE_NAME, path=AUTH_COOKIE_PATH, domain=AUTH_COOKIE_DOMAIN)
+    response.delete_cookie(CSRF_COOKIE_NAME, path=AUTH_COOKIE_PATH, domain=AUTH_COOKIE_DOMAIN)
+    response.delete_cookie(REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH, domain=REFRESH_COOKIE_DOMAIN)
+    try:
+        token = _extract_session_token_for_jti()
+        if token:
+            import jwt as _jwt
+            data = _jwt.decode(token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
+            revoke_session(data.get("jti"))
+        refresh_token = request.cookies.get(REFRESH_COOKIE_NAME)
+        if refresh_token:
+            data = _jwt.decode(refresh_token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
+            revoke_refresh_token(data.get("jti"))
+    except Exception:
+        pass
+    return response, 200
+
+
+def _extract_session_token_for_jti():
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header.split(" ", 1)[1]
+    return request.cookies.get(AUTH_COOKIE_NAME)
+
+
+def auth_refresh():
+    """Rotates the refresh token and issues a new access token (POST /api/auth/refresh)."""
+    refresh_token = request.cookies.get(REFRESH_COOKIE_NAME)
+    if is_mobile_client():
+        refresh_token = (request.json or {}).get("refreshToken") or refresh_token
+    if not refresh_token:
+        return jsonify({"error": "No refresh token. Please sign in again.", "code": "REFRESH_REQUIRED"}), 401
+    try:
+        data = jwt.decode(refresh_token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
+    except Exception:
+        response = jsonify({"error": "Refresh token invalid or expired. Please sign in again.", "code": "REFRESH_INVALID"})
+        response.delete_cookie(REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH, domain=REFRESH_COOKIE_DOMAIN)
+        return response, 401
+    result = refresh_access_token(refresh_token)
+    if not result:
+        response = jsonify({"error": "Refresh token invalid or expired. Please sign in again.", "code": "REFRESH_INVALID"})
+        response.delete_cookie(REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH, domain=REFRESH_COOKIE_DOMAIN)
+        return response, 401
+    access_token, _access_jti, new_refresh_token, _refresh_jti = result
+    user_id = data.get("user_id")
+    user = db.session.get(UserModel, user_id) if user_id else None
+    user_dict = user.to_dict() if user else {}
+    response = jsonify({
+        "success": True,
+        "message": "Session refreshed.",
+        "user": user_dict,
+    })
+    if is_mobile_client():
+        response = jsonify({
+            "success": True,
+            "message": "Session refreshed.",
+            "token": access_token,
+            "refreshToken": new_refresh_token,
+            "user": user_dict,
+        })
+    else:
+        _apply_session_cookies(response, access_token)
+        _apply_refresh_cookie(response, new_refresh_token)
+    return response, 200
+
+
+def auth_logout_all():
+    """Revokes every session and refresh token for the current user (POST /api/auth/logout-all)."""
+    current_user = getattr(request, "current_user", None) or {}
+    user_id = current_user.get("id")
+    if not user_id:
+        return jsonify({"error": "Authentication required.", "code": "AUTH_REQUIRED"}), 401
+    revoked_sessions = revoke_all_sessions(user_id)
+    revoked_refresh = revoke_all_refresh_tokens(user_id)
+    user = db.session.get(UserModel, user_id)
+    if user:
+        user.token_version = (user.token_version or 0) + 1
+        _commit_or_warn("logout all devices")
+    log_action(user_id, current_user.get("name") or "unknown", current_user.get("role") or "user", "LOGOUT_ALL_DEVICES", f"Revoked {revoked_sessions} session(s) and {revoked_refresh} refresh token(s)")
+    response = jsonify({"success": True, "message": "All sessions revoked.", "revokedSessions": revoked_sessions, "revokedRefreshTokens": revoked_refresh})
+    response.delete_cookie(AUTH_COOKIE_NAME, path=AUTH_COOKIE_PATH, domain=AUTH_COOKIE_DOMAIN)
+    response.delete_cookie(CSRF_COOKIE_NAME, path=AUTH_COOKIE_PATH, domain=AUTH_COOKIE_DOMAIN)
+    response.delete_cookie(REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH, domain=REFRESH_COOKIE_DOMAIN)
+    return response, 200

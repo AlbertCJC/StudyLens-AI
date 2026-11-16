@@ -4,6 +4,8 @@ import random
 import re
 import time
 
+from lib.constants import MAX_AI_FLASHCARDS, MAX_AI_QUESTIONS
+
 try:
     # Official OpenAI Python SDK pointed at Groq's OpenAI-compatible endpoint (pip: openai)
     from openai import OpenAI, APIStatusError, APIConnectionError, APITimeoutError
@@ -54,8 +56,6 @@ def _rate_limit_delay(err, attempt):
 # in small batches: requests are split across content chunks AND the remaining total is
 # cycled through the chunks in multiple rounds, so no single AI call ever asks for more
 # than MAX_PER_CHUNK items (~2000 output tokens, safely under the 4096-token cap).
-MAX_AI_QUESTIONS = 100
-MAX_AI_FLASHCARDS = 100
 MAX_PER_CHUNK = 10
 # Safety ceiling on batching rounds (typical 5-10 questions need 1-2 rounds; 4 leaves
 # headroom without stalling the user waiting on repeated AI calls).
@@ -443,9 +443,14 @@ def _prompt_topic(text):
 
 
 def _is_prompt_like(text_content):
-    """True when the input is a bare instruction (e.g. 'Generate 5 questions
-    with the Dota 2 topic') rather than pasted study material. Real material,
-    including single-sentence notes, is never treated as a prompt."""
+    """True when the input is a bare instruction or topic rather than pasted
+    study material.
+
+    Examples: 'Generate 5 questions with the Dota 2 topic', 'photosynthesis',
+    'Dota 2'. Multi-sentence material is never treated as a prompt. Short
+    topic-only inputs are expanded so the live AI and offline fallback both
+    have enough context to generate useful study content.
+    """
     text = (text_content or "").strip()
     if not text:
         return False
@@ -453,7 +458,15 @@ def _is_prompt_like(text_content):
         return False
     import re
     first = text.split()[0].lower().strip(".,;:!?\"'()[]{}")
-    return first in _PROMPT_ACTION_WORDS or bool(re.fullmatch(r"\d+", first))
+    if first in _PROMPT_ACTION_WORDS or bool(re.fullmatch(r"\d+", first)):
+        return True
+    # A bare topic such as "photosynthesis" or "Dota 2" carries no sentence
+    # structure. Treat only very short, punctuation-light input this way so a
+    # real one-line note is not mistaken for a generation prompt.
+    words = text.split()
+    if not 1 <= len(words) <= 3:
+        return False
+    return not any(mark in text for mark in (".", "!", ";", "\n"))
 
 
 def _expand_prompt_material(text_content):
@@ -1362,9 +1375,7 @@ def _generate_composed_quiz(text_content, plan, difficulty, instructions, contex
     offline_reason = ""
     for qtype in order:
         target = plan[qtype]
-        rounds = 0
-        while len(generated[qtype]) < target and rounds < MAX_BATCH_ROUNDS and not offline_reason:
-            rounds += 1
+        while len(generated[qtype]) < target and not offline_reason:
             chunks = _generation_chunks(text_content, 4000)
             added = False
             for chunk in chunks:
@@ -1405,7 +1416,42 @@ def _generate_composed_quiz(text_content, plan, difficulty, instructions, contex
     return result[:sum(plan.values())]
 
 
-def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficulty: str = "medium", instructions: str = "", context: list = None, require_count: bool = False) -> list:
+def _normalize_quiz_counts(quiz_counts):
+    """Normalize explicit per-format quiz counts from the UI payload.
+
+    Accepts snake_case, camelCase, and common display labels. Only positive counts
+    are returned; invalid or zero values are ignored so the prompt/default path
+    still works when the user leaves every count field blank.
+    """
+    if not isinstance(quiz_counts, dict):
+        return {}
+    aliases = {
+        "multiple_choice": "multiple_choice",
+        "multiplechoice": "multiple_choice",
+        "mcq": "multiple_choice",
+        "identification": "identification",
+        "identify": "identification",
+        "true_false": "true_false",
+        "truefalse": "true_false",
+        "tf": "true_false",
+    }
+    normalized = {}
+    for raw_type, raw_count in quiz_counts.items():
+        key = str(raw_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+        qtype = aliases.get(key)
+        if not qtype:
+            continue
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if count <= 0:
+            continue
+        normalized[qtype] = normalized.get(qtype, 0) + count
+    return normalized
+
+
+def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficulty: str = "medium", instructions: str = "", context: list = None, require_count: bool = False, quiz_counts: dict = None) -> list:
     """
     Generates structured assessment questions classified strictly into Bloom's Taxonomy 6 cognitive levels:
 
@@ -1416,10 +1462,10 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
     counts are generated (prompt is the single source of truth). Formats named without an
     explicit number default to 5 each; an overall total like "20 questions" splits evenly
     across the named formats. With no formats named, every question is multiple-choice and
-    the prompt's overall count (e.g. "make 20 questions") sets the total. Set
-    ``require_count`` to True when the caller no longer provides a count box: a prompt that
-    names neither a format nor an overall count then raises ``GroqAPIError("COUNT_REQUIRED")``
-    so the UI can tell the user to include a number.
+    the prompt's overall count (e.g. "make 20 questions") sets the total. When the prompt
+    names neither a format nor an overall count, ``require_count=True`` makes the call fall
+    back to 5 multiple-choice questions instead of blocking the user. The AI Assistant UI
+    explains this default so leaving the count out is predictable.
 
     When ``context`` (previously generated questions) is supplied, only NEW non-duplicate
     questions are generated and the combined set is returned with the new ones flagged.
@@ -1483,6 +1529,16 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
     if _is_prompt_like(text_content):
         text_content = _expand_prompt_material(text_content)
 
+    # Explicit per-format counts from the AI Assistant take precedence over prompt
+    # text. They are sent only when the user fills at least one count box.
+    explicit_counts = _normalize_quiz_counts(quiz_counts)
+    if explicit_counts:
+        explicit_order = [t for t in ("multiple_choice", "identification", "true_false") if t in explicit_counts]
+        explicit_plan = _resolve_quiz_plan(explicit_order, explicit_counts)
+        if explicit_plan:
+            composed = _generate_composed_quiz(text_content, explicit_plan, difficulty, instructions, context)
+            return _randomize_mc_correct_answer(_merge_context_and_new(context, composed, "q"))
+
     # Honor requested question formats. The instruction (Prompt box) is the primary
     # source; the source text is scanned too for mobile/prompt-only flows, but only when
     # there is a strong signal (multiple formats or at least one explicit count) so
@@ -1503,9 +1559,8 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
             return _randomize_mc_correct_answer(_merge_context_and_new(context, composed, "q"))
 
     # No formats named: the prompt's overall count (e.g. "make 20 questions") sets the
-    # total when present; otherwise the caller-supplied count is used. Once the quiz
-    # count box was removed from the UI, the prompt must mention a count, so raise a
-    # structured error the route surface turns into a friendly validation message.
+    # total when present. If the prompt has neither a format nor a count, fall back to
+    # 5 multiple-choice questions; the AI Assistant UI explains that default.
     overall_count = _extract_overall_count(instructions) or _extract_overall_count(text_content)
     if overall_count is not None:
         if overall_count > MAX_AI_QUESTIONS:
@@ -1546,9 +1601,7 @@ def generate_quiz_with_groq(text_content: str, num_questions: int = 5, difficult
 
     questions = []
     request_no = 0
-    rounds = 0
-    while len(questions) < num_questions and rounds < MAX_BATCH_ROUNDS:
-        rounds += 1
+    while len(questions) < num_questions:
         added = False
         for chunk in chunks:
             if len(questions) >= num_questions:
@@ -1623,9 +1676,7 @@ def generate_flashcards_with_groq(text_content: str, count: int = 5, instruction
 
     cards = []
     request_no = 0
-    rounds = 0
-    while len(cards) < count and rounds < MAX_BATCH_ROUNDS:
-        rounds += 1
+    while len(cards) < count:
         added = False
         for chunk in chunks:
             if len(cards) >= count:

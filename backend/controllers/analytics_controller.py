@@ -22,6 +22,7 @@ from services.analytics_service import (
     _aggregate_topic_performance,
     _first_match_for_topic,
     _latest_attempt_percentages,
+    _latest_attempts_by_student_quiz,
 )
 
 
@@ -43,81 +44,88 @@ def get_student_progress(student_id):
         limit, offset = 10, 0
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
-    attempts = QuizAttemptModel.query.filter_by(student_id=student_id).order_by(QuizAttemptModel.submitted_at.desc()).all()
-    # "Quizzes completed" counts distinct quizzes, not raw attempts (retakes
-    # of the same quiz do not multiply the stat).
-    total = len({a.quiz_id for a in attempts})
+    try:
+        attempts = QuizAttemptModel.query.filter_by(student_id=student_id).order_by(QuizAttemptModel.submitted_at.desc()).all()
+        # "Quizzes completed" counts distinct quizzes, not raw attempts (retakes
+        # of the same quiz do not multiply the stat).
+        total = len({a.quiz_id for a in attempts})
 
-    topic_map = _aggregate_topic_performance(attempts)
-    topic_performances = [
-        {
-            "topic": t,
-            "totalQuestions": d["total"],
-            "correctAnswers": d["correct"],
-            "accuracyPercentage": d["accuracyPercentage"],
-        }
-        for t, d in topic_map.items()
-    ]
-
-    weak, strong = [], []
-    for att in attempts:
-        try:
-            weak += json.loads(att.weak_topics_json) or []
-            strong += json.loads(att.strong_topics_json) or []
-        except Exception:
-            continue
-
-    # Accuracy-driven weak list: a topic only stays "weak" while its lifetime
-    # accuracy sits below the mastery bar. Topics that were missed before but
-    # are now at/above the bar move to masteredTopics so students can see
-    # tangible proof they overcame them.
-    historical_weak = list(dict.fromkeys(weak))
-    if topic_map:
-        current_weak = [
-            t for t, d in topic_map.items()
-            if d["total"] > 0 and d["accuracyPercentage"] < MASTERY_THRESHOLD
-        ]
-        current_weak.sort(key=lambda t: topic_map.get(t, {}).get("accuracyPercentage", 0))
-        mastered = []
-        for t in historical_weak:
-            if t in current_weak:
-                continue
-            acc = topic_map.get(t, {}).get("accuracyPercentage", 0)
-            if acc < MASTERY_THRESHOLD:
-                continue
-            mastered.append({
+        topic_map = _aggregate_topic_performance(attempts)
+        topic_performances = [
+            {
                 "topic": t,
-                "currentAccuracy": acc,
-                "improvedFrom": _accuracy_before_latest_tagged_attempt(attempts, t),
-            })
-    else:
-        # Legacy attempts without per-question data: fall back to stored tags.
-        current_weak = historical_weak
-        mastered = []
+                "totalQuestions": d["total"],
+                "correctAnswers": d["correct"],
+                "accuracyPercentage": d["accuracyPercentage"],
+            }
+            for t, d in topic_map.items()
+        ]
 
-    latest_pcts = _latest_attempt_percentages(attempts)
+        weak, strong = [], []
+        for att in attempts:
+            try:
+                weak += json.loads(att.weak_topics_json) or []
+                strong += json.loads(att.strong_topics_json) or []
+            except Exception:
+                continue
 
-    payload = {
-        "studentId": student_id,
-        "totalQuizzesTaken": total,
-        "averageScore": round(sum(latest_pcts) / len(latest_pcts)) if latest_pcts else 0,
-        "totalPersonalMaterialsUploaded": MaterialModel.query.filter(
-            MaterialModel.uploader_role == "student",
-            MaterialModel.subject_id.is_(None),
-            MaterialModel.teacher_id == student_id,
-        ).count(),
-        "totalFlashcardDecksGenerated": AIGeneratedContentModel.query.filter(
-            AIGeneratedContentModel.content_type == "Flashcard",
-            AIGeneratedContentModel.generated_by == student_id,
-        ).count(),
-        "topicPerformances": topic_performances,
-        "weakTopics": current_weak,
-        "strongTopics": list(dict.fromkeys(strong)),
-        "masteredTopics": mastered,
-        "recentQuizAttempts": [a.to_dict() for a in attempts][offset:offset + limit],
-        "recentQuizAttemptsHasMore": offset + limit < len(attempts),
-    }
-    return jsonify(payload)
+        # Accuracy-driven weak list: a topic only stays "weak" while its lifetime
+        # accuracy sits below the mastery bar. Topics that were missed before but
+        # are now at/above the bar move to masteredTopics so students can see
+        # tangible proof they overcame them.
+        historical_weak = list(dict.fromkeys(weak))
+        if topic_map:
+            current_weak = [
+                t for t, d in topic_map.items()
+                if d["total"] > 0 and d["accuracyPercentage"] < MASTERY_THRESHOLD
+            ]
+            current_weak.sort(key=lambda t: topic_map.get(t, {}).get("accuracyPercentage", 0))
+            mastered = []
+            for t in historical_weak:
+                if t in current_weak:
+                    continue
+                acc = topic_map.get(t, {}).get("accuracyPercentage", 0)
+                if acc < MASTERY_THRESHOLD:
+                    continue
+                mastered.append({
+                    "topic": t,
+                    "currentAccuracy": acc,
+                    "improvedFrom": _accuracy_before_latest_tagged_attempt(attempts, t),
+                })
+        else:
+            # Legacy attempts without per-question data: fall back to stored tags.
+            current_weak = historical_weak
+            mastered = []
+
+        latest_pcts = _latest_attempt_percentages(attempts)
+
+        payload = {
+            "studentId": student_id,
+            "totalQuizzesTaken": total,
+            "averageScore": round(sum(latest_pcts) / len(latest_pcts)) if latest_pcts else 0,
+            "totalPersonalMaterialsUploaded": MaterialModel.query.filter(
+                MaterialModel.uploader_role == "student",
+                MaterialModel.subject_id.is_(None),
+                MaterialModel.teacher_id == student_id,
+            ).count(),
+            "totalFlashcardDecksGenerated": AIGeneratedContentModel.query.filter(
+                AIGeneratedContentModel.content_type == "Flashcard",
+                AIGeneratedContentModel.generated_by == student_id,
+            ).count(),
+            "topicPerformances": topic_performances,
+            "weakTopics": current_weak,
+            "strongTopics": list(dict.fromkeys(strong)),
+            "masteredTopics": mastered,
+            "recentQuizAttempts": [a.to_dict() for a in attempts][offset:offset + limit],
+            "recentQuizAttemptsHasMore": offset + limit < len(attempts),
+        }
+        return jsonify(payload)
+    except Exception as e:
+        print(f"[Analytics] get_student_progress failed for {student_id}: {e}")
+        return jsonify({
+            "error": "Could not load student progress. Please try again.",
+            "code": "PROGRESS_LOAD_FAILED",
+        }), 500
 
 
 def get_student_recommendations(student_id):
@@ -230,11 +238,11 @@ def get_teacher_analytics():
 
     subjects = SubjectModel.query.filter_by(teacher_id=teacher_id).all()
     rows = []
-    total_students = 0
-    total_attempts = 0
-    total_passed = 0
+    all_student_ids = set()
+    total_latest_attempts = 0
+    total_latest_passed = 0
     total_at_risk = 0
-    all_scores = []
+    all_latest_scores = []
 
     for sub in subjects:
         enrollments = StudentSubjectModel.query.filter_by(subject_id=sub.subject_id).all()
@@ -242,21 +250,29 @@ def get_teacher_analytics():
         attempts = QuizAttemptModel.query.filter_by(subject_id=sub.subject_id).all()
         quiz_count = QuizModel.query.filter_by(subject_id=sub.subject_id).count()
 
-        per_student_avg = {}
-        for a in attempts:
-            per_student_avg.setdefault(a.student_id, []).append(a.percentage)
+        latest_attempts = list(_latest_attempts_by_student_quiz(attempts).values())
+        latest_by_student = {}
+        latest_scores_by_student = {}
+        for att in latest_attempts:
+            latest_by_student[att.student_id] = att
+            latest_scores_by_student.setdefault(att.student_id, []).append(float(att.percentage or 0))
+
         at_risk = []
         for sid in student_ids:
-            scores = per_student_avg.get(sid, [])
+            scores = latest_scores_by_student.get(sid, [])
             if not scores:
                 continue
             avg = sum(scores) / len(scores)
-            if avg < 70:
+            if avg < MASTERY_THRESHOLD:
                 stu = db.session.get(UserModel, sid)
-                at_risk.append({"id": sid, "name": stu.first_name + " " + stu.last_name if stu else sid, "averageScore": round(avg)})
+                at_risk.append({
+                    "id": sid,
+                    "name": stu.first_name + " " + stu.last_name if stu else sid,
+                    "averageScore": round(avg),
+                })
 
         weak = []
-        for att in attempts:
+        for att in latest_attempts:
             try: weak += json.loads(att.weak_topics_json) or []
             except Exception: pass
         weak_counts = {}
@@ -264,13 +280,15 @@ def get_teacher_analytics():
             weak_counts[w] = weak_counts.get(w, 0) + 1
         top_weak = [t for t, _ in sorted(weak_counts.items(), key=lambda kv: -kv[1])[:5]]
 
-        avg = round(sum(a.percentage for a in attempts) / len(attempts)) if attempts else 0
-        passed = sum(1 for a in attempts if a.passed)
-        total_students += len(student_ids)
-        total_attempts += len(attempts)
-        total_passed += passed
-        total_at_risk += len(at_risk)
-        all_scores += [a.percentage for a in attempts]
+        latest_flat = [score for scores in latest_scores_by_student.values() for score in scores]
+        avg = round(sum(latest_flat) / len(latest_flat)) if latest_flat else 0
+        passed = sum(1 for att in latest_attempts if att.student_id in set(student_ids) and att.passed)
+
+        all_student_ids.update(student_ids)
+        total_latest_attempts += len(latest_flat)
+        total_latest_passed += passed
+        total_at_risk += len({entry["id"] for entry in at_risk})
+        all_latest_scores += latest_flat
 
         rows.append({
             "subjectId": sub.subject_id,
@@ -279,9 +297,9 @@ def get_teacher_analytics():
             "teacherName": sub.teacher_name,
             "studentCount": len(student_ids),
             "quizCount": quiz_count,
-            "attempts": len(attempts),
+            "attempts": len(latest_flat),
             "averageScore": avg,
-            "passRate": round(passed / len(attempts) * 100) if attempts else 0,
+            "passRate": round(passed / len(latest_flat) * 100) if latest_flat else 0,
             "weakTopics": top_weak,
             "atRiskStudents": at_risk,
         })
@@ -291,10 +309,10 @@ def get_teacher_analytics():
         "subjects": rows,
         "totals": {
             "subjectCount": len(subjects),
-            "studentCount": total_students,
-            "attempts": total_attempts,
-            "averageScore": round(sum(all_scores) / len(all_scores)) if all_scores else 0,
-            "passRate": round(total_passed / total_attempts * 100) if total_attempts else 0,
+            "studentCount": len(all_student_ids),
+            "attempts": total_latest_attempts,
+            "averageScore": round(sum(all_latest_scores) / len(all_latest_scores)) if all_latest_scores else 0,
+            "passRate": round(total_latest_passed / total_latest_attempts * 100) if total_latest_attempts else 0,
             "atRiskCount": total_at_risk,
         },
     }), 200
@@ -310,10 +328,10 @@ def get_admin_analytics():
     subjects = SubjectModel.query.all()
     rows = []
     all_student_ids = set()
-    total_attempts = 0
-    total_passed = 0
+    total_latest_attempts = 0
+    total_latest_passed = 0
     total_at_risk = 0
-    all_scores = []
+    all_latest_scores = []
 
     for sub in subjects:
         enrollments = StudentSubjectModel.query.filter_by(subject_id=sub.subject_id).all()
@@ -322,21 +340,27 @@ def get_admin_analytics():
         attempts = QuizAttemptModel.query.filter_by(subject_id=sub.subject_id).all()
         quiz_count = QuizModel.query.filter_by(subject_id=sub.subject_id).count()
 
-        per_student_avg = {}
-        for a in attempts:
-            per_student_avg.setdefault(a.student_id, []).append(a.percentage)
+        latest_attempts = list(_latest_attempts_by_student_quiz(attempts).values())
+        latest_scores_by_student = {}
+        for att in latest_attempts:
+            latest_scores_by_student.setdefault(att.student_id, []).append(float(att.percentage or 0))
+
         at_risk = []
         for sid in student_ids:
-            scores = per_student_avg.get(sid, [])
+            scores = latest_scores_by_student.get(sid, [])
             if not scores:
                 continue
             avg = sum(scores) / len(scores)
-            if avg < 70:
+            if avg < MASTERY_THRESHOLD:
                 stu = db.session.get(UserModel, sid)
-                at_risk.append({"id": sid, "name": stu.first_name + " " + stu.last_name if stu else sid, "averageScore": round(avg)})
+                at_risk.append({
+                    "id": sid,
+                    "name": stu.first_name + " " + stu.last_name if stu else sid,
+                    "averageScore": round(avg),
+                })
 
         weak = []
-        for att in attempts:
+        for att in latest_attempts:
             try: weak += json.loads(att.weak_topics_json) or []
             except Exception: pass
         weak_counts = {}
@@ -344,12 +368,14 @@ def get_admin_analytics():
             weak_counts[w] = weak_counts.get(w, 0) + 1
         top_weak = [t for t, _ in sorted(weak_counts.items(), key=lambda kv: -kv[1])[:5]]
 
-        avg = round(sum(a.percentage for a in attempts) / len(attempts)) if attempts else 0
-        passed = sum(1 for a in attempts if a.passed)
-        total_attempts += len(attempts)
-        total_passed += passed
-        total_at_risk += len(at_risk)
-        all_scores += [a.percentage for a in attempts]
+        latest_flat = [score for scores in latest_scores_by_student.values() for score in scores]
+        avg = round(sum(latest_flat) / len(latest_flat)) if latest_flat else 0
+        passed = sum(1 for att in latest_attempts if att.student_id in set(student_ids) and att.passed)
+
+        total_latest_attempts += len(latest_flat)
+        total_latest_passed += passed
+        total_at_risk += len({entry["id"] for entry in at_risk})
+        all_latest_scores += latest_flat
 
         rows.append({
             "subjectId": sub.subject_id,
@@ -358,9 +384,9 @@ def get_admin_analytics():
             "teacherName": sub.teacher_name,
             "studentCount": len(student_ids),
             "quizCount": quiz_count,
-            "attempts": len(attempts),
+            "attempts": len(latest_flat),
             "averageScore": avg,
-            "passRate": round(passed / len(attempts) * 100) if attempts else 0,
+            "passRate": round(passed / len(latest_flat) * 100) if latest_flat else 0,
             "weakTopics": top_weak,
             "atRiskStudents": at_risk,
         })
@@ -370,9 +396,9 @@ def get_admin_analytics():
         "totals": {
             "subjectCount": len(subjects),
             "studentCount": len(all_student_ids),
-            "attempts": total_attempts,
-            "averageScore": round(sum(all_scores) / len(all_scores)) if all_scores else 0,
-            "passRate": round(total_passed / total_attempts * 100) if total_attempts else 0,
+            "attempts": total_latest_attempts,
+            "averageScore": round(sum(all_latest_scores) / len(all_latest_scores)) if all_latest_scores else 0,
+            "passRate": round(total_latest_passed / total_latest_attempts * 100) if total_latest_attempts else 0,
             "atRiskCount": total_at_risk,
         },
     }), 200

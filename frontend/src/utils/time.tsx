@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useEffect, useState } from "react";
 
 export function formatRelativeTime(iso: string | undefined): string {

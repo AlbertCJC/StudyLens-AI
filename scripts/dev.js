@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
+import fs from "node:fs";
 
 const HOST = "127.0.0.1";
 const API_PORT = 5000;
@@ -20,7 +21,11 @@ const pythonCandidates = process.platform === "win32"
 
 function findPython() {
   // Prefer an explicit launcher from env, then probe common candidates.
-  if (process.env.PYTHON) return [process.env.PYTHON];
+  // Validate any env-supplied launcher exists before trusting it.
+  if (process.env.PYTHON) {
+    if (fs.existsSync(process.env.PYTHON)) return [process.env.PYTHON];
+    console.warn(`[dev] PYTHON env (${process.env.PYTHON}) not found; falling back to candidates.`);
+  }
   return pythonCandidates;
 }
 
@@ -60,12 +65,10 @@ async function main() {
   let chosen = null;
   for (const cmd of pythonCmd) {
     try {
-      // shell:true is required on Windows to resolve "py"/"python" launchers;
-      // pass a single quoted command string (DEP0190) instead of an args array.
-      const command = `${cmd.includes(" ") ? `"${cmd}"` : cmd} app.py`;
-      backend = spawn(command, {
+      // Spawn with an argument array (no shell) so no client-supplied value
+      // (e.g. PYTHON) is ever interpolated into a shell command.
+      backend = spawn(cmd, ["app.py"], {
         cwd: backendDir,
-        shell: process.platform === "win32",
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, FLASK_DEBUG_RELOAD: "0" },
       });
@@ -73,7 +76,6 @@ async function main() {
       backend.once("error", () => {
         backend = null;
       });
-      // If the binary itself is missing, the 'error' event fires on next tick.
       await new Promise((r) => setTimeout(r, 250));
       if (backend) break;
     } catch {

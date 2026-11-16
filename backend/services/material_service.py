@@ -63,6 +63,29 @@ def _render_ai_resource_text(resource_type, payload):
     return "\n".join(lines)
 
 
+def reconcile_material_counts():
+    """Reconciles denormalized ``material_count`` columns against actual counts.
+
+    Walks every subject, counts its actual materials, and updates the stored
+    ``material_count`` column if it differs. Returns a dict of
+    ``{subject_id: (stored_count, actual_count)}`` for subjects where drift was
+    detected and repaired.
+    """
+    from models import SubjectModel
+
+    drifts = {}
+    subjects = SubjectModel.query.all()
+    for subject in subjects:
+        actual_count = db.session.query(MaterialModel).filter_by(subject_id=subject.subject_id).count()
+        stored_count = subject.material_count or 0
+        if actual_count != stored_count:
+            subject.material_count = actual_count
+            drifts[subject.subject_id] = (stored_count, actual_count)
+    if drifts:
+        _commit_or_warn("material count reconciliation")
+    return drifts
+
+
 def _resolve_material_flags(material_id, resolved_by, resolution_note=None, actor_role="teacher"):
     """Flips every pending flag on a material to resolved and notifies the admin(s)
     who raised them. Called by the explicit resolve endpoint and automatically after

@@ -4,23 +4,26 @@ import datetime
 import os
 
 from flask import jsonify, request
-from werkzeug.security import check_password_hash, generate_password_hash
+from lib.password import hash_password, rehash_if_legacy, verify_password
 
-from cloud_storage import upload_file_to_cloud
-from db.session import _commit_or_warn
+from cloud_storage import upload_avatar_to_cloud
+from db.session import _commit_or_warn, get_last_commit_error
 from extensions import db
+from lib.id import generate_id
 from lib.validation import _validate_password_strength
 from models import (
     AIGeneratedContentModel,
     AnnouncementModel,
+    AuthSessionModel,
     MaterialModel,
     QuizAttemptModel,
     QuizModel,
+    RefreshTokenModel,
     StudentSubjectModel,
     SubjectModel,
     UserModel,
 )
-from services.auth_service import _issue_email_verify_code
+from services.auth_service import _issue_email_verify_code, find_user_by_email, normalize_email
 from services.log_service import log_action
 
 
@@ -28,6 +31,8 @@ def get_users():
     current_user = getattr(request, "current_user", None) or {}
     role = current_user.get("role") or ""
     user_id = current_user.get("id") or ""
+    limit = request.args.get("limit", type=int)
+    offset = request.args.get("offset", type=int)
     users = UserModel.query.all()
     if role == "teacher":
         # Teachers may only enumerate students enrolled in subjects they manage.
@@ -39,7 +44,20 @@ def get_users():
         users = [u for u in users if u.user_id in enrolled_ids]
     elif role != "admin":
         return jsonify({"error": "You do not have permission to view the user directory.", "code": "FORBIDDEN"}), 403
-    return jsonify([u.to_dict() for u in users])
+
+    total = len(users)
+    if limit is None and offset is None:
+        return jsonify([u.to_dict() for u in users])
+    limit = max(1, min(200, limit or 100))
+    offset = max(0, offset or 0)
+    page = users[offset:offset + limit]
+    return jsonify({
+        "items": [u.to_dict() for u in page],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "hasMore": (offset + len(page)) < total,
+    })
 
 
 def create_user():
@@ -55,13 +73,13 @@ def create_user():
     if not name:
         return jsonify({"error": "User name is required.", "code": "BAD_REQUEST"}), 400
 
-    existing = UserModel.query.filter(db.func.lower(UserModel.email) == email).first()
+    existing = find_user_by_email(email)
     if existing:
         return jsonify({"error": f"Account with email {email} already exists.", "code": "DUPLICATE"}), 409
 
     names = name.split(" ", 1)
     new_user = UserModel(
-        user_id=f"usr-{role}-{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}",
+        user_id=generate_id(f"usr-{role}"),
         first_name=names[0],
         last_name=names[1] if len(names) > 1 else "",
         email=email,
@@ -75,7 +93,7 @@ def create_user():
     strength_error = _validate_password_strength(password)
     if strength_error:
         return jsonify({"error": strength_error, "code": "PASSWORD_REQUIRED"}), 400
-    new_user.password_hash = generate_password_hash(password)
+    new_user.password_hash = hash_password(password)
     db.session.add(new_user)
     if not _commit_or_warn("new user"):
         return jsonify({"error": "Could not save the user. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
@@ -110,19 +128,26 @@ def update_user(user_id):
         user.role = data["role"]
     if data.get("department"):
         user.department = data["department"]
+    admin_email_changed = False
     if data.get("email"):
-        new_email = str(data["email"]).strip().lower()
-        if new_email != user.email:
-            existing = UserModel.query.filter(db.func.lower(UserModel.email) == new_email).first()
+        new_email = normalize_email(data["email"])
+        if new_email != normalize_email(user.email):
+            existing = find_user_by_email(new_email)
             if existing and existing.user_id != user_id:
                 return jsonify({"error": "Email already in use.", "code": "EMAIL_EXISTS"}), 400
             user.email = new_email
-            # Self-initiated email changes keep the account verified so the user
-            # can still sign in with the new email immediately. Admin-initiated
-            # changes require re-verification.
             if not is_self:
+                # Admin-initiated changes still require the account owner to
+                # confirm the new address before it can be used to sign in.
+                # Self-service profile edits save immediately without a
+                # re-verification loop and keep the current session valid.
+                admin_email_changed = True
                 user.email_verified = 0
                 _issue_email_verify_code(user)
+        elif user.email != new_email:
+            # Heal legacy whitespace-padded rows without treating the cleanup
+            # as an email change.
+            user.email = new_email
     if "avatar" in data:
         # Removal sends null/""; also guard against literal junk strings
         # ("None"/"null"/"undefined") that must never be stored as a URL.
@@ -140,14 +165,15 @@ def update_user(user_id):
             return jsonify({"error": strength_error, "code": "WEAK_PASSWORD"}), 400
         if not is_admin:
             current_password = data.get("currentPassword") or ""
-            if not check_password_hash(user.password_hash or "", current_password):
+            if not current_password or not verify_password(user.password_hash or "", current_password):
                 return jsonify({"error": "Your current password is incorrect.", "code": "INVALID_CREDENTIALS"}), 403
-        user.password_hash = generate_password_hash(password)
+        new_hash = rehash_if_legacy(password, user.password_hash or "")
+        user.password_hash = new_hash or hash_password(password)
         log_action(user.user_id, user.to_dict()["name"], user.role, "PASSWORD_RESET", f"Password updated for {user.email}")
 
-    # Role changes, suspensions, and password resets invalidate that user's
-    # existing sessions so privileges are adjusted immediately.
-    auth_attr_changed = role_changed or status_changed or (isinstance(password, str) and password)
+    # Role changes, suspensions, email changes and password resets invalidate
+    # that user's existing sessions so privileges are adjusted immediately.
+    auth_attr_changed = role_changed or status_changed or admin_email_changed or (isinstance(password, str) and password)
     if auth_attr_changed:
         user.token_version = (user.token_version or 0) + 1
 
@@ -223,8 +249,15 @@ def upload_user_avatar(user_id):
         return jsonify({"error": "Image must be 5 MB or smaller.", "code": "BAD_REQUEST"}), 400
 
     safe_ext = ext if ext in allowed else ".png"
-    filename = f"avatar_{user_id}_{int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)}{safe_ext}"
-    avatar_url = upload_file_to_cloud(file_bytes, filename, content_type=file.mimetype or "image/png")
+    filename = generate_id(f"avatar_{user_id}") + safe_ext
+    try:
+        avatar_url = upload_avatar_to_cloud(file_bytes, filename, content_type=file.mimetype or "image/png")
+    except Exception as err:
+        print(f"[Avatar Upload] Failed for user {user_id}: {err}")
+        return jsonify({
+            "error": "Could not upload the profile photo. Please try again.",
+            "code": "UPLOAD_FAILED",
+        }), 500
     user.profile_picture = avatar_url
 
     if not _commit_or_warn("avatar update"):
@@ -270,13 +303,18 @@ def delete_user(user_id):
     if user.role == "admin":
         return jsonify({"error": "Administrator accounts cannot be deleted.", "code": "FORBIDDEN"}), 403
     email = user.email
+
+    # Clean up dependent rows that block deletion via foreign key constraints.
+    # These are owned by the user and must be removed before the user row can go.
+    AuthSessionModel.query.filter_by(user_id=user_id).delete()
+    RefreshTokenModel.query.filter_by(user_id=user_id).delete()
+    AIGeneratedContentModel.query.filter_by(generated_by=user_id).delete()
+    MaterialModel.query.filter_by(teacher_id=user_id).delete()
+    QuizModel.query.filter_by(teacher_id=user_id).delete()
+
     db.session.delete(user)
-    try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        db.session.remove()
-        err_lower = str(e).lower()
+    if not _commit_or_warn("user deletion"):
+        err_lower = get_last_commit_error().lower()
         if any(k in err_lower for k in ("integrityerror", "foreign key constraint", "cannot delete or update a parent row")):
             return jsonify({"error": "This user still has linked records (subjects, materials, quizzes, reports) and cannot be deleted. Remove those first.", "code": "HAS_DEPENDENTS"}), 409
         return jsonify({"error": "Could not delete the user. The database write failed. Please try again.", "code": "SAVE_FAILED"}), 500
