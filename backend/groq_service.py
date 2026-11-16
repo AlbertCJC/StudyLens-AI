@@ -55,8 +55,8 @@ def _rate_limit_delay(err, attempt):
 # budget (roughly 200 tokens per quiz question / flashcard). Large totals are generated
 # in small batches: requests are split across content chunks AND the remaining total is
 # cycled through the chunks in multiple rounds, so no single AI call ever asks for more
-# than MAX_PER_CHUNK items (~2000 output tokens, safely under the 4096-token cap).
-MAX_PER_CHUNK = 10
+# than MAX_PER_CHUNK items (~3000 output tokens, safely under the 4096-token cap).
+MAX_PER_CHUNK = 15
 # Safety ceiling on batching rounds (typical 5-10 questions need 1-2 rounds; 4 leaves
 # headroom without stalling the user waiting on repeated AI calls).
 MAX_BATCH_ROUNDS = 4
