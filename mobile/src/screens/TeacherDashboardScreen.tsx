@@ -19,7 +19,7 @@ import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useAnnouncements } from '../context/AnnouncementsContext';
 import { fetchSubjects, fetchMaterials, fetchQuizzes, Subject, Material, Quiz } from '../services/api';
-import { formatRelative } from '../utils/time';
+import { formatRelative, isNewUser } from '../utils/time';
 import { Card, Badge, SectionHeader, LoadingView, Modal } from '../components/ui';
 
 interface ActivityEntry {
@@ -85,7 +85,7 @@ export default function TeacherDashboardScreen({ onNavigate }: { onNavigate: (ta
     <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={styles.content}>
       <View style={styles.welcomeRow}>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.welcomeTitle, { color: colors.foreground }]}>Welcome back, Prof. {firstName}!</Text>
+          <Text style={[styles.welcomeTitle, { color: colors.foreground }]}>{isNewUser(currentUser?.createdAt) ? 'Welcome' : 'Welcome back'}, Prof. {firstName}!</Text>
           <Text style={[styles.welcomeSub, { color: colors.mutedForeground }]}>Here's an overview of your classes and learning resources.</Text>
         </View>
       </View>

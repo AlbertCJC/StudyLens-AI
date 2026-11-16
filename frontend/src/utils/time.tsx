@@ -1,6 +1,19 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { useEffect, useState } from "react";
 
+/**
+ * Returns true if the account was created within `thresholdDays` days (default 7).
+ * Treats missing/unparseable createdAt as a new account so a first-time visitor
+ * gets the "Welcome" greeting instead of "Welcome back".
+ */
+export function isNewUser(createdAt: string | undefined, thresholdDays = 7): boolean {
+  if (!createdAt) return true;
+  const created = new Date(createdAt).getTime();
+  if (Number.isNaN(created)) return true;
+  const ageDays = (Date.now() - created) / (1000 * 60 * 60 * 24);
+  return ageDays <= thresholdDays;
+}
+
 export function formatRelativeTime(iso: string | undefined): string {
   if (!iso) return "";
   const date = new Date(iso);

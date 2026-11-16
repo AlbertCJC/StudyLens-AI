@@ -13,6 +13,14 @@ export const formatRelative = (iso?: string): string => {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
+export const isNewUser = (createdAt?: string, thresholdDays = 7): boolean => {
+  if (!createdAt) return true;
+  const created = new Date(createdAt).getTime();
+  if (Number.isNaN(created)) return true;
+  const ageDays = (Date.now() - created) / (1000 * 60 * 60 * 24);
+  return ageDays <= thresholdDays;
+};
+
 // Readable absolute stamp for detail views, e.g. "Aug 25, 2026 · 2:45 PM"
 export const formatExact = (iso?: string): string => {
   if (!iso) return '';

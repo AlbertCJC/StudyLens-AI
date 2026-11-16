@@ -51,7 +51,7 @@ import {
   fetchSystemBackup,
 } from '../services/api';
 import { Card, Badge, LoadingView, Modal, Field, PrimaryButton, OutlineButton, SegmentedButtons, SectionHeader, EmptyState, StatCard } from '../components/ui';
-import { formatRelative, formatExact } from '../utils/time';
+import { formatRelative, formatExact, isNewUser } from '../utils/time';
 import { saveTextFile } from '../utils/fileExport';
 import { openSubject } from '../navigation/navigationRef';
 
@@ -363,7 +363,7 @@ export default function AdminDashboardScreen({ onNavigate, initialTab }: { onNav
             <View style={styles.welcomeRow}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.welcomeTitle, { color: colors.foreground }]}>
-                  Welcome back, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Admin'}!
+                  {isNewUser(currentUser?.createdAt) ? 'Welcome' : 'Welcome back'}, {currentUser?.name ? currentUser.name.split(' ')[0] : 'Admin'}!
                 </Text>
                 <Text style={[styles.welcomeSub, { color: colors.mutedForeground }]}>
                   Here's what's happening across the platform today.

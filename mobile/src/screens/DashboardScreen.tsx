@@ -16,6 +16,7 @@ import {
 } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { isNewUser } from '../utils/time';
 import { getQuizProgresses, getAttempts, removeQuizProgress, SavedQuizProgress, LocalAttempt } from '../utils/storage';
 import {
   fetchSubjects,
@@ -151,7 +152,7 @@ export default function DashboardScreen({
       <View style={styles.welcomeRow}>
         <View style={{ flex: 1 }}>
           <Text style={[styles.welcomeTitle, { color: colors.foreground }]}>
-            {studentName ? `Welcome back, ${studentName}!` : 'Welcome back!'}
+            {studentName ? `${isNewUser(currentUser?.createdAt) ? 'Welcome' : 'Welcome back'}, ${studentName}!` : `${isNewUser(currentUser?.createdAt) ? 'Welcome' : 'Welcome back'}!`}
           </Text>
           <Text style={[styles.welcomeSub, { color: colors.mutedForeground }]}>Here's what's happening with your learning today.</Text>
         </View>

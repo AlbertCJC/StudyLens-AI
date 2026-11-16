@@ -9,7 +9,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useAnnouncements, type AnnouncementItem } from "../../context/AnnouncementsContext";
 import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
-import { RelativeTime } from "../../utils/time";
+import { RelativeTime, isNewUser } from "../../utils/time";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { AnnouncementComposer } from "../../components/AnnouncementComposer";
 import { CardDetailModal, DetailRow } from "../../components/CardDetailModal";
@@ -114,7 +114,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1.5">
           <h1 className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
-            Welcome back, {currentUser?.name?.split(" ")[0] || "there"}!
+            {isNewUser(currentUser?.createdAt) ? "Welcome" : "Welcome back"}, {currentUser?.name?.split(" ")[0] || "there"}!
           </h1>
           <p className="text-sm text-muted-foreground">
             Here's what's happening in your classes today.

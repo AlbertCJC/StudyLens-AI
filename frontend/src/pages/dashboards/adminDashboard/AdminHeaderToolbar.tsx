@@ -1,5 +1,6 @@
 import React from "react";
 import { Plus, Megaphone } from "lucide-react";
+import { isNewUser } from "../../../utils/time";
 
 interface AdminHeaderToolbarProps {
   currentUser: { name?: string | null } | null | undefined;
@@ -21,7 +22,7 @@ export const AdminHeaderToolbar: React.FC<AdminHeaderToolbarProps> = ({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1.5">
           <h1 className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
-            Welcome back, {currentUser?.name?.split(" ")[0] || "Admin"}!
+            {isNewUser(currentUser?.createdAt) ? "Welcome" : "Welcome back"}, {currentUser?.name?.split(" ")[0] || "Admin"}!
           </h1>
           <p className="text-sm text-muted-foreground">
             Here's what's happening across the platform today.

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { authFetch } from "../../utils/authFetch";
+import { isNewUser } from "../../utils/time";
 import { CardDetailModal, WeakTopicsDetail, AttemptsDetail, DetailRow } from "../../components/CardDetailModal";
 import type { StudentProgress } from "../../types";
 
@@ -103,7 +104,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
-            Welcome back, {studentName}!
+            {isNewUser(currentUser?.createdAt) ? "Welcome" : "Welcome back"}, {studentName}!
           </h1>
           <p className="text-sm text-muted-foreground">
             Here's what's happening with your learning today.
