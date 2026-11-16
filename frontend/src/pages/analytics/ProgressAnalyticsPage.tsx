@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { TrendingUp, Download, BarChart2, ChevronRight } from "lucide-react";
 import {
   BarChart,
@@ -37,9 +38,31 @@ function stepTypeLabel(type: string): string {
   }
 }
 
+const handleStepClick = (step: RecommendationStep) => {
+  if (!step.targetId) return;
+  switch (step.type) {
+    case "quiz":
+      navigate(`/assessments?quizId=${encodeURIComponent(step.targetId)}`);
+      break;
+    case "review":
+      navigate(`/subjects?material=${encodeURIComponent(step.targetId)}`);
+      break;
+    case "flashcard":
+      navigate("/flashcards");
+      break;
+    case "reviewer":
+    case "summary":
+      navigate("/ai-assistant");
+      break;
+    default:
+      break;
+  }
+};
+
 export const ProgressAnalyticsPage: React.FC<{ onOpenWeakTopic?: (topic: string) => void }> = ({ onOpenWeakTopic }) => {
   const { currentUser } = useAuth();
   const { showToast } = useToast();
+  const navigate = useNavigate();
   const [progress, setProgress] = useState<StudentProgress | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [exportingPDF, setExportingPDF] = useState(false);
@@ -281,7 +304,18 @@ setExportingPDF(false);
 
         <div className="space-y-3">
           {recommendations.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-4">No recommendations yet.</p>
+            <div className="py-8 text-center space-y-2">
+              <p className="text-xs text-muted-foreground">No recommendations yet.</p>
+              <p className="text-xs text-muted-foreground">
+                Take a quiz in your subjects to generate personalized study recommendations based on your performance.
+              </p>
+              <button
+                onClick={() => navigate("/assessments")}
+                className="px-4 py-2 text-xs bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors"
+              >
+                Browse Quizzes
+              </button>
+            </div>
           ) : (
             recommendations.map((rec) => (
               <div
@@ -304,7 +338,11 @@ setExportingPDF(false);
                     </p>
                     <ol className="space-y-1.5">
                       {rec.steps.map((s) => (
-                        <li key={`${rec.id}-${s.step}`} className="flex items-center space-x-2 text-xs">
+                        <li
+                          key={`${rec.id}-${s.step}`}
+                          className="flex items-center space-x-2 text-xs cursor-pointer hover:bg-primary/5 rounded-lg p-1.5 transition-colors"
+                          onClick={() => handleStepClick(s)}
+                        >
                           <span className="flex-shrink-0 h-5 w-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[10px] font-bold">
                             {s.step}
                           </span>

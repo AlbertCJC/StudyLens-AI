@@ -410,202 +410,215 @@ def submit_quiz_attempt(quiz_id):
         questions = []
     questions = normalize_quiz_questions(questions)
 
-    data = request.json or {}
-    payload_answers = data.get("answers") or data.get("userAnswers") or []
-    # Attribution always comes from the verified token, never from the body:
-    # a client-supplied studentId could otherwise forge attempts for peers.
-    student_id = user_id
-    student_name = current_user.get("name") or "Student"
-    time_taken = int(data.get("timeTaken") or 0)
-    pass_percentage = quiz.pass_percentage or 70
+    try:
+        data = request.json or {}
+        payload_answers = data.get("answers") or data.get("userAnswers") or []
+        # Attribution always comes from the verified token, never from the body:
+        # a client-supplied studentId could otherwise forge attempts for peers.
+        student_id = user_id
+        student_name = current_user.get("name") or "Student"
+        time_taken = int(data.get("timeTaken") or 0)
+        pass_percentage = quiz.pass_percentage or 70
 
-    # Attempt limit: teacher quizzes with a configured cap reject submissions once
-    # the student has exhausted their allowed attempts. Practice quizzes and
-    # uncapped (0) quizzes stay unlimited.
-    if quiz.quiz_type == "teacher" and (quiz.attempts_allowed or 0) > 0:
-        used = QuizAttemptModel.query.filter_by(quiz_id=quiz_id, student_id=student_id).count()
-        if used >= quiz.attempts_allowed:
-            return jsonify({
-                "error": "You have reached the maximum number of attempts allowed for this quiz.",
-                "code": "ATTEMPTS_EXHAUSTED",
-                "attemptsUsed": used,
-                "attemptsAllowed": quiz.attempts_allowed,
-            }), 409
+        # Attempt limit: teacher quizzes with a configured cap reject submissions once
+        # the student has exhausted their allowed attempts. Practice quizzes and
+        # uncapped (0) quizzes stay unlimited.
+        if quiz.quiz_type == "teacher" and (quiz.attempts_allowed or 0) > 0:
+            used = QuizAttemptModel.query.filter_by(quiz_id=quiz_id, student_id=student_id).count()
+            if used >= quiz.attempts_allowed:
+                return jsonify({
+                    "error": "You have reached the maximum number of attempts allowed for this quiz.",
+                    "code": "ATTEMPTS_EXHAUSTED",
+                    "attemptsUsed": used,
+                    "attemptsAllowed": quiz.attempts_allowed,
+                }), 409
 
-    if not isinstance(payload_answers, list):
-        payload_answers = []
+        if not isinstance(payload_answers, list):
+            payload_answers = []
 
-    q_by_id = {}
-    for idx, q in enumerate(questions):
-        q_by_id.setdefault(str(q.get("id")), q)
-        q_by_id.setdefault(str(idx), q)
+        q_by_id = {}
+        for idx, q in enumerate(questions):
+            q_by_id.setdefault(str(q.get("id")), q)
+            q_by_id.setdefault(str(idx), q)
 
-    score = 0
-    feedback = []
-    weak_topics = []
-    strong_topics = []
-    for q_idx, q in enumerate(questions):
-        qid = str(q.get("id"))
-        selected = None
-        for ua in payload_answers:
-            ua_qid = str(ua.get("questionId") or ua.get("id"))
-            if ua_qid == qid or ua_qid == str(q_idx):
-                selected = ua.get("selectedAnswer") or ua.get("answer")
-                break
+        score = 0
+        feedback = []
+        weak_topics = []
+        strong_topics = []
+        for q_idx, q in enumerate(questions):
+            qid = str(q.get("id"))
+            selected = None
+            for ua in payload_answers:
+                ua_qid = str(ua.get("questionId") or ua.get("id"))
+                if ua_qid == qid or ua_qid == str(q_idx):
+                    selected = ua.get("selectedAnswer") or ua.get("answer")
+                    break
 
-        correct = q.get("correctAnswer")
-        options = q.get("options") or []
-        if isinstance(correct, list):
-            # Multiple-correct-answer question: exact set match wins.
-            selected_items = selected if isinstance(selected, list) else [selected]
-            selected_idx = [_answer_index(s, options) for s in selected_items]
-            correct_idx = [_answer_index(c, options) for c in correct]
-            if (not selected_idx or not correct_idx
-                    or any(i is None for i in selected_idx) or any(i is None for i in correct_idx)):
-                is_correct = False
+            correct = q.get("correctAnswer")
+            options = q.get("options") or []
+            if isinstance(correct, list):
+                # Multiple-correct-answer question: exact set match wins.
+                selected_items = selected if isinstance(selected, list) else [selected]
+                selected_idx = [_answer_index(s, options) for s in selected_items]
+                correct_idx = [_answer_index(c, options) for c in correct]
+                if (not selected_idx or not correct_idx
+                        or any(i is None for i in selected_idx) or any(i is None for i in correct_idx)):
+                    is_correct = False
+                    correct_idx = None
+                else:
+                    is_correct = set(selected_idx) == set(correct_idx)
+            elif not options:
+                is_correct = (
+                    selected is not None
+                    and correct is not None
+                    and str(selected).strip().lower() == str(correct).strip().lower()
+                )
                 correct_idx = None
             else:
-                is_correct = set(selected_idx) == set(correct_idx)
-        elif not options:
-            is_correct = (
-                selected is not None
-                and correct is not None
-                and str(selected).strip().lower() == str(correct).strip().lower()
-            )
-            correct_idx = None
-        else:
-            selected_idx = _answer_index(selected, options)
-            correct_idx = _answer_index(correct, options)
-            is_correct = selected_idx is not None and correct_idx is not None and selected_idx == correct_idx
-        if is_correct:
-            score += 1
+                selected_idx = _answer_index(selected, options)
+                correct_idx = _answer_index(correct, options)
+                is_correct = selected_idx is not None and correct_idx is not None and selected_idx == correct_idx
+            if is_correct:
+                score += 1
 
-        correct_text = ""
-        if isinstance(correct_idx, list):
-            correct_text = ", ".join(str(options[i]) for i in correct_idx if i is not None)
-        elif correct_idx is not None:
-            correct_text = str(options[correct_idx])
-        elif isinstance(correct, str):
-            correct_text = correct
+            correct_text = ""
+            if isinstance(correct_idx, list):
+                correct_text = ", ".join(str(options[i]) for i in correct_idx if i is not None)
+            elif correct_idx is not None:
+                correct_text = str(options[correct_idx])
+            elif isinstance(correct, str):
+                correct_text = correct
 
-        topic = q.get("topicTag") or "General Concepts"
-        if is_correct:
-            if topic not in strong_topics:
-                strong_topics.append(topic)
-        elif topic not in weak_topics:
-            weak_topics.append(topic)
+            topic = q.get("topicTag") or "General Concepts"
+            if is_correct:
+                if topic not in strong_topics:
+                    strong_topics.append(topic)
+            elif topic not in weak_topics:
+                weak_topics.append(topic)
 
-        feedback.append({
-            "questionId": qid,
-            "question": q.get("question", ""),
-            "options": options,
-            "userAnswer": selected,
-            "correctAnswer": correct,
-            "isCorrect": is_correct,
-            "explanation": q.get("explanation") or (
-                f"The correct answer is {correct_text or 'the option highlighted as correct'}."
-            ),
-            "topic": topic,
-            "bloomsLevel": q.get("bloomsLevel", ""),
-            "difficulty": q.get("difficulty", "")
-        })
+            feedback.append({
+                "questionId": qid,
+                "question": q.get("question", ""),
+                "options": options,
+                "userAnswer": selected,
+                "correctAnswer": correct,
+                "isCorrect": is_correct,
+                "explanation": q.get("explanation") or (
+                    f"The correct answer is {correct_text or 'the option highlighted as correct'}."
+                ),
+                "topic": topic,
+                "bloomsLevel": q.get("bloomsLevel", ""),
+                "difficulty": q.get("difficulty", "")
+            })
 
-    max_score = len(questions)
-    percentage = round((score / max_score) * 100, 1) if max_score else 0.0
-    passed = percentage >= pass_percentage
+        max_score = len(questions)
+        percentage = round((score / max_score) * 100, 1) if max_score else 0.0
+        passed = percentage >= pass_percentage
 
-    now_str = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-    attempt = QuizAttemptModel(
-        attempt_id=generate_id("att"),
-        quiz_id=quiz_id,
-        student_id=student_id,
-        attempt_status="Completed",
-        score=score,
-        time_taken=time_taken or 300,
-        submitted_at=now_str,
-        quiz_title=quiz.title,
-        student_name=student_name,
-        subject_id=quiz.subject_id,
-        subject_name=quiz.subject_name,
-        max_score=max_score,
-        percentage=percentage,
-        passed=passed,
-        answers_json=json.dumps(feedback),
-        weak_topics_json=json.dumps(weak_topics),
-        strong_topics_json=json.dumps(strong_topics)
-    )
-    db.session.add(attempt)
-    _commit_or_warn("quiz attempt")
+        now_str = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        attempt = QuizAttemptModel(
+            attempt_id=generate_id("att"),
+            quiz_id=quiz_id,
+            student_id=student_id,
+            attempt_status="Completed",
+            score=score,
+            time_taken=time_taken or 300,
+            submitted_at=now_str,
+            quiz_title=quiz.title,
+            student_name=student_name,
+            subject_id=quiz.subject_id,
+            subject_name=quiz.subject_name,
+            max_score=max_score,
+            percentage=percentage,
+            passed=passed,
+            answers_json=json.dumps(feedback),
+            weak_topics_json=json.dumps(weak_topics),
+            strong_topics_json=json.dumps(strong_topics)
+        )
+        db.session.add(attempt)
+        _commit_or_warn("quiz attempt")
 
-    # --- Progress model upsert (student_progress table) ---
-    # Only persist for real course subjects; skip subjectless/personal quizzes
-    # because student_progress.subject_id is a required FK to subjects.
-    try:
-        subject_id = quiz.subject_id
-        if subject_id and subject_id not in ("", "personal"):
-            total_quizzes = QuizModel.query.filter_by(subject_id=subject_id).count()
-            attempted_rows = (
-                QuizAttemptModel.query.filter_by(student_id=student_id, subject_id=subject_id)
-                .with_entities(QuizAttemptModel.quiz_id)
-                .distinct()
-                .all()
-            )
-            attempted_quizzes = len(attempted_rows)
-            completion_percentage = (
-                round((attempted_quizzes / total_quizzes) * 100, 1) if total_quizzes else 0.0
-            )
+        log_action(student_id, student_name, "student", "QUIZ_SUBMIT",
+                   f"Submitted '{quiz.title}' — {score}/{max_score} ({percentage}%)")
 
-            subject_attempts = (
-                QuizAttemptModel.query.filter_by(student_id=student_id, subject_id=subject_id)
-                .order_by(QuizAttemptModel.submitted_at.desc())
-                .all()
-            )
-            latest_by_quiz = {}
-            for a in subject_attempts:
-                if a.quiz_id not in latest_by_quiz:
-                    latest_by_quiz[a.quiz_id] = float(a.percentage or 0)
-            average_score = (
-                round(sum(latest_by_quiz.values()) / len(latest_by_quiz), 1)
-                if latest_by_quiz else 0.0
-            )
+        # Build the response while the session is still valid. The progress upsert
+        # below can fail and call db.session.remove(), which would detach the
+        # attempt object and break to_dict(). Serializing first avoids that.
+        response_attempt = attempt.to_dict()
+        # Answer-reveal gate: when the teacher disabled "students can see correct
+        # answers", strip the correct answer + explanation from the student-facing
+        # response (the stored attempt keeps the full record for grading views).
+        if quiz.reveal_answers is False:
+            for fb in response_attempt.get("feedback") or []:
+                if isinstance(fb, dict):
+                    fb.pop("correctAnswer", None)
+                    fb.pop("explanation", None)
+                    fb.pop("options", None)
 
-            if average_score >= 80:
-                learning_level = "Advanced"
-            elif average_score >= 60:
-                learning_level = "Intermediate"
-            else:
-                learning_level = "Beginner"
-
-            progress_id = f"prog-{student_id}-{subject_id}"
-            prog = db.session.get(StudentProgressModel, progress_id)
-            if prog is None:
-                prog = StudentProgressModel(
-                    progress_id=progress_id,
-                    student_id=student_id,
-                    subject_id=subject_id,
+        # --- Progress model upsert (student_progress table) ---
+        # Only persist for real course subjects; skip subjectless/personal quizzes
+        # because student_progress.subject_id is a required FK to subjects.
+        # Isolated AFTER the response is built so a failure here cannot detach
+        # the attempt object and break serialization.
+        try:
+            subject_id = quiz.subject_id
+            if subject_id and subject_id not in ("", "personal"):
+                total_quizzes = QuizModel.query.filter_by(subject_id=subject_id).count()
+                attempted_rows = (
+                    QuizAttemptModel.query.filter_by(student_id=student_id, subject_id=subject_id)
+                    .with_entities(QuizAttemptModel.quiz_id)
+                    .distinct()
+                    .all()
                 )
-            prog.completion_percentage = completion_percentage
-            prog.average_score = average_score
-            prog.learning_level = learning_level
-            prog.updated_at = now_str
-            prog.last_activity = now_str
-            db.session.add(prog)
-            _commit_or_warn("student progress")
+                attempted_quizzes = len(attempted_rows)
+                completion_percentage = (
+                    round((attempted_quizzes / total_quizzes) * 100, 1) if total_quizzes else 0.0
+                )
+
+                subject_attempts = (
+                    QuizAttemptModel.query.filter_by(student_id=student_id, subject_id=subject_id)
+                    .order_by(QuizAttemptModel.submitted_at.desc())
+                    .all()
+                )
+                latest_by_quiz = {}
+                for a in subject_attempts:
+                    if a.quiz_id not in latest_by_quiz:
+                        latest_by_quiz[a.quiz_id] = float(a.percentage or 0)
+                average_score = (
+                    round(sum(latest_by_quiz.values()) / len(latest_by_quiz), 1)
+                    if latest_by_quiz else 0.0
+                )
+
+                if average_score >= 80:
+                    learning_level = "Advanced"
+                elif average_score >= 60:
+                    learning_level = "Intermediate"
+                else:
+                    learning_level = "Beginner"
+
+                progress_id = generate_id("prog")
+                prog = db.session.get(StudentProgressModel, progress_id)
+                if prog is None:
+                    prog = StudentProgressModel(
+                        progress_id=progress_id,
+                        student_id=student_id,
+                        subject_id=subject_id,
+                    )
+                prog.completion_percentage = completion_percentage
+                prog.average_score = average_score
+                prog.learning_level = learning_level
+                prog.updated_at = now_str
+                prog.last_activity = now_str
+                db.session.add(prog)
+                _commit_or_warn("student progress")
+        except Exception as e:
+            print("[Database] Could not upsert student progress:", e)
+
+        return jsonify({"attempt": response_attempt}), 200
+
     except Exception as e:
-        print("[Database] Could not upsert student progress:", e)
-
-    log_action(student_id, student_name, "student", "QUIZ_SUBMIT",
-               f"Submitted '{quiz.title}' — {score}/{max_score} ({percentage}%)")
-
-    response_attempt = attempt.to_dict()
-    # Answer-reveal gate: when the teacher disabled "students can see correct
-    # answers", strip the correct answer + explanation from the student-facing
-    # response (the stored attempt keeps the full record for grading views).
-    if quiz.reveal_answers is False:
-        for fb in response_attempt.get("feedback") or []:
-            if isinstance(fb, dict):
-                fb.pop("correctAnswer", None)
-                fb.pop("explanation", None)
-                fb.pop("options", None)
-
-    return jsonify({"attempt": response_attempt}), 200
+        print(f"[Quiz] Submit attempt failed for quiz {quiz_id}: {e}")
+        return jsonify({
+            "error": "Could not submit your assessment. Please try again.",
+            "code": "SUBMIT_FAILED",
+        }), 500

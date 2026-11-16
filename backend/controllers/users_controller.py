@@ -165,7 +165,7 @@ def update_user(user_id):
             return jsonify({"error": strength_error, "code": "WEAK_PASSWORD"}), 400
         if not is_admin:
             current_password = data.get("currentPassword") or ""
-            if not current_password or not verify_password(user.password_hash or "", current_password):
+            if not current_password or not verify_password(current_password, user.password_hash or ""):
                 return jsonify({"error": "Your current password is incorrect.", "code": "INVALID_CREDENTIALS"}), 403
         new_hash = rehash_if_legacy(password, user.password_hash or "")
         user.password_hash = new_hash or hash_password(password)
