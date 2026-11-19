@@ -180,10 +180,9 @@ def _deliver(to_email, subject, html, text):
 def _send(to_email, subject, html, text):
     """Attempt delivery. Never raises in the caller.
 
-    Production sends synchronously: serverless platforms may freeze or destroy
-    the execution environment as soon as the response is returned, which would
-    silently drop a background daemon thread. Development keeps the thread so
-    local requests stay snappy.
+    Production sends synchronously so the API can reflect delivery failure.
+    Development keeps the thread so local requests stay snappy; delivery
+    failures are logged asynchronously.
     """
     def deliver():
         ok, detail = _deliver(to_email, subject, html, text)
@@ -191,12 +190,13 @@ def _send(to_email, subject, html, text):
             print(f"[Email] {detail} -> {to_email} ({subject})", flush=True)
         else:
             print(f"[Email] Delivery failed for {to_email} ({subject}): {detail}", flush=True)
+        return ok, detail
 
     if IS_PRODUCTION:
-        deliver()
-        return
+        return deliver()
 
     threading.Thread(target=deliver, daemon=True).start()
+    return True, "queued"
 
 
 def send_test_email(to_email):
@@ -227,13 +227,13 @@ def send_otp_email(to_email, purpose, code, expires_minutes=None):
         return False
     label, note = label_and_note
     subject = f"Your {_APP_NAME} code: {code}"
-    _send(
+    ok, _ = _send(
         to_email,
         subject,
         _otp_html(label, note, code, expires_minutes),
         _otp_text(subject, note, code, expires_minutes),
     )
-    return True
+    return ok
 
 
 def _expiry_line(expires_minutes):

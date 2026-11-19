@@ -220,16 +220,16 @@ def auth_login():
     if (user.status or "active") != "active":
         log_action(user.user_id, user.to_dict()["name"], user.role, "LOGIN_DISABLED", f"Login blocked for {user.email} (status: {user.status})")
         return jsonify({
-            "error": "This account cannot sign in. Please contact an administrator.",
+            "error": "This account has been Suspended. Please contact the administrator.",
             "code": "ACCOUNT_DISABLED",
         }), 403
 
     # Email must be verified before the account can sign in. Unverified accounts
     # get a fresh code and are routed to the verify-email screen (no token yet).
     if not _user_is_email_verified(user):
-        _issue_email_verify_code(user)
+        code = _issue_email_verify_code(user)
         log_action(user.user_id, user.to_dict()["name"], user.role, "EMAIL_VERIFY_REQUIRED", f"Login blocked for unverified email {user.email}; verification code issued")
-        return jsonify(_email_verify_payload(user)), 200
+        return jsonify(_email_verify_payload(user, code)), 200
 
     # Two-factor authentication enforcement for staff/admin logins
     settings = _load_system_settings()
@@ -238,7 +238,13 @@ def auth_login():
         user.two_factor_code = _hash_otp(code)
         user.two_factor_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=5)).isoformat()
         _commit_or_warn("2FA code issue")
-        if not send_otp_email(user.email, "2fa", code, 5) and otp_reveal_enabled():
+        otp_sent = send_otp_email(user.email, "2fa", code, 5)
+        if not otp_sent and not otp_reveal_enabled():
+            return jsonify({
+                "error": "Email delivery failed. Please try again later.",
+                "code": "EMAIL_DELIVERY_FAILED",
+            }), 503
+        if not otp_sent:
             print(f"[Auth] 2FA OTP for {user.email}: {code}")
         log_action(user.user_id, user.to_dict()["name"], user.role, "TWO_FACTOR_REQUIRED", f"2FA code issued for {user.email}")
         payload = {
@@ -340,6 +346,7 @@ def auth_register():
         if can_resume:
             _issue_email_verify_code(existing)
             existing_dict = existing.to_dict()
+            code = _issue_email_verify_code(existing)
             log_action(
                 existing.user_id,
                 existing_dict["name"],
@@ -347,7 +354,7 @@ def auth_register():
                 "EMAIL_VERIFY_RESUMED",
                 f"Registration resumed for unverified account: {email}",
             )
-            return jsonify(_email_verify_payload(existing)), 200
+            return jsonify(_email_verify_payload(existing, code)), 200
         return jsonify({
             "error": f"Account with email {email} is already registered.",
             "code": "USER_EXISTS"
@@ -380,8 +387,8 @@ def auth_register():
             }), 500
 
         user_dict = new_user.to_dict()
-        verify_payload = _email_verify_payload(new_user)
-        _issue_email_verify_code(new_user)
+        code = _issue_email_verify_code(new_user)
+        verify_payload = _email_verify_payload(new_user, code)
         log_action(new_user.user_id, user_dict["name"], new_user.role, "USER_REGISTER", f"Registered new {role} account: {email} (awaiting email verification)")
         return jsonify(verify_payload), 201
     except IntegrityError as err:
@@ -431,16 +438,16 @@ def verify_email():
         }), 409
     if not user.email_verify_code or not user.email_verify_expires_at:
         # No pending code; reissue one.
-        _issue_email_verify_code(user)
-        return jsonify(_email_verify_payload(user)), 200
+        code = _issue_email_verify_code(user)
+        return jsonify(_email_verify_payload(user, code)), 200
 
     expires = _parse_iso(user.email_verify_expires_at)
     if expires and _utcnow_naive() > expires:
-        _issue_email_verify_code(user)
-        return jsonify(_email_verify_payload(user)), 200
+        code = _issue_email_verify_code(user)
+        return jsonify(_email_verify_payload(user, code)), 200
     if (user.email_verify_attempts or 0) >= EMAIL_VERIFY_MAX_ATTEMPTS:
-        _issue_email_verify_code(user)
-        return jsonify(_email_verify_payload(user)), 200
+        code = _issue_email_verify_code(user)
+        return jsonify(_email_verify_payload(user, code)), 200
     if not code or not user.email_verify_code or not _verify_otp(code, user.email_verify_code):
         user.email_verify_attempts = (user.email_verify_attempts or 0) + 1
         _commit_or_warn("email verification failure attempt")
@@ -477,14 +484,14 @@ def resend_email_code():
     if _user_is_email_verified(user):
         return jsonify(_email_verify_payload(user)), 200
     try:
-        _issue_email_verify_code(user)
+        code = _issue_email_verify_code(user)
     except Exception as e:
         print(f"[Auth] Resend code failed for {user.email}: {e}")
         return jsonify({
             "error": "Could not resend the verification code. Please try again.",
             "code": "RESEND_FAILED",
         }), 500
-    return jsonify(_email_verify_payload(user)), 200
+    return jsonify(_email_verify_payload(user, code)), 200
 
 
 def resend_two_factor_code():
@@ -523,7 +530,13 @@ def resend_two_factor_code():
     user.two_factor_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=5)).isoformat()
     user.two_factor_attempts = None
     _commit_or_warn("2FA code resend")
-    if not send_otp_email(user.email, "2fa", code, 5) and otp_reveal_enabled():
+    otp_sent = send_otp_email(user.email, "2fa", code, 5)
+    if not otp_sent and not otp_reveal_enabled():
+        return jsonify({
+            "error": "Email delivery failed. Please try again later.",
+            "code": "EMAIL_DELIVERY_FAILED",
+        }), 503
+    if not otp_sent:
         print(f"[Auth] 2FA OTP for {user.email}: {code}")
     payload = {"message": f"A new verification code was sent to {user.email}.", "expiresInMinutes": 5}
     if otp_reveal_enabled():
@@ -607,7 +620,13 @@ def auth_request_reset_otp():
     user.reset_otp_expires_at = (_utcnow_naive() + datetime.timedelta(minutes=RESET_OTP_EXPIRY_MINUTES)).isoformat()
     user.reset_otp_attempts = 0
     _commit_or_warn("password reset OTP issue")
-    if not send_otp_email(user.email, "reset", code, RESET_OTP_EXPIRY_MINUTES) and otp_reveal_enabled():
+    otp_sent = send_otp_email(user.email, "reset", code, RESET_OTP_EXPIRY_MINUTES)
+    if not otp_sent and not otp_reveal_enabled():
+        return jsonify({
+            "error": "Email delivery failed. Please try again later.",
+            "code": "EMAIL_DELIVERY_FAILED",
+        }), 503
+    if not otp_sent:
         print(f"[Auth] Password reset OTP for {user.email}: {code}")
     log_action(user.user_id, user.to_dict()["name"], user.role, "RESET_OTP_REQUESTED", f"Password reset code issued for {user.email}")
 

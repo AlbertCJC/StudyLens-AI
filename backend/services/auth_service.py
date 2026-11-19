@@ -407,7 +407,7 @@ def _user_is_email_verified(user):
     return bool(user.email_verified)
 
 
-def _email_verify_payload(user):
+def _email_verify_payload(user, code=None):
     """Response body for an unverified account awaiting an email code."""
     payload = {
         "requiresEmailVerification": True,
@@ -415,8 +415,8 @@ def _email_verify_payload(user):
         "email": user.email,
         "expiresInMinutes": EMAIL_VERIFY_EXPIRY_MINUTES,
     }
-    if otp_reveal_enabled() and user.email_verify_code:
-        payload["devCode"] = user.email_verify_code
+    if otp_reveal_enabled() and code:
+        payload["devCode"] = code
     return payload
 
 
