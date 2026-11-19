@@ -3,11 +3,15 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://studylens-api.vercel.app/api/:path*"
+      "destination": "https://studylens-ai-backend.vercel.app/api/:path*"
     },
     {
       "source": "/uploads/:path*",
-      "destination": "https://studylens-api.vercel.app/uploads/:path*"
+      "destination": "https://studylens-ai-backend.vercel.app/uploads/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
