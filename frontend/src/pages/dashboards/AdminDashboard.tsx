@@ -62,7 +62,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
     page.setNewUserName("");
     page.setNewUserEmail("");
     page.setNewUserRole("student");
-    page.setNewUserDept("Computer Science");
+    page.setNewUserDept("College of Computer Studies");
     setShowAddUserModal(true);
   };
 
@@ -75,13 +75,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
 
   return (
     <div className="space-y-6">
-      <AdminHeaderToolbar
-        currentUser={currentUser}
-        hideTabs={hideTabs}
-        activeTab={page.activeTab}
-        onAddUser={onAddUser}
-        onBroadcast={onBroadcast}
-      />
+      {!hideTabs && (
+        <AdminHeaderToolbar
+          currentUser={currentUser}
+          onAddUser={onAddUser}
+          onBroadcast={onBroadcast}
+        />
+      )}
 
       {page.activeTab === "overview" && (
         <AdminOverviewTab
@@ -133,6 +133,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ defaultTab = "ov
           setSelectedUserRoleFilter={page.setSelectedUserRoleFilter}
           selectedUserStatusFilter={page.selectedUserStatusFilter}
           setSelectedUserStatusFilter={page.setSelectedUserStatusFilter}
+          onAddUser={onAddUser}
           handleToggleUserStatus={handleToggleUserStatus}
           handleOpenEditUser={handleOpenEditUser}
           handleResetPassword={handleResetPassword}

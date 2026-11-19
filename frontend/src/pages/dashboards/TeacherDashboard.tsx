@@ -261,7 +261,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {subjects.map((sub) => (
-                <div key={sub.id} className="p-4 rounded-xl border border-border bg-muted/30 space-y-3">
+                <div
+                  key={sub.id}
+                  className="p-4 rounded-xl border border-border bg-muted/30 space-y-3 cursor-pointer hover:border-purple-500/40 transition-colors"
+                  onClick={() => navigate(`/subjects/${sub.id}?tab=people`)}
+                >
                   <div className="flex items-center justify-between">
                     <span className="px-2.5 py-1 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-md font-mono text-xs font-bold">
                       {sub.code}
@@ -277,7 +281,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
                   <div className="pt-2 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
                     <span>{sub.materialCount} Documents</span>
                     <button
-                      onClick={() => onNavigate("materials")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onNavigate("materials");
+                      }}
                       className="text-purple-600 dark:text-purple-400 hover:underline font-semibold text-[11px] cursor-pointer"
                     >
                       View Documents →

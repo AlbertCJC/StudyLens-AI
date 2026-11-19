@@ -188,7 +188,7 @@ export function useLandingAuth() {
         }
 
         const computedFullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
-        const dept = role === "student" ? "Computer Science" : role === "teacher" ? "Computer Science & IT" : "Academic Affairs";
+        const dept = "College of Computer Studies";
         await register(computedFullName, email.trim(), role, dept, password);
         setPassword("");
         setConfirmPassword("");

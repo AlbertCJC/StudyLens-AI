@@ -150,7 +150,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
                 type="text"
                 value={newUserDept}
                 onChange={(e) => setNewUserDept(e.target.value)}
-                placeholder="Computer Science"
+                placeholder="College of Computer Studies"
                 className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
               />
             </div>

@@ -67,7 +67,7 @@ export function useAdminDashboard(defaultTab: "overview" | "logs" | "users" | "a
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserRole, setNewUserRole] = useState<UserRole>("student");
-  const [newUserDept, setNewUserDept] = useState("Computer Science");
+  const [newUserDept, setNewUserDept] = useState("College of Computer Studies");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserConfirmPassword, setNewUserConfirmPassword] = useState("");
   const [showNewPassword, setShowNewPassword] = useState(false);

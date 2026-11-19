@@ -1,6 +1,9 @@
 import { Mail, UserCheck, ShieldCheck, Users } from "lucide-react";
 import { Pagination, slicePage } from "../../../components/Pagination";
 import { avatarUrl, type EnrolledStudent } from "./subjectDetailUtils";
+import { UserInfoModal } from "../../../components/UserInfoModal";
+import { authFetch } from "../../../utils/authFetch";
+import { useState } from "react";
 
 interface PeopleTabProps {
   students: EnrolledStudent[];
@@ -8,7 +11,7 @@ interface PeopleTabProps {
   peoplePage: number;
   setPeoplePage: (page: number) => void;
   currentUser: { role: string | null | undefined; id: string | null | undefined } | null;
-  subject: { teacherName: string; teacherAvatar?: string | null };
+  subject: { teacherId: string; teacherName: string; teacherAvatar?: string | null };
   openAssignStudents: () => void;
 }
 
@@ -21,6 +24,61 @@ export function PeopleTab({
   subject,
   openAssignStudents,
 }: PeopleTabProps) {
+  const [selectedUser, setSelectedUser] = useState<{
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    department?: string | null;
+    studentId?: string | null;
+    status?: string | null;
+    avatar?: string | null;
+  } | null>(null);
+  const [loadingTeacher, setLoadingTeacher] = useState(false);
+
+  const openStudent = (s: EnrolledStudent) => {
+    setSelectedUser({
+      id: s.id,
+      name: s.name,
+      email: s.email,
+      role: "student",
+      studentId: s.studentId || undefined,
+      avatar: s.avatar,
+    });
+  };
+
+  const openTeacher = async () => {
+    setLoadingTeacher(true);
+    try {
+      const res = await authFetch(`/api/users/${subject.teacherId}`);
+      if (res.ok) {
+        const u = (await res.json()) as {
+          id: string;
+          name: string;
+          email: string;
+          role: string;
+          department?: string | null;
+          studentId?: string | null;
+          status?: string | null;
+          avatar?: string | null;
+        };
+        setSelectedUser({
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          department: u.department,
+          studentId: u.studentId,
+          status: u.status,
+          avatar: u.avatar,
+        });
+      }
+    } catch {
+      // ignored; modal will show limited info if it opens
+    } finally {
+      setLoadingTeacher(false);
+    }
+  };
   return (
     <div className="bg-card rounded-2xl border border-border p-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -54,7 +112,11 @@ export function PeopleTab({
               <ShieldCheck className="w-4 h-4" />
             </div>
           )}
-          <div className="min-w-0">
+          <div
+            className="min-w-0 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+            onClick={openTeacher}
+            title={loadingTeacher ? "Loading instructor info..." : "View instructor profile"}
+          >
             <p className="text-xs font-bold text-foreground truncate">{subject.teacherName}</p>
             <p className="text-[10px] text-muted-foreground truncate">
               Assigned instructor for this subject
@@ -87,7 +149,11 @@ export function PeopleTab({
               <tbody>
                 {slicePage(students, peoplePage).map((s) => (
                   <tr key={s.id} className="border-b border-border/60 last:border-0">
-                    <td className="py-2.5 pr-4 font-bold text-foreground">
+                    <td
+                      className="py-2.5 pr-4 font-bold text-foreground cursor-pointer hover:bg-blue-500/10 transition-colors"
+                      onClick={() => openStudent(s)}
+                      title="View student profile"
+                    >
                       <span className="flex items-center gap-2">
                         {avatarUrl(s.avatar) ? (
                           <img
@@ -119,6 +185,11 @@ export function PeopleTab({
           <Pagination page={peoplePage} total={students.length} onPageChange={setPeoplePage} />
         </>
       )}
+      <UserInfoModal
+        open={selectedUser !== null}
+        onClose={() => setSelectedUser(null)}
+        user={selectedUser!}
+      />
     </div>
   );
 }
