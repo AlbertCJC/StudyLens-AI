@@ -70,7 +70,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
     };
   }, [currentUser?.id]);
 
-  const totalStudents = subjects.reduce((sum, s) => sum + (s.studentCount || 0), 0);
+  const totalStudents = analytics?.totals?.studentCount ?? subjects.reduce((sum, s) => sum + (s.studentCount || 0), 0);
   const totalMaterials = subjects.reduce((sum, s) => sum + (s.materialCount || 0), 0);
   const totalQuizzes = quizzes.length;
   const publishedQuizzes = quizzes.filter((q) => q.isPublished).length;
