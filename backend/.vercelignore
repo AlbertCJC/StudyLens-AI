@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+*.db
+*.log
+uploads/
+tests/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+scripts/backup_erp_align_snapshots/

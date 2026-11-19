@@ -88,7 +88,7 @@ StudyLens-AI/
 2. Configure your environment variables in `backend/.env`:
    ```env
    GROQ_API_KEY=your_groq_api_key_here
-   JWT_SECRET=studylens_ai_jwt_secret_key_2026
+   JWT_SECRET=<generate with: python -c "import secrets; print(secrets.token_hex(32))">
    MYSQL_DATABASE_URL=mysql+pymysql://root:password@localhost:3306/studylens_db
    FLASK_PORT=5000
    ```
@@ -155,6 +155,127 @@ cd mobile && npm test
 ```
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests, and the production build on every push and pull request to `main`.
+
+---
+
+## ☁️ Deploying the Web App + API to Vercel
+
+The manuscript describes a three-tier client-server system (Flask API, MySQL, cloud storage, AI inference). Vercel hosts the **web SPA and the Flask API**; MySQL, file storage, and AI remain managed external services.
+
+### Architecture
+
+```
+Browser / Mobile
+      │
+      ▼
+Vercel: studylens-web  (root = frontend/)
+      │  /api/* and /uploads/* proxied (same-origin cookies)
+      ▼
+Vercel: studylens-api  (root = backend/, Flask)
+      ├── TiDB Cloud Starter (MySQL)   ← required
+      ├── Cloudinary                   ← required for durable uploads
+      ├── Groq API                     ← GROQ_API_KEY
+      ├── Upstash Redis (optional)     ← shared rate limiting
+      └── Gmail SMTP                   ← OTP email
+```
+
+### 1. Provision external services
+
+1. **TiDB Cloud Starter (MySQL-compatible)** — create a Starter instance in **AWS Singapore (`aws-ap-southeast-1`)** and set the **spending limit to $0** (quota exhaustion refuses new connections instead of billing). In **Connect**, generate the password and download the **CA certificate** to `backend/certs/tidb-ca.pem` (CA certificates are public and safe to commit). Note the host, port (`4000`), user (`<prefix>.root`), and database (`test`). TiDB requires TLS; use the component variables below so the backend URL-encodes the password safely. Free tier: 5 GiB row storage + 50M RU/month.
+2. **Cloudinary** — copy `CLOUDINARY_URL` (`cloudinary://<key>:<secret>@<cloud>`). Materials use private/authenticated resources; avatars are public images.
+3. **Upstash Redis (recommended)** — copy the `rediss://` connection string.
+4. **Gmail** — enable 2-Step Verification, create an App Password, and keep `GMAIL_SENDER` + `GMAIL_APP_PASSWORD` ready.
+5. **Groq** — create an API key at <https://console.groq.com/keys>.
+
+### 2. Deploy the API (`studylens-api`)
+
+Import this repository, then configure the project:
+
+| Setting | Value |
+|---|---|
+| Root Directory | `backend` |
+| Framework Preset | Flask |
+| Python version | 3.13 (`.python-version`) |
+| Function region | `sin1` (`vercel.json`) |
+| Max duration | 300 s (`vercel.json`) |
+
+Add these environment variables (Production):
+
+```env
+FLASK_ENV=production
+JWT_SECRET=<output of: python -c "import secrets; print(secrets.token_hex(32))">
+OTP_PEPPER=<another random 64-hex value>
+GROQ_API_KEY=gsk_...
+MYSQL_HOST=gateway01.ap-southeast-1.prod.aws.tidbcloud.com
+MYSQL_PORT=4000
+MYSQL_USER=<prefix>.root
+MYSQL_PASSWORD=<tidb password>
+MYSQL_DB=test
+MYSQL_SSL_CA=certs/tidb-ca.pem
+DB_POOL_RECYCLE=300
+CLOUDINARY_URL=cloudinary://<key>:<secret>@<cloud>
+ALLOWED_ORIGINS=https://<web-project>.vercel.app
+AUTH_COOKIE_SECURE=true
+REFRESH_COOKIE_SECURE=true
+AUTH_COOKIE_SAMESITE=Lax
+REFRESH_COOKIE_SAMESITE=Lax
+MAX_UPLOAD_MB=4
+RUN_STARTUP_REPAIRS=true
+RATE_LIMIT_BACKEND=redis
+REDIS_URL=rediss://default:<pw>@<host>:6379
+GMAIL_SENDER=<gmail address>
+GMAIL_APP_PASSWORD=<16-character app password>
+SEED_DEMO_DATA=false
+OTP_DEV_REVEAL=false
+FLASK_DEBUG=false
+ALLOW_SQLITE_FALLBACK=false
+ALLOW_LOCAL_FALLBACK=false
+LOG_FORMAT=json
+```
+
+> Do **not** set `MYSQL_DATABASE_URL` on Vercel when using the component variables above; it overrides them. If you prefer a full URL, change the scheme to `mysql+pymysql`, URL-encode the password, and remove TiDB's `ssl-mode=...` parameter (the backend strips it as a safety net, but PyMySQL rejects it).
+
+Deploy, then poll `https://<api-project>.vercel.app/api/health` until it returns `{"status":"ok","databaseBackend":"mysql","databaseReady":true}`. The first request runs the startup repairs and creates the schema if it does not already exist.
+
+**Create the teacher/admin accounts** (production refuses demo seeding). Run locally against the hosted TiDB database. The backend loads `backend/.env`, so keep the `MYSQL_*` component variables there and switch only `FLASK_ENV` for the seed:
+
+```powershell
+$env:FLASK_ENV="development"; $env:SEED_DEMO_DATA="true"
+$env:DEMO_TEACHER_PASSWORD="<strong password>"; $env:DEMO_ADMIN_PASSWORD="<strong password>"
+python backend/scripts/seed_dev.py
+```
+
+Seeding is blocked when `FLASK_ENV=production`, so use `development` locally even though the database is hosted. The script runs `db.create_all()` and migrations; if TiDB rejects a DDL/FK statement, stop and fix the schema rather than deploying a broken API. After the schema exists you can set `RUN_STARTUP_REPAIRS=false` on Vercel to speed up cold starts.
+
+### 3. Deploy the web app (`studylens-web`)
+
+| Setting | Value |
+|---|---|
+| Root Directory | `frontend` |
+| Framework Preset | Vite |
+| Build Command | `npm ci && npm run build` |
+| Output Directory | `dist` |
+
+`frontend/vercel.json` proxies `/api/*` and `/uploads/*` to the API project so cookies, CSRF, and CSP remain same-origin. **Replace `https://studylens-api.vercel.app` with your API project's real domain** before deploying. After the web app is live, set `ALLOWED_ORIGINS` on the API project to that domain and redeploy the API.
+
+### 4. Verify
+
+- `/api/health` reports `databaseReady: true`
+- Register a student, sign in, and reload (session cookie)
+- Upload a file under 4 MB and open/download it
+- Generate a quiz, flashcards, and a summary
+- Request a password reset and receive the OTP email
+- Mobile: set the server URL on the login screen to `https://<api-project>.vercel.app/api`
+
+### Vercel limitations to know
+
+- **4.5 MB request-body limit.** Keep `MAX_UPLOAD_MB=4`; the UI blocks larger files before upload. Direct-to-Cloudinary uploads are required for larger files.
+- **No persistent disk.** Local `uploads/` is ephemeral; production requires Cloudinary (uploads raise a clear error if no cloud target is configured). In development, an unwritable path falls back to the OS temp directory automatically.
+- **No MySQL.** Use a managed provider; TiDB Cloud Starter is the documented option.
+- **TiDB idle connections.** Starter closes idle connections after 5 minutes; `DB_POOL_RECYCLE=300` and `pool_pre_ping` handle reconnects.
+- **TiDB compatibility.** TiDB is MySQL-compatible, not Oracle MySQL. The `seed_dev.py` schema pass is the compatibility check for this app's DDL/FK usage.
+- **Multiple instances.** Use `RATE_LIMIT_BACKEND=redis` so rate-limit counters are shared; account lockouts live in the database.
+- **Long AI calls.** Vercel Hobby allows up to 300 s per invocation; Groq requests time out at 45 s and degrade gracefully.
 
 ---
 

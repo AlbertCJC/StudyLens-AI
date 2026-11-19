@@ -1,6 +1,5 @@
 import {
   getApiBaseUrl,
-  getAuthToken,
   setAuthToken,
   buildHeaders,
   handleUnauthorized,
@@ -50,7 +49,7 @@ export type LoginResult =
 export async function apiLogin(email: string, role?: string, user?: Partial<User>, password?: string): Promise<LoginResult> {
   const res = await fetch(`${getApiBaseUrl()}/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ email, role, user, password }),
   });
   if (!res.ok) {
@@ -67,7 +66,7 @@ export async function apiLogin(email: string, role?: string, user?: Partial<User
 export async function apiVerifyTwoFactor(userId: string, code: string): Promise<{ token: string; user: User }> {
   const res = await fetch(`${getApiBaseUrl()}/auth/verify-2fa`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ userId, code }),
   });
   if (!res.ok) {
@@ -88,7 +87,7 @@ export async function apiRegister(
 ): Promise<{ token: string; user: User } | EmailVerificationPending> {
   const res = await fetch(`${getApiBaseUrl()}/auth/register`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ name, email, role, department, password }),
   });
   if (!res.ok) {
@@ -104,7 +103,7 @@ export async function apiRegister(
 export async function apiVerifyEmail(userId: string, code: string): Promise<{ token: string; user: User } | EmailVerificationPending> {
   const res = await fetch(`${getApiBaseUrl()}/auth/verify-email`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ userId, code }),
   });
   if (!res.ok) {
@@ -120,7 +119,7 @@ export async function apiVerifyEmail(userId: string, code: string): Promise<{ to
 export async function apiResendEmailCode(userId: string): Promise<EmailVerificationPending> {
   const res = await fetch(`${getApiBaseUrl()}/auth/resend-email-code`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ userId }),
   });
   const errBody = await res.json().catch(() => ({}));
@@ -153,7 +152,7 @@ export async function apiChangePassword(currentPassword: string, newPassword: st
 export async function apiRequestResetOtp(email: string): Promise<{ devCode?: string; expiresInMinutes?: number }> {
   const res = await fetch(`${getApiBaseUrl()}/auth/reset-otp`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ email }),
   });
   const errBody = await res.json().catch(() => ({}));
@@ -166,7 +165,7 @@ export async function apiRequestResetOtp(email: string): Promise<{ devCode?: str
 export async function apiVerifyResetOtp(email: string, otp: string): Promise<void> {
   const res = await fetch(`${getApiBaseUrl()}/auth/verify-reset-otp`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ email, otp }),
   });
   if (!res.ok) {
@@ -178,7 +177,7 @@ export async function apiVerifyResetOtp(email: string, otp: string): Promise<voi
 export async function apiResetPassword(email: string, otp: string, newPassword: string): Promise<void> {
   const res = await fetch(`${getApiBaseUrl()}/auth/reset-password`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ email, otp, newPassword }),
   });
   if (!res.ok) {

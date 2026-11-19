@@ -1,9 +1,9 @@
 import { STORAGE_KEYS, getJSON as storageGetJSON, setJSON } from '../../utils/storage';
 import {
   getApiBaseUrl,
-  getAuthToken,
   setAuthToken,
   buildHeaders,
+  buildFormHeaders,
   handleUnauthorized,
   invalidateApiCache,
   getJSON,
@@ -69,7 +69,7 @@ export async function uploadAvatar(userId: string, uri: string, name: string, mi
   form.append('file', { uri, name, type: mimeType } as any);
   const res = await fetch(`${getApiBaseUrl()}/users/${encodeURIComponent(userId)}/avatar`, {
     method: 'POST',
-    headers: getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {},
+    headers: buildFormHeaders(),
     body: form,
   });
   if (handleUnauthorized(res)) {

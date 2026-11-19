@@ -29,6 +29,7 @@ from email_service import is_email_enabled, send_otp_email
 from config import (
     ALLOWED_MATERIAL_EXTENSIONS,
     ALLOWED_ORIGINS,
+    DB_POOL_RECYCLE,
     DB_TARGET,
     IS_PRODUCTION,
     MAX_EXTRACT_PAGES,
@@ -211,17 +212,21 @@ def _handle_500(err):
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_TARGET
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 if DB_TARGET.startswith("mysql"):
-    # MySQL drops idle pooled connections (default wait_timeout). pool_pre_ping
-    # validates the connection before use, and pool_recycle replaces stale ones.
+    # MySQL/TiDB drops idle pooled connections. pool_pre_ping validates the
+    # connection before use, and pool_recycle retires stale ones first. TiDB
+    # Cloud Starter closes idle connections after 5 minutes (default 300s).
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
         "pool_pre_ping": True,
-        "pool_recycle": 1500,
+        "pool_recycle": DB_POOL_RECYCLE,
     }
 db.init_app(app)
 
 # Apply idempotent schema/data repairs once per process at startup so existing
-# databases provisioned before a column was added keep working.
-run_startup_repairs(app)
+# databases provisioned before a column was added keep working. On serverless
+# platforms every cold start imports this module; set RUN_STARTUP_REPAIRS=false
+# after the schema has been provisioned once to keep cold starts fast.
+if os.getenv("RUN_STARTUP_REPAIRS", "true").strip().lower() in ("1", "true", "yes", "on"):
+    run_startup_repairs(app)
 
 
 @app.errorhandler(GroqAPIError)

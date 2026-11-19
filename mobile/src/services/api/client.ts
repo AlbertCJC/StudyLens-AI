@@ -71,8 +71,21 @@ export function handleUnauthorized(res: Response): boolean {
   return true;
 }
 
+export const MOBILE_CLIENT_HEADERS = { 'X-Client-Type': 'mobile' } as const;
+
 export function buildHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(extra || {}) };
+  const headers: Record<string, string> = {
+    ...MOBILE_CLIENT_HEADERS,
+    'Content-Type': 'application/json',
+    ...(extra || {}),
+  };
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+  return headers;
+}
+
+// Multipart requests must let the runtime set Content-Type with the boundary.
+export function buildFormHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { ...MOBILE_CLIENT_HEADERS };
   if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
   return headers;
 }
@@ -187,7 +200,7 @@ export async function postForm<T>(path: string, form: FormData, fallback: Fallba
   try {
     const res = await fetch(`${getApiBaseUrl()}${path}`, {
       method: 'POST',
-      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      headers: buildFormHeaders(),
       body: form,
     });
     if (handleUnauthorized(res)) return resolveFallback(fallback);

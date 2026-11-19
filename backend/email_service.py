@@ -31,6 +31,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, formatdate, make_msgid
 
+from config import IS_PRODUCTION
+
 _DEFAULT_HOST = "smtp.gmail.com"
 _DEFAULT_PORT = 587
 _DEFAULT_SSL_PORT = 465
@@ -176,13 +178,23 @@ def _deliver(to_email, subject, html, text):
 
 
 def _send(to_email, subject, html, text):
-    """Attempts delivery inside a daemon thread. Never raises in the caller."""
+    """Attempt delivery. Never raises in the caller.
+
+    Production sends synchronously: serverless platforms may freeze or destroy
+    the execution environment as soon as the response is returned, which would
+    silently drop a background daemon thread. Development keeps the thread so
+    local requests stay snappy.
+    """
     def deliver():
         ok, detail = _deliver(to_email, subject, html, text)
         if ok:
             print(f"[Email] {detail} -> {to_email} ({subject})", flush=True)
         else:
             print(f"[Email] Delivery failed for {to_email} ({subject}): {detail}", flush=True)
+
+    if IS_PRODUCTION:
+        deliver()
+        return
 
     threading.Thread(target=deliver, daemon=True).start()
 

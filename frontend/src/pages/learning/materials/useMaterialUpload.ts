@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LearningMaterial, User } from "../../../types";
 import { authFetch } from "../../../utils/authFetch";
+import { uploadSizeError } from "../../../utils/materialFile";
 
 type ToastFn = (message: string, type?: "info" | "error" | "success") => void;
 
@@ -72,6 +73,11 @@ export function useMaterialUpload({ currentUser, showToast, onUploaded }: UseMat
     }
     if (!title.trim()) {
       showToast("Document title is required before publishing.", "info");
+      return;
+    }
+    const sizeError = uploadSizeError(file);
+    if (sizeError) {
+      showToast(sizeError, "error");
       return;
     }
 

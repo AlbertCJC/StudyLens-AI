@@ -6,16 +6,45 @@ loudly at startup instead of running with an insecure default.
 """
 
 import os
+import tempfile
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import URL
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-_UPLOADS_DIR = os.path.join(_BACKEND_DIR, "uploads")
-os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
 # Path-independent: resolves .env from this file's folder regardless of the
 # working directory the Flask process is launched from.
 load_dotenv(dotenv_path=os.path.join(_BACKEND_DIR, ".env"))
+
+# Uploads live on local disk only when a cloud target is not configured. On a
+# read-only/serverless filesystem (e.g. Vercel) fall back to the OS temp dir so
+# importing this module never crashes. Configure Cloudinary for durable storage;
+# UPLOADS_DIR can point at any writable path.
+_UPLOADS_SETTING = (os.getenv("UPLOADS_DIR") or "").strip()
+if _UPLOADS_SETTING and not os.path.isabs(_UPLOADS_SETTING):
+    _UPLOADS_SETTING = os.path.join(_BACKEND_DIR, _UPLOADS_SETTING)
+_UPLOADS_DIR = _UPLOADS_SETTING or os.path.join(_BACKEND_DIR, "uploads")
+
+
+def _ensure_uploads_dir(path: str) -> str:
+    """Return ``path`` once it is proven writable, else a temp-dir fallback."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".write-test")
+        with open(probe, "w", encoding="utf-8") as handle:
+            handle.write("ok")
+        os.remove(probe)
+        return path
+    except OSError:
+        fallback = os.path.join(tempfile.gettempdir(), "studylens_uploads")
+        os.makedirs(fallback, exist_ok=True)
+        print(f"[Uploads] {path} is not writable; using {fallback}.")
+        return fallback
+
+
+_UPLOADS_DIR = _ensure_uploads_dir(_UPLOADS_DIR)
 
 # Configuration & Secrets
 # The JWT secret MUST come from the environment. There is deliberately no
@@ -37,6 +66,7 @@ _PLACEHOLDER_SECRETS = {
     "generate_a_unique_random_secret_here",
     "replace-me",
     "example",
+    "studylens_ai_jwt_secret_key_2026",
 }
 if (
     SECRET_KEY.lower() in _PLACEHOLDER_SECRETS
@@ -201,6 +231,93 @@ ALLOWED_ORIGINS = [
 ]
 
 
+# MySQL/TiDB closes idle pooled connections. pool_pre_ping validates a
+# connection before use; pool_recycle retires it first. TiDB Cloud Starter
+# closes idle connections after 5 minutes, so the default is 300 seconds.
+DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "300"))
+
+
+def _mysql_url_from_env() -> str:
+    """Build a MySQL URL from component env vars with safe credential encoding."""
+    password = os.getenv("MYSQL_PASSWORD", "") or None
+    return URL.create(
+        drivername="mysql+pymysql",
+        username=os.getenv("MYSQL_USER", "root"),
+        password=password,
+        host=os.getenv("MYSQL_HOST", "localhost"),
+        port=int(os.getenv("MYSQL_PORT", "3306")),
+        database=os.getenv("MYSQL_DB", "studylens_db"),
+        query={"charset": "utf8mb4", "connect_timeout": "10"},
+    ).render_as_string(hide_password=False)
+
+
+def _ssl_mode_requests_tls(mysql_url: str) -> bool:
+    """Return True when the URL asks for an encrypted connection."""
+    query = urlsplit(mysql_url).query
+    return any(
+        key.lower() in ("ssl-mode", "ssl_mode")
+        and value.strip().upper() not in ("", "DISABLED")
+        for key, value in parse_qsl(query, keep_blank_values=True)
+    )
+
+
+def _strip_ssl_mode(mysql_url: str) -> str:
+    """Remove ssl-mode query params; PyMySQL does not accept them as kwargs."""
+    parts = urlsplit(mysql_url)
+    if not parts.query:
+        return mysql_url
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in ("ssl-mode", "ssl_mode")
+    ]
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+    )
+
+
+def _mysql_ssl_ca_path():
+    """Resolve MYSQL_SSL_CA (relative paths are anchored at backend/)."""
+    ca = (os.getenv("MYSQL_SSL_CA") or "").strip()
+    if not ca:
+        return None
+    if not os.path.isabs(ca):
+        ca = os.path.join(_BACKEND_DIR, ca)
+    if not os.path.isfile(ca):
+        raise RuntimeError(
+            f"MYSQL_SSL_CA points to a missing file: {ca}. Download the CA "
+            "certificate from your MySQL provider and commit it (CA certificates "
+            "are public), or unset MYSQL_SSL_CA."
+        )
+    return ca
+
+
+def _mysql_url_with_ssl(mysql_url: str) -> str:
+    """Normalize MySQL TLS params and append the configured provider CA.
+
+    ``ssl-mode`` is a libmysqlclient/mysql-connector option, not a PyMySQL
+    keyword, so it is stripped before the URL reaches SQLAlchemy. Verified TLS
+    is achieved by passing ``ssl_ca``; PyMySQL then enables ``CERT_REQUIRED``
+    and hostname checking automatically.
+    """
+    requested_tls = _ssl_mode_requests_tls(mysql_url)
+    mysql_url = _strip_ssl_mode(mysql_url)
+    if "ssl_ca=" in mysql_url:
+        return mysql_url
+    ca = _mysql_ssl_ca_path()
+    if not ca:
+        if requested_tls:
+            raise RuntimeError(
+                "The database URL requests TLS via ssl-mode, but MYSQL_SSL_CA is "
+                "not set. Download the provider CA certificate, set "
+                "MYSQL_SSL_CA=certs/tidb-ca.pem, and retry."
+            )
+        return mysql_url
+    separator = "&" if "?" in mysql_url else "?"
+    safe_path = quote(ca.replace(os.sep, "/"), safe="/:")
+    return f"{mysql_url}{separator}ssl_ca={safe_path}"
+
+
 def _resolve_db_target():
     """Returns the configured database URL, failing fast when it is unusable.
 
@@ -209,20 +326,17 @@ def _resolve_db_target():
     transient MySQL outage would silently start the app against an empty,
     divergent database.
     """
-    mysql_url = os.getenv("MYSQL_DATABASE_URL")
-    if not mysql_url and os.getenv("MYSQL_HOST"):
-        db_user = os.getenv("MYSQL_USER", "root")
-        db_pass = os.getenv("MYSQL_PASSWORD", "")
-        db_host = os.getenv("MYSQL_HOST", "localhost")
-        db_name = os.getenv("MYSQL_DB", "studylens_db")
-        mysql_url = f"mysql+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}"
+    mysql_url = (os.getenv("MYSQL_DATABASE_URL") or "").strip()
+    if not mysql_url and (os.getenv("MYSQL_HOST") or "").strip():
+        mysql_url = _mysql_url_from_env()
 
     sqlite_target = "sqlite:///studylens.db"
     if not mysql_url:
         if IS_PRODUCTION:
             raise RuntimeError(
-                "MYSQL_DATABASE_URL is required when FLASK_ENV=production. "
-                "Refusing to start against a local SQLite database."
+                "MYSQL_DATABASE_URL or MYSQL_HOST is required when "
+                "FLASK_ENV=production. Refusing to start against a local SQLite "
+                "database."
             )
         print("[Database] No MySQL target configured; using SQLite (development).")
         return sqlite_target
@@ -232,6 +346,8 @@ def _resolve_db_target():
     if not mysql_url.startswith("mysql"):
         print("[Database] Using explicitly configured non-MySQL database target.")
         return mysql_url
+
+    mysql_url = _mysql_url_with_ssl(mysql_url)
 
     try:
         from sqlalchemy import create_engine

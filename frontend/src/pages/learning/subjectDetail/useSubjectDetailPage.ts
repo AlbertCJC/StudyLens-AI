@@ -5,6 +5,7 @@ import { useAuth } from "../../../context/AuthContext";
 import { useAnnouncements, type AnnouncementItem } from "../../../context/AnnouncementsContext";
 import { useToast } from "../../../context/ToastContext";
 import { authFetch } from "../../../utils/authFetch";
+import { uploadSizeError } from "../../../utils/materialFile";
 import type { LearningMaterial, MaterialFlag, Quiz, Subject, SubjectGrades } from "../../../types";
 import type { EnrolledStudent, AdminUser, TabKey } from "./subjectDetailUtils";
 import {
@@ -398,6 +399,11 @@ export function useSubjectDetailPage() {
     e.preventDefault();
     if (!uploadFile && !uploadRawText.trim()) {
       showToast("Upload a file or paste lecture text.", "error");
+      return;
+    }
+    const sizeError = uploadSizeError(uploadFile);
+    if (sizeError) {
+      showToast(sizeError, "error");
       return;
     }
     if (!subject) return;

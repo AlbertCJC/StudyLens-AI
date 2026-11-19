@@ -2,7 +2,7 @@ import os
 import secrets
 from datetime import datetime, timedelta
 
-from config import ALLOW_LOCAL_FALLBACK
+from config import ALLOW_LOCAL_FALLBACK, IS_PRODUCTION, _UPLOADS_DIR
 
 # Extensions we are willing to persist and serve. Anything outside this set is
 # rejected at the upload layer (app.ALLOWED_MATERIAL_EXTENSIONS); this list is
@@ -116,6 +116,12 @@ def upload_file_to_cloud(file_bytes: bytes, filename: str, content_type: str = "
 
     # 3. Local uploads fallback
     if not cloud_configured:
+        if IS_PRODUCTION:
+            raise RuntimeError(
+                "No cloud storage configured. Local uploads are ephemeral and "
+                "not shared between serverless instances; set CLOUDINARY_URL "
+                "(or Firebase credentials) in production."
+            )
         # No cloud target configured: local disk is the expected dev store.
         print("[Cloud Storage] No cloud target configured; using local storage fallback.")
         return _save_local(safe_name, file_bytes)
@@ -204,8 +210,8 @@ def upload_avatar_to_cloud(file_bytes: bytes, filename: str, content_type: str =
 
 
 def _save_local(name: str, file_bytes: bytes) -> str:
-    """Persist bytes to the local uploads fallback directory and return the URL."""
-    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+    """Persist bytes to the configured local uploads fallback directory."""
+    upload_dir = _UPLOADS_DIR
     os.makedirs(upload_dir, exist_ok=True)
     file_path = os.path.join(upload_dir, name)
     with open(file_path, "wb") as f:

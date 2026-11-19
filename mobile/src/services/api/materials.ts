@@ -1,8 +1,7 @@
 import {
   getApiBaseUrl,
-  getAuthToken,
   setAuthToken,
-  buildHeaders,
+  buildFormHeaders,
   handleUnauthorized,
   invalidateApiCache,
   getJSON,
@@ -96,7 +95,7 @@ export async function uploadMaterial(payload: UploadMaterialPayload, endpoint = 
     form.append('uploaderId', payload.uploaderId);
     const res = await fetch(`${getApiBaseUrl()}${endpoint}`, {
       method: 'POST',
-      headers: getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {},
+      headers: buildFormHeaders(),
       body: form,
     });
     if (handleUnauthorized(res)) return fallbackMaterial;

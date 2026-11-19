@@ -17,6 +17,17 @@ const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp"];
 const VIDEO_EXTS = ["mp4", "webm", "ogg", "mov"];
 const TEXT_EXTS = ["txt", "md", "csv", "json", "log", "rtf"];
 
+// Vercel Functions reject request bodies above 4.5 MB before the Flask app sees
+// them, so the UI enforces a slightly lower ceiling for uploads.
+export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+export const MAX_UPLOAD_LABEL = "4 MB";
+
+export const uploadSizeError = (file: File | null | undefined): string | null => {
+  if (!file || file.size <= MAX_UPLOAD_BYTES) return null;
+  const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+  return `"${file.name}" is ${sizeMb} MB. The maximum upload size is ${MAX_UPLOAD_LABEL}.`;
+};
+
 export const getMaterialExt = (mat: LearningMaterial | null | undefined): string =>
   (mat?.fileType || "").toLowerCase().replace(/^\./, "");
 

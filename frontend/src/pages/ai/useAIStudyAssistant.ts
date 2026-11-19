@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { authFetch } from "../../utils/authFetch";
+import { uploadSizeError } from "../../utils/materialFile";
 import type { LearningMaterial } from "../../types";
 import {
   getWorkspace,
@@ -243,6 +244,12 @@ export function useAIStudyAssistant({
     if (!file) return;
     if (isGenerating) {
       setErrorMsg("Finish or cancel generation before uploading a new file.");
+      return;
+    }
+    const sizeError = uploadSizeError(file);
+    if (sizeError) {
+      e.target.value = "";
+      setErrorMsg(sizeError);
       return;
     }
 

@@ -88,7 +88,7 @@ export default function AnalyticsScreen({
     if (!getAuthToken()) return;
     let cancelled = false;
     fetch(`${getApiBaseUrl()}/recommendations/${userId}`, {
-      headers: { Authorization: `Bearer ${getAuthToken()}` },
+      headers: { 'X-Client-Type': 'mobile', Authorization: `Bearer ${getAuthToken()}` },
     })
       .then((res) => (res.ok ? res.json() : null))
       .then((data: ServerRecommendation[] | null) => {

@@ -3,6 +3,8 @@
 import os
 import glob
 
+import pytest
+
 import cloud_storage
 
 
@@ -14,11 +16,19 @@ def _no_cloud(monkeypatch):
 def test_no_cloud_configured_uses_local_fallback(monkeypatch, tmp_path):
     """With no cloud target configured, upload falls back to local disk."""
     _no_cloud(monkeypatch)
-    monkeypatch.setattr(cloud_storage, "__file__", str(tmp_path / "cloud_storage.py"))
+    monkeypatch.setattr(cloud_storage, "_UPLOADS_DIR", str(tmp_path / "uploads"))
     url = cloud_storage.upload_file_to_cloud(b"data", "report.pdf", "application/pdf")
     assert url.startswith("/uploads/") and url.endswith(".pdf")
     saved = glob.glob(str(tmp_path / "uploads" / "*.pdf"))
     assert len(saved) == 1
+
+
+def test_no_cloud_configured_raises_in_production(monkeypatch):
+    """Production must never write uploads to ephemeral local disk."""
+    _no_cloud(monkeypatch)
+    monkeypatch.setattr(cloud_storage, "IS_PRODUCTION", True)
+    with pytest.raises(RuntimeError, match="No cloud storage configured"):
+        cloud_storage.upload_file_to_cloud(b"data", "report.pdf", "application/pdf")
 
 
 def test_cloud_configured_but_fails_raises_when_fallback_disabled(monkeypatch):
@@ -41,7 +51,7 @@ def test_cloud_configured_but_fails_falls_back_when_flag_true(monkeypatch, tmp_p
     monkeypatch.setenv("CLOUDINARY_URL", "cloudinary://key:secret@cloud")
     monkeypatch.setenv("FIREBASE_CREDENTIALS", "")
     cloud_storage.ALLOW_LOCAL_FALLBACK = True
-    monkeypatch.setattr(cloud_storage, "__file__", str(tmp_path / "cloud_storage.py"))
+    monkeypatch.setattr(cloud_storage, "_UPLOADS_DIR", str(tmp_path / "uploads"))
     try:
         url = cloud_storage.upload_file_to_cloud(b"data", "report.pdf", "application/pdf")
         assert url.startswith("/uploads/") and url.endswith(".pdf")
