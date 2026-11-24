@@ -118,7 +118,7 @@ export function AssessmentCatalog({
         <div className="flex items-center space-x-2 shrink-0">
           <button
             onClick={onShowCreate}
-            className="px-3.5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
+            className="px-3.5 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Create Quiz</span>
@@ -126,7 +126,7 @@ export function AssessmentCatalog({
 
           <button
             onClick={onNavigateAi}
-            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
+            className="px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
           >
             <Sparkles className="w-4 h-4 text-amber-300" />
             <span>AI Quiz Generator</span>

@@ -40,12 +40,12 @@
     --card-foreground: #f8fafc;
     --popover: #1e293b;
     --popover-foreground: #f8fafc;
-    --primary: #6366f1;
+    --primary: #6062f0;
     --primary-foreground: #ffffff;
     --secondary: #1e293b;
     --secondary-foreground: #f8fafc;
     --muted: #334155;
-    --muted-foreground: #94a3b8;
+    --muted-foreground: #a1aec1;
     --accent: #10b981;
     --accent-foreground: #ffffff;
     --destructive: #f87171;
@@ -108,6 +108,149 @@ body {
   color: transparent;
 }
 
+/* Motion tokens + the enter-animation utilities the app already uses
+   (animate-in / fade-in / zoom-in-95), defined locally instead of a plugin. */
+:root {
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes sl-enter {
+  from {
+    opacity: var(--sl-enter-opacity, 1);
+    scale: var(--sl-enter-scale, 1);
+    transform: translateY(var(--sl-enter-y, 0));
+  }
+}
+@utility animate-in {
+  animation: sl-enter var(--dur-base) var(--ease-out);
+}
+@utility fade-in {
+  --sl-enter-opacity: 0;
+}
+@utility fade-in-* {
+  --sl-enter-opacity: calc(--value(integer) * 1%);
+}
+@utility zoom-in-* {
+  --sl-enter-scale: calc(--value(integer) * 1%);
+}
+@utility slide-up {
+  --sl-enter-y: 8px;
+}
+
+@keyframes sl-shimmer {
+  to { background-position: -200% 0; }
+}
+@utility skeleton {
+  border-radius: 0.75rem;
+  background: linear-gradient(90deg, var(--structure) 25%, var(--structure-strong) 50%, var(--structure) 75%);
+  background-size: 200% 100%;
+  animation: sl-shimmer 1.4s linear infinite;
+}
+
+/* Dark mode text contrast: the 600/700 accent text shades fall below 4.5:1 on
+   dark cards. Map them to the same lighter shades the explicit dark: overrides
+   already use (600 -> 400, 700 -> 300; primary -> indigo-300). */
+.dark .text-primary,
+.dark .hover\:text-primary:hover,
+.dark .group:hover .group-hover\:text-primary {
+  color: #a5b4fc;
+}
+.dark .text-emerald-600 { color: #34d399; }
+.dark .text-rose-600 { color: #fb7185; }
+.dark .text-rose-700 { color: #fda4af; }
+.dark .text-amber-600 { color: #fbbf24; }
+.dark .text-amber-700 { color: #fcd34d; }
+.dark .text-green-700 { color: #4ade80; }
+
+/* Every modal: backdrop fades in, panel scales up. */
+@keyframes sl-fade {
+  from { opacity: 0; }
+}
+[role="dialog"][aria-modal="true"] {
+  animation: sl-fade var(--dur-base) var(--ease-out);
+}
+[role="dialog"][aria-modal="true"] > * {
+  animation: sl-enter var(--dur-base) var(--ease-out);
+  --sl-enter-opacity: 0;
+  --sl-enter-scale: 96%;
+  --sl-enter-y: 6px;
+}
+
+/* Quiz-complete confetti (CSS only). */
+@keyframes sl-confetti {
+  0% { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+  100% { opacity: 0; transform: translate(var(--drift, 0px), 260px) rotate(540deg); }
+}
+.confetti-piece {
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 12px;
+  border-radius: 2px;
+  animation: sl-confetti 1.6s var(--ease-out) both;
+}
+
+/* Tactile press feedback and a visible keyboard focus ring on every control. */
+button:not(:disabled):active,
+[role="button"]:active,
+a:active {
+  scale: 0.97;
+}
+button, [role="button"], a {
+  transition-property: color, background-color, border-color, box-shadow, opacity, scale, translate, filter;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-out);
+}
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--ring) !important;
+  outline-offset: 2px;
+}
+
+/* Gradient CTA: soft shine sweep on hover. */
+.bg-cta-gradient {
+  position: relative;
+  overflow: hidden;
+}
+.bg-cta-gradient::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.25) 50%, transparent 70%);
+  translate: -120% 0;
+  transition: translate 600ms var(--ease-out);
+  pointer-events: none;
+}
+.bg-cta-gradient:hover::after {
+  translate: 120% 0;
+}
+
+/* Native selects styled to match inputs. */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2.25rem !important;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* 3D Flip Card Utilities */
 .perspective-1000 {
   perspective: 1000px;
@@ -137,6 +280,7 @@ select {
   color-scheme: light;
 }
 .dark select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23cbd5e1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   color-scheme: dark;
   background-color: var(--card);
   color: var(--foreground);

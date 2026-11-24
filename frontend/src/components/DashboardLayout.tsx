@@ -195,6 +195,7 @@ export function DashboardLayout({
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label="Close sidebar"
                 className="lg:hidden"
                 onClick={() => setSidebarOpen(false)}
               >
@@ -228,17 +229,27 @@ export function DashboardLayout({
                       setSidebarOpen(false);
                     }}
                     title={sidebarCollapsed ? item.label : undefined}
-                    className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    aria-current={isActive ? "page" : undefined}
+                    className={`group relative flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
                       isActive
-                        ? "bg-structure-strong text-structure-foreground font-bold"
-                        : "text-structure-foreground/80 hover:bg-structure-strong/60 hover:text-structure-foreground"
+                        ? "text-structure-foreground font-bold"
+                        : "text-structure-foreground/80 hover:bg-structure-strong/50 hover:text-structure-foreground"
                     } ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}
                   >
-                    <div className="flex items-center gap-3">
+                    {isActive && (
+                      <motion.span
+                        layoutId="nav-active-pill"
+                        className="absolute inset-0 rounded-xl bg-structure-strong"
+                        transition={{ type: "spring", stiffness: 500, damping: 38 }}
+                      >
+                        <span className="absolute left-0 top-2 bottom-2 w-1 rounded-full bg-brand-gradient" />
+                      </motion.span>
+                    )}
+                    <div className="relative flex items-center gap-3">
                       <Icon className={`h-4 w-4 shrink-0 ${isActive ? "text-primary dark:text-indigo-300" : "text-structure-foreground/70"}`} />
                       <span className={sidebarCollapsed ? "lg:hidden" : ""}>{item.label}</span>
                     </div>
-                    <div className={`flex items-center gap-1.5 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
+                    <div className={`relative flex items-center gap-1.5 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
                       {item.badge && (
                         <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded-md ${
                           isActive ? "bg-cta-gradient text-white" : "bg-primary/15 text-primary"
@@ -246,7 +257,7 @@ export function DashboardLayout({
                           {item.badge}
                         </span>
                       )}
-                      <ChevronRight className={`h-3.5 w-3.5 ${isActive ? "text-primary" : "opacity-40"}`} />
+                      <ChevronRight className={`h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 ${isActive ? "text-primary" : "opacity-40"}`} />
                     </div>
                   </Link>
                 );
@@ -296,6 +307,7 @@ export function DashboardLayout({
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Toggle sidebar"
               className="text-foreground"
               onClick={() => {
                 if (window.matchMedia("(min-width: 1024px)").matches) {
@@ -318,6 +330,8 @@ export function DashboardLayout({
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label="Notifications"
+                aria-expanded={notifOpen}
                 onClick={() => {
                   const opening = !notifOpen;
                   setNotifOpen(opening);
@@ -371,7 +385,7 @@ export function DashboardLayout({
                             </div>
 
                             {a.subjectName && (
-                              <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                              <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300">
                                 {a.subjectName}
                               </span>
                             )}
@@ -439,7 +453,7 @@ export function DashboardLayout({
             key={currentPath}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2 }}
+            transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
           >
             {children}
           </motion.div>
@@ -449,7 +463,7 @@ export function DashboardLayout({
       {/* View All Notifications modal */}
       {viewAllOpen && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          role="dialog" aria-modal="true" className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
           onClick={() => setViewAllOpen(false)}
         >
           <div
@@ -499,7 +513,7 @@ export function DashboardLayout({
                       </span>
                     </div>
                     {a.subjectName && (
-                      <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                      <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300">
                         {a.subjectName}
                       </span>
                     )}

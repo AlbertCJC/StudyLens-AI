@@ -26,7 +26,7 @@ export function AssignQuizSubjectModal({
 }: AssignQuizSubjectModalProps) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -66,7 +66,7 @@ export function AssignQuizSubjectModal({
           <select
             value={assignQuizSubjectId}
             onChange={(e) => onSubjectChange(e.target.value)}
-            className="w-full px-3 py-2 border border-border bg-muted/40 rounded-xl text-xs font-bold text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 border border-border bg-muted/40 rounded-xl text-xs font-bold text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">— Select a subject —</option>
             {subjects

@@ -39,7 +39,7 @@ export function UploadMaterialModal({
   return (
     <>
       <div
-        className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+        role="dialog" aria-modal="true" className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
         onMouseDown={(e) => {
           if (e.target === e.currentTarget) onClose();
         }}
@@ -68,7 +68,7 @@ export function UploadMaterialModal({
                     setTitle(selected.name.replace(/\.[^/.]+$/, ""));
                   }
                 }}
-                className="w-full text-xs text-muted-foreground file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:text-xs file:font-bold file:cursor-pointer cursor-pointer"
+                className="w-full text-xs text-muted-foreground file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-primary file:text-white file:text-xs file:font-bold file:cursor-pointer cursor-pointer"
               />
             </div>
 
@@ -79,7 +79,7 @@ export function UploadMaterialModal({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="e.g., Graph Algorithms Lecture Notes"
-                className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
+                className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring font-semibold"
               />
             </div>
 
@@ -90,7 +90,7 @@ export function UploadMaterialModal({
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Brief summary of the material..."
-                className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring"
               ></textarea>
             </div>
 
@@ -101,7 +101,7 @@ export function UploadMaterialModal({
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
                 placeholder="Paste text content to create a text-based study material..."
-                className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring"
               ></textarea>
             </div>
 
@@ -116,7 +116,7 @@ export function UploadMaterialModal({
               <button
                 type="submit"
                 disabled={uploading}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
+                className="px-4 py-2 bg-cta-gradient hover:brightness-110 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
               >
                 {uploading ? "Uploading..." : "Upload"}
               </button>

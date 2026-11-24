@@ -61,8 +61,8 @@ export const Header: React.FC<HeaderProps> = ({ activeTab }) => {
             <Globe className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
             <span>SDG 4: Quality Education</span>
           </span>
-          <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-            <Award className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+          <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-structure text-primary dark:text-indigo-300 border border-structure-strong">
+            <Award className="w-3 h-3 text-primary dark:text-indigo-300" />
             <span>SDG 9: Industry & Innovation</span>
           </span>
         </div>
@@ -82,7 +82,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab }) => {
           >
             <Bell className="w-5 h-5" />
             {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-blue-600 rounded-full ring-2 ring-background" />
+              <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full ring-2 ring-background" />
             )}
           </button>
 
@@ -123,7 +123,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab }) => {
                         </span>
                       </div>
                       {ann.subjectName && (
-                        <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 mb-0.5">
+                        <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300 mb-0.5">
                           {ann.subjectName}
                         </span>
                       )}

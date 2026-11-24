@@ -78,7 +78,7 @@ export function EditQuizModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
       onClick={(e) => {
         if (e.target === e.currentTarget) requestCloseEdit();
       }}
@@ -86,7 +86,7 @@ export function EditQuizModal({
       <div className="bg-card border border-border p-6 rounded-2xl max-w-5xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between pb-3 border-b border-border">
           <div className="flex items-center space-x-2">
-            <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
+            <div className="p-2 bg-structure text-primary dark:text-indigo-300 rounded-xl">
               <Pencil className="w-5 h-5" />
             </div>
             <div>

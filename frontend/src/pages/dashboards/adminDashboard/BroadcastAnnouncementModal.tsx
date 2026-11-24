@@ -39,7 +39,7 @@ export const BroadcastAnnouncementModal: React.FC<BroadcastAnnouncementModalProp
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -64,7 +64,7 @@ export const BroadcastAnnouncementModal: React.FC<BroadcastAnnouncementModalProp
               value={annTitle}
               onChange={(e) => setAnnTitle(e.target.value)}
               placeholder="e.g. System Maintenance & Exam Schedule"
-              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-rose-500"
+              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
@@ -120,7 +120,7 @@ export const BroadcastAnnouncementModal: React.FC<BroadcastAnnouncementModalProp
               value={annContent}
               onChange={(e) => setAnnContent(e.target.value)}
               placeholder="Details of the announcement bulletin..."
-              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-rose-500"
+              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
@@ -134,7 +134,7 @@ export const BroadcastAnnouncementModal: React.FC<BroadcastAnnouncementModalProp
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-md cursor-pointer"
+              className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white font-bold rounded-xl shadow-md cursor-pointer"
             >
               Publish Bulletin
             </button>

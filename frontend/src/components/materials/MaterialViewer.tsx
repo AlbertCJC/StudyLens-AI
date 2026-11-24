@@ -39,7 +39,7 @@ function PaperText({
 function Loading({ label }: { label: string }) {
   return (
     <div className="h-[65vh] flex flex-col items-center justify-center space-y-2 text-muted-foreground text-xs">
-      <div className="w-6 h-6 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      <div className="w-6 h-6 border-3 border-primary border-t-transparent rounded-full animate-spin" />
       <span>{label}</span>
     </div>
   );

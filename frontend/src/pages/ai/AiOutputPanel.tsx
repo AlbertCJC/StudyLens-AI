@@ -35,7 +35,7 @@ export function AiOutputPanel({ assistant }: { assistant: AIStudyAssistantContro
               {(mode === "reviewer" || mode === "summary" || mode === "quiz") && (
                 <button
                   onClick={() => handleDownloadResource()}
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-cta-gradient hover:brightness-110 text-white transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
                   title={`Download ${mode === "reviewer" ? "Reviewer" : mode === "quiz" ? "Quiz" : "Summary"} as a PDF document`}
                 >
                   <Download className="w-4 h-4" />
@@ -113,7 +113,7 @@ export function AiOutputPanel({ assistant }: { assistant: AIStudyAssistantContro
                 type="text"
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
-                className="w-full px-3 py-2 border border-border bg-card text-foreground rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-border bg-card text-foreground rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-ring"
               />
               {titleExists && (
                 <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[11px] font-semibold text-amber-700 dark:text-amber-300 flex items-start space-x-2">

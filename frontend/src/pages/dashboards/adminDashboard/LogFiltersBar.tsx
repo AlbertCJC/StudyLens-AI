@@ -27,7 +27,7 @@ export const LogFiltersBar: React.FC<LogFiltersBarProps> = ({
         value={searchLog}
         onChange={(e) => setSearchLog(e.target.value)}
         placeholder="Search action, user, IP, or keyword..."
-        className="w-full pl-9 pr-3 py-1.5 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
+        className="w-full pl-9 pr-3 py-1.5 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-medium"
       />
     </div>
 

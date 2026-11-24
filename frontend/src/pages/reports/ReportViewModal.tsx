@@ -13,7 +13,7 @@ export function ReportViewModal({ report, onClose, onExport }: ReportViewModalPr
   const rows = summaryRows(report);
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="bg-card border border-border p-6 rounded-2xl max-w-2xl w-full shadow-xl space-y-4 animate-in fade-in zoom-in-95">

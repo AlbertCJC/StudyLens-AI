@@ -45,13 +45,13 @@ export function AnnouncementsTab({
     <div className="bg-card rounded-2xl border border-border p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-bold text-foreground flex items-center space-x-2">
-          <Bell className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <Bell className="w-4 h-4 text-primary dark:text-indigo-300" />
           <span>Class Announcements</span>
         </h2>
         {canManage && (
           <button
             onClick={onPost}
-            className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+            className="inline-flex items-center space-x-1.5 px-3 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
           >
             <Megaphone className="w-3.5 h-3.5" />
             <span>Post Announcement</span>
@@ -78,7 +78,7 @@ export function AnnouncementsTab({
                     <div className="flex items-center space-x-2 min-w-0">
                       <p className="text-xs font-bold text-foreground truncate">{a.title}</p>
                       {a.subjectName && (
-                        <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 shrink-0">
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300 shrink-0">
                           {a.subjectName}
                         </span>
                       )}

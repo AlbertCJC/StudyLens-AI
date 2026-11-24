@@ -17,6 +17,7 @@ import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
 import { CardDetailModal, WeakTopicsDetail, AttemptsDetail } from "../../components/CardDetailModal";
 import type { StudentProgress, Recommendation } from "../../types";
+import { chartTooltipProps, BRAND_BAR_FILL, ChartGradientDefs } from "../../utils/chartTheme";
 
 type DetailCardKey = "weak" | "average" | "assessments";
 
@@ -186,7 +187,7 @@ setExportingPDF(false);
         <button
           onClick={handleExportPDF}
           disabled={exportingPDF}
-          className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 shrink-0 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+          className="px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 shrink-0 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <Download className="w-4 h-4" />
           <span>{exportingPDF ? "Exporting…" : "Export Analytics PDF"}</span>
@@ -198,7 +199,7 @@ setExportingPDF(false);
         <button
           type="button"
           onClick={() => setDetailCard("average")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-primary/50 hover:shadow-sm transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
         >
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-muted-foreground">Average Performance</p>
@@ -213,7 +214,7 @@ setExportingPDF(false);
         <button
           type="button"
           onClick={() => setDetailCard("assessments")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-primary/50 hover:shadow-sm transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
         >
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-muted-foreground">Total Assessments Completed</p>
@@ -226,7 +227,7 @@ setExportingPDF(false);
         <button
           type="button"
           onClick={() => setDetailCard("weak")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-amber-500/60 hover:shadow-sm transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-amber-500/60 hover:shadow-md hover:-translate-y-0.5 transition-all group"
         >
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-muted-foreground">Detected Weak Topics</p>
@@ -256,13 +257,14 @@ setExportingPDF(false);
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
+                    <ChartGradientDefs />
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                   <XAxis dataKey="topic" tick={{ fontSize: 10, fill: "currentColor" }} interval={0} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "currentColor" }} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", color: "#fff", fontSize: "11px" }}
+                    {...chartTooltipProps}
                   />
-                  <Bar dataKey="accuracyPercentage" fill="#2563eb" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="accuracyPercentage" fill={BRAND_BAR_FILL} radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -288,9 +290,10 @@ setExportingPDF(false);
                   <XAxis dataKey="quiz" tick={{ fontSize: 10, fill: "currentColor" }} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "currentColor" }} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", color: "#fff", fontSize: "11px" }}
+                    {...chartTooltipProps}
+                    cursor={{ stroke: "var(--border)", strokeWidth: 2 }}
                   />
-                  <Line type="monotone" dataKey="score" stroke="#10b981" strokeWidth={3} dot={{ r: 5 }} />
+                  <Line type="monotone" dataKey="score" stroke="#10b981" strokeWidth={3} dot={{ r: 5, fill: "var(--card)", strokeWidth: 2 }} activeDot={{ r: 7 }} />
                 </LineChart>
               </ResponsiveContainer>
             )}

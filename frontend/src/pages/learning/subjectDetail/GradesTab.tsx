@@ -104,7 +104,7 @@ export function GradesTab({
       </p>
     ) : (
       <div className="space-y-4">
-        <div className="p-5 rounded-xl border border-blue-500/20 bg-blue-500/5 flex items-center justify-between">
+        <div className="p-5 rounded-xl border border-structure-strong bg-structure flex items-center justify-between">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
               Final Grade (average of all quiz scores)
@@ -116,7 +116,7 @@ export function GradesTab({
               {grades?.attemptCount || 0} quiz attempt(s)
             </p>
           </div>
-          <BarChart2 className="w-10 h-10 text-blue-600 dark:text-blue-400" />
+          <BarChart2 className="w-10 h-10 text-primary dark:text-indigo-300" />
         </div>
 
         <div className="space-y-3">

@@ -5,6 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { useAuth } from "../../context/AuthContext";
 import { authFetch } from "../../utils/authFetch";
 import { CardDetailModal } from "../../components/CardDetailModal";
+import { chartTooltipProps, BRAND_BAR_FILL, ChartGradientDefs } from "../../utils/chartTheme";
 
 interface AtRiskStudent {
   id: string;
@@ -115,11 +116,11 @@ export const TeacherAnalyticsPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setDetailCard("subjects")}
-              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-violet-500/50 hover:shadow-sm transition-all group"
+              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-muted-foreground">Assigned Subjects</p>
-                <ChevronRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-violet-500 transition-colors" />
+                <ChevronRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary transition-colors" />
               </div>
               <p className="text-3xl font-black text-foreground mt-1">{t?.subjectCount ?? 0}</p>
               <p className="text-[11px] text-muted-foreground mt-1">Click to see your subjects</p>
@@ -127,7 +128,7 @@ export const TeacherAnalyticsPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setDetailCard("students")}
-              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-sky-500/50 hover:shadow-sm transition-all group"
+              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-sky-500/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-muted-foreground">Enrolled Students</p>
@@ -139,7 +140,7 @@ export const TeacherAnalyticsPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setDetailCard("attempts")}
-              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-emerald-500/50 hover:shadow-sm transition-all group"
+              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-emerald-500/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-muted-foreground">Quiz Attempts Graded</p>
@@ -151,11 +152,11 @@ export const TeacherAnalyticsPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setDetailCard("average")}
-              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-purple-500/50 hover:shadow-sm transition-all group"
+              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-muted-foreground">Class Average</p>
-                <ChevronRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-purple-500 transition-colors" />
+                <ChevronRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary transition-colors" />
               </div>
               <p className="text-3xl font-black text-foreground mt-1">{t?.averageScore ?? 0}%</p>
               <p className="text-[11px] text-muted-foreground mt-1">Click to see averages per subject</p>
@@ -163,7 +164,7 @@ export const TeacherAnalyticsPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setDetailCard("passrate")}
-              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-emerald-500/50 hover:shadow-sm transition-all group"
+              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-emerald-500/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-muted-foreground">Pass Rate</p>
@@ -175,7 +176,7 @@ export const TeacherAnalyticsPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setShowAtRiskModal(true)}
-              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-amber-500/60 hover:shadow-sm transition-all group"
+              className="text-left bg-card p-5 rounded-2xl border border-border shadow-xs cursor-pointer hover:border-amber-500/60 hover:shadow-md hover:-translate-y-0.5 transition-all group"
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-muted-foreground">At-Risk Students</p>
@@ -200,13 +201,14 @@ export const TeacherAnalyticsPage: React.FC = () => {
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
+                    <ChartGradientDefs />
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                     <XAxis dataKey="name" tick={{ fontSize: 10, fill: "currentColor" }} interval={0} />
                     <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "currentColor" }} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", color: "#fff", fontSize: "11px" }}
+                      {...chartTooltipProps}
                     />
-                    <Bar dataKey="avg" fill="#8b5cf6" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="avg" fill={BRAND_BAR_FILL} radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -433,7 +435,7 @@ export const TeacherAnalyticsPage: React.FC = () => {
                 <p className="text-xs font-bold text-foreground truncate">
                   {s.subjectCode} - {s.subjectName}
                 </p>
-                <span className="flex items-center gap-2 px-2 py-0.5 text-[10px] font-bold rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 tabular-nums">
+                <span className="flex items-center gap-2 px-2 py-0.5 text-[10px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300 tabular-nums">
                   {s.averageScore}%
                   <ChevronRight className="w-3.5 h-3.5 group-hover:text-primary transition-colors" />
                 </span>

@@ -51,7 +51,7 @@ export const SubjectModal: React.FC<SubjectModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -77,7 +77,7 @@ export const SubjectModal: React.FC<SubjectModalProps> = ({
                 value={subCode}
                 onChange={(e) => setSubCode(e.target.value)}
                 placeholder="e.g. CS 301"
-                className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-mono font-medium focus:outline-none focus:ring-2 focus:ring-rose-500"
+                className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-mono font-medium focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
 
@@ -89,7 +89,7 @@ export const SubjectModal: React.FC<SubjectModalProps> = ({
                 value={subName}
                 onChange={(e) => setSubName(e.target.value)}
                 placeholder="e.g. Data Structures & Algorithms"
-                className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-rose-500"
+                className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
           </div>
@@ -101,7 +101,7 @@ export const SubjectModal: React.FC<SubjectModalProps> = ({
               value={subDesc}
               onChange={(e) => setSubDesc(e.target.value)}
               placeholder="Brief description of the subject"
-              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-rose-500"
+              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground font-medium focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
@@ -180,7 +180,7 @@ export const SubjectModal: React.FC<SubjectModalProps> = ({
             <button
               type="submit"
               disabled={teachers.length === 0}
-              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-md cursor-pointer disabled:opacity-50"
+              className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white font-bold rounded-xl shadow-md cursor-pointer disabled:opacity-50"
             >
               {editingSubject ? "Save Changes" : "Create Subject"}
             </button>

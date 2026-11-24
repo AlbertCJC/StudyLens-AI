@@ -18,6 +18,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
   const [activeDeck, setActiveDeck] = useState<FlashcardDeck | null>(null);
   const [cardIndex, setCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
+  const [deckDone, setDeckDone] = useState(false);
   const [shuffled, setShuffled] = useState<Flashcard[] | null>(null);
   const [deckToDelete, setDeckToDelete] = useState<FlashcardDeck | null>(null);
   const [deletingDeck, setDeletingDeck] = useState(false);
@@ -30,6 +31,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setShuffled(null);
     setCardIndex(0);
+    setDeckDone(false);
     setIsFlipped(false);
   }, [activeDeck?.id]);
 
@@ -65,17 +67,28 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
     if (cardIndex < activeDeck.cards.length - 1) {
       setCardIndex((prev) => prev + 1);
     } else {
-      setCardIndex(0);
+      setDeckDone(true);
     }
   }, [activeDeck, cardIndex]);
+
+  const restartDeck = useCallback(() => {
+    setDeckDone(false);
+    setCardIndex(0);
+    setDeckDone(false);
+    setIsFlipped(false);
+  }, []);
 
   const handlePrev = useCallback(() => {
     if (!activeDeck) return;
     setIsFlipped(false);
+    if (deckDone) {
+      setDeckDone(false);
+      return;
+    }
     if (cardIndex > 0) {
       setCardIndex((prev) => prev - 1);
     }
-  }, [activeDeck, cardIndex]);
+  }, [activeDeck, cardIndex, deckDone]);
 
   const handleShuffle = useCallback(() => {
     if (!activeDeck) return;
@@ -86,6 +99,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
     }
     setShuffled(copy);
     setCardIndex(0);
+    setDeckDone(false);
     setIsFlipped(false);
   }, [activeDeck]);
 
@@ -139,6 +153,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
       if (activeDeck?.id === deckId) {
         setActiveDeck(null);
         setCardIndex(0);
+        setDeckDone(false);
         setIsFlipped(false);
       }
       if (previewDeck?.id === deckId) {
@@ -157,6 +172,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
   const enterDeck = (deck: FlashcardDeck) => {
     setActiveDeck(deck);
     setCardIndex(0);
+    setDeckDone(false);
     setIsFlipped(false);
     setShuffled(null);
   };
@@ -188,7 +204,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
             </div>
             <button
               onClick={() => onNavigate("ai-assistant", { mode: "flashcards" })}
-              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer shrink-0"
+              className="px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer shrink-0"
             >
               <Sparkles className="w-4 h-4 text-amber-300" />
               <span>AI Flashcard Generator</span>
@@ -287,6 +303,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                     if (d) {
                       setActiveDeck(d);
                       setCardIndex(0);
+                      setDeckDone(false);
                       setIsFlipped(false);
                     }
                   }}
@@ -333,13 +350,29 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
             </div>
           </div>
 
+          {deckDone ? (
+            <div className="w-full h-80 rounded-2xl border border-structure-strong bg-structure flex flex-col items-center justify-center gap-4 text-center p-8 animate-in fade-in zoom-in-95">
+              <div className="h-14 w-14 rounded-2xl bg-cta-gradient text-white flex items-center justify-center shadow-md">
+                <CheckCircle2 className="w-7 h-7" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-foreground">Deck complete</h2>
+                <p className="text-sm text-muted-foreground mt-1">You reviewed all {totalCards} cards. Go again to lock them in.</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={restartDeck} className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold cursor-pointer">Study again</button>
+                <button onClick={() => { handleShuffle(); setDeckDone(false); }} className="px-4 py-2 bg-card border border-structure-strong text-structure-foreground hover:bg-structure-strong rounded-xl text-xs font-bold cursor-pointer">Shuffle and restart</button>
+              </div>
+            </div>
+          ) : (
+          <>
           {/* 3D Flip Card Container */}
           <div
             onClick={toggleFlip}
             className="w-full h-80 perspective-1000 cursor-pointer select-none group"
           >
             <div
-              className={`relative w-full h-full rounded-2xl border-2 transition-transform duration-500 transform-style-3d shadow-xl ${
+              className={`relative w-full h-full rounded-2xl border-2 transition-transform duration-[650ms] ease-[cubic-bezier(.34,1.4,.5,1)] transform-style-3d shadow-xl ${
                 isFlipped ? "rotate-y-180 border-primary bg-card" : "border-border bg-card hover:border-primary/50"
               }`}
             >
@@ -379,13 +412,16 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
             </div>
           </div>
 
+          </>
+          )}
+
           {/* Navigation */}
           <div className="bg-card p-5 rounded-2xl border border-border shadow-xs">
             <div className="flex items-center justify-between gap-2">
               <button
                 onClick={handlePrev}
                 disabled={cardIndex === 0}
-                className="px-4 py-2 bg-muted hover:bg-accent text-foreground disabled:opacity-40 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5"
+                className="px-4 py-2 bg-muted hover:bg-structure hover:text-structure-foreground text-foreground disabled:opacity-40 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5"
               >
                 <ArrowLeft className="w-4 h-4" />
                 <span>Previous</span>
@@ -394,18 +430,15 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleShuffle}
-                  className="px-3 py-2 bg-muted hover:bg-accent text-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5"
+                  className="px-3 py-2 bg-muted hover:bg-structure hover:text-structure-foreground text-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5"
                   title="Shuffle to a random card"
                 >
                   <Shuffle className="w-4 h-4" />
                   <span className="hidden sm:inline">Shuffle</span>
                 </button>
                 <button
-                  onClick={() => {
-                    setCardIndex(0);
-                    setIsFlipped(false);
-                  }}
-                  className="px-3 py-2 bg-muted hover:bg-accent text-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  onClick={restartDeck}
+                  className="px-3 py-2 bg-muted hover:bg-structure hover:text-structure-foreground text-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
                 >
                   Reset Deck
                 </button>
@@ -534,7 +567,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                         setPreviewFlipped(false);
                       }}
                       disabled={previewIndex === 0}
-                      className="px-3 py-2 bg-muted hover:bg-accent text-foreground disabled:opacity-40 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                      className="px-3 py-2 bg-muted hover:bg-structure hover:text-structure-foreground text-foreground disabled:opacity-40 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
                       <ArrowLeft className="w-4 h-4" />
                       <span>Previous</span>
@@ -548,7 +581,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                         setPreviewFlipped(false);
                       }}
                       disabled={previewIndex >= previewTotal - 1}
-                      className="px-3 py-2 bg-muted hover:bg-accent text-foreground disabled:opacity-40 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                      className="px-3 py-2 bg-muted hover:bg-structure hover:text-structure-foreground text-foreground disabled:opacity-40 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
                       <span>Next</span>
                       <ArrowRight className="w-4 h-4" />

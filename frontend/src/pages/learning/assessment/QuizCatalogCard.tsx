@@ -139,7 +139,7 @@ export function QuizCatalogCard({
                   e.stopPropagation();
                   onOpenEdit(quiz);
                 }}
-                className="p-1.5 text-blue-600 hover:bg-blue-500/10 rounded-lg cursor-pointer"
+                className="p-1.5 text-primary hover:bg-structure-strong rounded-lg cursor-pointer"
                 title="Edit Quiz details & questions"
               >
                 <Pencil className="w-3.5 h-3.5" />

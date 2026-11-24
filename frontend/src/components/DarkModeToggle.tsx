@@ -35,6 +35,7 @@ export function DarkModeToggle() {
       size="icon"
       onClick={toggleDarkMode}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
       className="text-foreground transition-transform duration-200 active:scale-95"
     >
       {isDark ? (

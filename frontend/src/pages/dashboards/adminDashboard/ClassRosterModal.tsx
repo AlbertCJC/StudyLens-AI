@@ -57,7 +57,7 @@ export const ClassRosterModal: React.FC<ClassRosterModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -105,7 +105,7 @@ export const ClassRosterModal: React.FC<ClassRosterModalProps> = ({
                   {teacherUser.department ? `Department: ${teacherUser.department}` : "Department: General"}
                 </p>
               </div>
-              <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 shrink-0">
+              <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300 shrink-0">
                 Instructor
               </span>
             </div>
@@ -126,7 +126,7 @@ export const ClassRosterModal: React.FC<ClassRosterModalProps> = ({
                     value={assignSearch}
                     onChange={(e) => setAssignSearch(e.target.value)}
                     placeholder="Search students by name, email, or ID..."
-                    className="w-full pl-8 pr-3 py-1.5 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
+                    className="w-full pl-8 pr-3 py-1.5 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                 </div>
                 <select
@@ -152,7 +152,7 @@ export const ClassRosterModal: React.FC<ClassRosterModalProps> = ({
                       <label
                         key={student.id}
                         className={`flex items-center gap-2.5 p-2 rounded-lg border border-border bg-card cursor-pointer ${
-                          alreadyEnrolled ? "opacity-50 cursor-not-allowed" : "hover:border-rose-500/40"
+                          alreadyEnrolled ? "opacity-50 cursor-not-allowed" : "hover:border-primary/50"
                         }`}
                       >
                         <input
@@ -164,7 +164,7 @@ export const ClassRosterModal: React.FC<ClassRosterModalProps> = ({
                               e.target.checked ? [...prev, student.id] : prev.filter((id) => id !== student.id)
                             )
                           }
-                          className="w-4 h-4 accent-rose-600 cursor-pointer"
+                          className="w-4 h-4 accent-indigo-600 cursor-pointer"
                         />
                         {avatarUrl(student.avatar) ? (
                           <img
@@ -188,7 +188,7 @@ export const ClassRosterModal: React.FC<ClassRosterModalProps> = ({
                 <button
                   onClick={handleAssignStudents}
                   disabled={assignStudentIds.length === 0 || rosterLoading}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-md cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
+                  className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white text-xs font-bold rounded-xl shadow-md cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
                 >
                   {rosterLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                   <span>Assign Selected ({assignStudentIds.length})</span>
@@ -242,7 +242,7 @@ export const ClassRosterModal: React.FC<ClassRosterModalProps> = ({
                       <button
                         onClick={() => handleRemoveRosterStudent(student.id)}
                         disabled={rosterLoading}
-                        className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                        className="p-1.5 bg-structure hover:bg-structure-strong text-primary rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                         title="Remove from subject"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -258,7 +258,7 @@ export const ClassRosterModal: React.FC<ClassRosterModalProps> = ({
         <div className="pt-1 flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
+            className="px-4 py-2 bg-structure hover:bg-structure-strong text-structure-foreground text-xs font-bold rounded-xl cursor-pointer"
           >
             Close
           </button>

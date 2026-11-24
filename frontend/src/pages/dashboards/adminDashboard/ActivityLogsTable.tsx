@@ -77,7 +77,7 @@ export const ActivityLogsTable: React.FC<ActivityLogsTableProps> = ({
                       e.stopPropagation();
                       onLogClick(log);
                     }}
-                    className="p-1.5 bg-muted group-hover:bg-rose-600 group-hover:text-white rounded-lg transition-colors cursor-pointer"
+                    className="p-1.5 bg-muted group-hover:bg-primary group-hover:text-white rounded-lg transition-colors cursor-pointer"
                   >
                     <Eye className="w-3.5 h-3.5" />
                   </button>

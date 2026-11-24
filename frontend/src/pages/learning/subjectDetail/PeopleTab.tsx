@@ -83,14 +83,14 @@ export function PeopleTab({
     <div className="bg-card rounded-2xl border border-border p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-bold text-foreground flex items-center space-x-2">
-          <Users className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <Users className="w-4 h-4 text-primary dark:text-indigo-300" />
           <span>People in this Subject</span>
         </h2>
         <span className="flex items-center space-x-2">
           {currentUser?.role === "admin" && (
             <button
               onClick={openAssignStudents}
-              className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+              className="inline-flex items-center space-x-1.5 px-3 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
             >
               <UserCheck className="w-3.5 h-3.5" />
               <span>Assign Students</span>
@@ -99,21 +99,21 @@ export function PeopleTab({
         </span>
       </div>
 
-      <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 flex items-center justify-between gap-3">
+      <div className="p-4 rounded-xl border border-structure-strong bg-structure flex items-center justify-between gap-3">
         <div className="flex items-center space-x-3 min-w-0">
           {avatarUrl(subject.teacherAvatar) ? (
             <img
               src={avatarUrl(subject.teacherAvatar)!}
               alt={subject.teacherName}
-              className="w-9 h-9 rounded-full object-cover border border-blue-500/20 shrink-0"
+              className="w-9 h-9 rounded-full object-cover border border-structure-strong shrink-0"
             />
           ) : (
-            <div className="w-9 h-9 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+            <div className="w-9 h-9 rounded-full bg-structure-strong text-primary dark:text-indigo-300 flex items-center justify-center shrink-0">
               <ShieldCheck className="w-4 h-4" />
             </div>
           )}
           <div
-            className="min-w-0 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+            className="min-w-0 cursor-pointer hover:text-primary dark:hover:text-indigo-300 transition-colors"
             onClick={openTeacher}
             title={loadingTeacher ? "Loading instructor info..." : "View instructor profile"}
           >
@@ -150,7 +150,7 @@ export function PeopleTab({
                 {slicePage(students, peoplePage).map((s) => (
                   <tr key={s.id} className="border-b border-border/60 last:border-0">
                     <td
-                      className="py-2.5 pr-4 font-bold text-foreground cursor-pointer hover:bg-blue-500/10 transition-colors"
+                      className="py-2.5 pr-4 font-bold text-foreground cursor-pointer hover:bg-structure-strong transition-colors"
                       onClick={() => openStudent(s)}
                       title="View student profile"
                     >

@@ -370,7 +370,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                           type="checkbox"
                           checked={rememberMe}
                           onChange={(e) => setRememberMe(e.target.checked)}
-                          className="w-4 h-4 rounded border-slate-300 text-primary focus:ring-ring"
+                          className="w-4 h-4 rounded border-input accent-indigo-600 text-primary focus:ring-ring"
                         />
                         <span>Remember me</span>
                       </label>
@@ -476,7 +476,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
       </div>
 
       {forgotOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={closeForgotModal}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={closeForgotModal}>
           <div
             className="w-full max-w-md rounded-2xl bg-card border border-border shadow-2xl p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}

@@ -92,9 +92,9 @@ export function AiInputsPanel({ assistant }: { assistant: AIStudyAssistantContro
       <div className="space-y-3 text-xs">
         <div className="space-y-2">
           {isUploadingFile ? (
-            <div className="border-2 border-dashed border-blue-500 bg-blue-50/30 dark:bg-blue-950/30 rounded-xl p-4 text-center transition-all relative">
+            <div className="border-2 border-dashed border-primary bg-structure/50  rounded-xl p-4 text-center transition-all relative">
               <div className="flex flex-col items-center justify-center space-y-1.5">
-                <div className="p-2.5 bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-full animate-bounce">
+                <div className="p-2.5 bg-structure-strong text-primary dark:text-indigo-300 rounded-full animate-bounce">
                   <UploadCloud className="w-6 h-6" />
                 </div>
                 <p className="font-bold text-foreground text-xs">Extracting & Processing Material...</p>
@@ -114,7 +114,7 @@ export function AiInputsPanel({ assistant }: { assistant: AIStudyAssistantContro
                 </div>
               </div>
               <div className="flex items-center space-x-1.5 shrink-0">
-                <label className="px-2.5 py-1.5 bg-card hover:bg-muted border border-border text-foreground text-[11px] font-semibold rounded-lg cursor-pointer transition-all hover:shadow-xs flex items-center space-x-1">
+                <label className="px-2.5 py-1.5 bg-card hover:bg-muted border border-border text-foreground text-[11px] font-semibold rounded-lg cursor-pointer transition-all hover:shadow-md hover:-translate-y-0.5 flex items-center space-x-1">
                   <span>Change</span>
                   <input
                     type="file"
@@ -214,7 +214,7 @@ export function AiInputsPanel({ assistant }: { assistant: AIStudyAssistantContro
               {showAttachMenu && (
                 <div className="absolute left-0 top-full mt-1 z-20 bg-card border border-border rounded-xl shadow-lg p-1.5 min-w-[180px] space-y-0.5 animate-in fade-in zoom-in-95">
                   <label className="flex items-center space-x-2 px-3 py-2 rounded-lg hover:bg-muted cursor-pointer transition-all font-semibold text-foreground">
-                    <UploadCloud className="w-4 h-4 text-blue-500" />
+                    <UploadCloud className="w-4 h-4 text-primary" />
                     <span>Attach File</span>
                     <input
                       type="file"
@@ -238,7 +238,7 @@ export function AiInputsPanel({ assistant }: { assistant: AIStudyAssistantContro
                 if (e.key === "Enter" && !isGenerating) handleGenerate();
               }}
               placeholder="Describe the topic or add instructions..."
-              className="flex-1 min-w-0 px-3 py-2 border border-border bg-muted/40 rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 min-w-0 px-3 py-2 border border-border bg-muted/40 rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
         </div>
@@ -246,7 +246,7 @@ export function AiInputsPanel({ assistant }: { assistant: AIStudyAssistantContro
         <button
           onClick={handleGenerate}
           disabled={isGenerating || (!sourceText?.trim() && !prompt.trim())}
-          className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-bold rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer"
+          className="w-full py-3 bg-cta-gradient hover:brightness-110 disabled:opacity-50 text-white font-bold rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer"
         >
           <Sparkles className="w-4 h-4 text-amber-300" />
           <span>{isGenerating ? "Generating your study resource..." : "Generate Resource"}</span>

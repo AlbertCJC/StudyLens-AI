@@ -13,7 +13,7 @@ export function FlagHistoryModal({ open, onClose, material, flags }: FlagHistory
 
   return (
     <div
-      className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -22,7 +22,7 @@ export function FlagHistoryModal({ open, onClose, material, flags }: FlagHistory
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
-              <History className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              <History className="w-4 h-4 text-primary dark:text-indigo-300" />
               <span>Flag History</span>
             </h3>
             <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{material.title}</p>

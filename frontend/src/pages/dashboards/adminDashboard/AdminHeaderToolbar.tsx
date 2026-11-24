@@ -31,7 +31,7 @@ export const AdminHeaderToolbar: React.FC<AdminHeaderToolbarProps> = ({
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             onClick={onAddUser}
-            className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
+            className="px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Add User Account</span>
@@ -40,7 +40,7 @@ export const AdminHeaderToolbar: React.FC<AdminHeaderToolbarProps> = ({
             onClick={onBroadcast}
             className="px-4 py-2.5 bg-card hover:bg-muted text-foreground border border-border rounded-xl text-xs font-semibold transition-all flex items-center space-x-2 cursor-pointer"
           >
-            <Megaphone className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+            <Megaphone className="w-4 h-4 text-primary dark:text-indigo-300" />
             <span>Broadcast Notice</span>
           </button>
         </div>
@@ -54,7 +54,7 @@ export const AdminHeaderToolbar: React.FC<AdminHeaderToolbarProps> = ({
         {activeTab === "users" && (
           <button
             onClick={onAddUser}
-            className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
+            className="px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Add User Account</span>

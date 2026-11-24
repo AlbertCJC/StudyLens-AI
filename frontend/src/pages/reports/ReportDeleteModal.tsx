@@ -11,7 +11,7 @@ interface ReportDeleteModalProps {
 export function ReportDeleteModal({ report, deleting, onCancel, onConfirm }: ReportDeleteModalProps) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
     >
       <div className="bg-card border border-border p-6 rounded-2xl max-w-sm w-full shadow-xl space-y-4 animate-in fade-in zoom-in-95">

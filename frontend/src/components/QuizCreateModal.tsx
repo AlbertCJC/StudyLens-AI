@@ -387,7 +387,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
 
       const saved = (await res.json()) as Quiz;
       onSaved(saved);
-      showToast(quizToEdit ? "Quiz updated successfully." : "Quiz created successfully.");
+      showToast(quizToEdit ? "Quiz updated" : "Quiz created");
       onClose();
     } catch (err) {
       console.error("Save quiz error:", err);
@@ -402,7 +402,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
   return (
     <>
       <div
-        className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-start justify-center p-4 overflow-y-auto"
+        role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-start justify-center p-4 overflow-y-auto"
         onClick={(e) => {
           if (e.target === e.currentTarget) requestClose();
         }}
@@ -412,8 +412,8 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
           <div className="flex items-center space-x-2 flex-1 min-w-0">
             <div className={`p-2 rounded-xl ${
               canManageCourseQuizzes
-                ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                ? "bg-structure text-primary dark:text-indigo-300"
+                : "bg-structure text-primary dark:text-indigo-300"
             }`}>
               {canManageCourseQuizzes ? (
                 <GraduationCap className="w-5 h-5" />
@@ -446,7 +446,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
           <button
             type="button"
             onClick={() => requestClose(onOpenAI)}
-            className="w-full inline-flex items-center justify-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+            className="w-full inline-flex items-center justify-center space-x-1.5 px-3 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Generate with AI (opens AI Study Assistant)</span>
@@ -673,7 +673,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                       markDirty();
                     }}
                     placeholder="Type the question..."
-                    className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
+                    className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
                   />
                 </div>
                 <div>
@@ -684,7 +684,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                       setDraftType(e.target.value as CreateDraft["type"]);
                       markDirty();
                     }}
-                    className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
+                    className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
                   >
                     {QUESTION_TYPES.map((t) => (
                       <option key={t.value} value={t.value}>
@@ -703,7 +703,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                     value={String(draftCorrect || "")}
                     onChange={(e) => setDraftCorrect(e.target.value)}
                     placeholder="Type the exact answer students must enter"
-                    className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
+                    className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
                   />
                 </div>
               ) : draftType === "true_false" ? (
@@ -738,7 +738,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                             value={label}
                             disabled
                             readOnly
-                            className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
+                            className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
                           />
                         </div>
                       );
@@ -786,7 +786,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                             markDirty();
                           }}
                           placeholder={`Option ${String.fromCharCode(65 + i)}`}
-                          className="flex-1 min-w-0 p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
+                          className="flex-1 min-w-0 p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
                         />
                       </div>
                     ))}
@@ -804,7 +804,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                       markDirty();
                     }}
                   placeholder="Brief explanation for why this answer is correct..."
-                  className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none"
+                  className="w-full p-2 bg-card border border-border rounded-xl text-xs text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
                 />
               </div>
             </div>

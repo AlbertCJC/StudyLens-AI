@@ -34,7 +34,7 @@ export const UserInfoModal: React.FC<UserInfoModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -48,7 +48,7 @@ export const UserInfoModal: React.FC<UserInfoModalProps> = ({
             <span
               className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                 user.role === "student"
-                  ? "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/30"
+                  ? "text-primary dark:text-indigo-300 bg-structure border-structure-strong"
                   : user.role === "teacher"
                     ? "text-purple-600 dark:text-purple-400 bg-purple-500/10 border-purple-500/30"
                     : "text-muted-foreground bg-slate-500/10 border-slate-500/30"

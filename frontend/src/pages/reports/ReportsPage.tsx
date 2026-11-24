@@ -180,7 +180,7 @@ export const ReportsPage: React.FC = () => {
         setReports((prev) => [data, ...prev]);
         setReportsTotal((prev) => prev + 1);
         setShowGenerate(false);
-        showToast("Report generated successfully.");
+        showToast("Report generated");
       } else {
         showToast(data?.error || "Could not generate the report.", "error");
       }

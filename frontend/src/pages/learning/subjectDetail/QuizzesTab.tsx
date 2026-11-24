@@ -35,13 +35,13 @@ export function QuizzesTab({
     <div className="bg-card rounded-2xl border border-border p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-bold text-foreground flex items-center space-x-2">
-          <GraduationCap className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <GraduationCap className="w-4 h-4 text-primary dark:text-indigo-300" />
           <span>Quizzes & Assessments</span>
         </h2>
         {canManage && (
           <button
             onClick={onCreateQuiz}
-            className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+            className="inline-flex items-center space-x-1.5 px-3 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Create Quiz</span>
@@ -105,7 +105,7 @@ export function QuizzesTab({
                       </button>
                       <button
                         onClick={() => onDownloadQuizPdf(quiz.id, quiz.title)}
-                        className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
+                        className="p-2 text-primary dark:text-indigo-300 hover:bg-structure-strong rounded-lg transition-all cursor-pointer"
                         title="Download Quiz PDF"
                       >
                         <Download className="w-4 h-4" />
@@ -136,7 +136,7 @@ export function QuizzesTab({
                       )}
                       <button
                         onClick={() => onStartQuiz(quiz.id)}
-                        className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all cursor-pointer"
+                        className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-cta-gradient hover:brightness-110 text-white text-xs font-bold transition-all cursor-pointer"
                         title="Start this quiz"
                       >
                         <GraduationCap className="w-3.5 h-3.5" />

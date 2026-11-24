@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { CountUp } from "../../components/ui/count-up";
 import { useNavigate } from "react-router-dom";
 import {
   BookOpen,
@@ -34,6 +35,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
   const { currentUser } = useAuth();
   const [progress, setProgress] = useState<StudentProgress | null>(null);
   const [subjects, setSubjects] = useState<EnrolledSubject[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [detailCard, setDetailCard] = useState<"weak" | "average" | "subjects" | "completed" | null>(null);
 
   // In-Progress Quiz State initialized lazily from localStorage
@@ -76,19 +78,23 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
     if (!studentId) return;
     let isSubscribed = true;
 
-    authFetch(`/api/progress/${studentId}`)
+    const progressReq = authFetch(`/api/progress/${studentId}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (isSubscribed) setProgress(data);
       })
       .catch(() => {});
 
-    authFetch("/api/subjects")
+    const subjectsReq = authFetch("/api/subjects")
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (isSubscribed) setSubjects(Array.isArray(data) ? data : []);
       })
       .catch(() => {});
+
+    Promise.all([progressReq, subjectsReq]).then(() => {
+      if (isSubscribed) setLoaded(true);
+    });
 
     return () => {
       isSubscribed = false;
@@ -144,11 +150,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setDetailCard("subjects")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-primary/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all group animate-in fade-in slide-up" style={{ animationDelay: `0ms`, animationFillMode: "both" }}
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Total Subjects</p>
-            <p className="text-3xl font-extrabold text-foreground tracking-tight">{subjects.length}</p>
+            <p className="text-3xl font-extrabold text-foreground tracking-tight">{loaded ? <CountUp value={subjects.length} /> : <span className="skeleton inline-block h-8 w-14 align-middle" />}</p>
           </div>
           <div className="p-3 bg-structure text-primary dark:text-indigo-300 rounded-2xl shrink-0 relative">
             <BookOpen className="w-6 h-6" />
@@ -159,12 +165,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setDetailCard("completed")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-primary/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all group animate-in fade-in slide-up" style={{ animationDelay: `50ms`, animationFillMode: "both" }}
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Completed Quizzes</p>
             <p className="text-3xl font-extrabold text-foreground tracking-tight">
-              {progress?.totalQuizzesTaken ?? 0}
+              {loaded ? <CountUp value={progress?.totalQuizzesTaken ?? 0} /> : <span className="skeleton inline-block h-8 w-14 align-middle" />}
             </p>
           </div>
           <div className="p-3 bg-structure text-primary dark:text-indigo-300 rounded-2xl shrink-0 relative">
@@ -176,12 +182,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setDetailCard("average")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-emerald-500/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-emerald-500/50 hover:shadow-md hover:-translate-y-0.5 transition-all group animate-in fade-in slide-up" style={{ animationDelay: `100ms`, animationFillMode: "both" }}
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Average Score</p>
             <p className="text-3xl font-extrabold text-foreground tracking-tight">
-              {typeof progress?.averageScore === "number" ? `${progress.averageScore}%` : "—"}
+              {loaded ? typeof progress?.averageScore === "number" ? <CountUp value={progress.averageScore} suffix="%" /> : "—" : <span className="skeleton inline-block h-8 w-14 align-middle" />}
             </p>
           </div>
           <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400 rounded-2xl shrink-0 relative">
@@ -193,12 +199,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setDetailCard("weak")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-rose-500/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-rose-500/50 hover:shadow-md hover:-translate-y-0.5 transition-all group animate-in fade-in slide-up" style={{ animationDelay: `150ms`, animationFillMode: "both" }}
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Weak Topics</p>
             <p className="text-3xl font-extrabold text-foreground tracking-tight">
-              {progress?.weakTopics?.length ?? 0}
+              {loaded ? <CountUp value={progress?.weakTopics?.length ?? 0} /> : <span className="skeleton inline-block h-8 w-14 align-middle" />}
             </p>
           </div>
           <div className="p-3 bg-rose-500/10 text-rose-500 dark:bg-rose-500/20 dark:text-rose-400 rounded-2xl shrink-0 relative">
