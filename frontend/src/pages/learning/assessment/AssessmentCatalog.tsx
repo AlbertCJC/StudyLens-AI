@@ -118,7 +118,7 @@ export function AssessmentCatalog({
         <div className="flex items-center space-x-2 shrink-0">
           <button
             onClick={onShowCreate}
-            className="px-3.5 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
+            className="px-3.5 py-2.5 bg-structure hover:bg-structure-strong text-structure-foreground rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Create Quiz</span>

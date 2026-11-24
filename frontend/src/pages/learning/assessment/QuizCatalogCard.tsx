@@ -196,7 +196,7 @@ export function QuizCatalogCard({
                 e.stopPropagation();
                 onStartQuiz(quiz, false);
               }}
-              className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 ml-auto cursor-pointer"
+              className="px-4 py-2 bg-structure hover:bg-structure-strong text-structure-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 ml-auto cursor-pointer"
             >
               <span>{(quiz.attemptsUsed ?? 0) > 0 ? "Retake Quiz" : "Take Quiz"}</span>
               <ArrowRight className="w-3.5 h-3.5" />

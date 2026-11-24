@@ -37,7 +37,7 @@ export function SubjectTabs({ tabs, activeTab, setActiveTab }: SubjectTabsProps)
             {(tab.count ?? 0) > 0 && (
               <span
                 className={`relative px-1.5 py-0.5 text-[10px] font-bold rounded-full ${
-                  isActive ? "bg-cta-gradient text-white" : "bg-muted text-muted-foreground"
+                  isActive ? "bg-card text-structure-foreground" : "bg-muted text-muted-foreground"
                 }`}
               >
                 {tab.count}

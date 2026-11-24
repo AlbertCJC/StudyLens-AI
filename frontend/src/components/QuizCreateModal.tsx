@@ -446,7 +446,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
           <button
             type="button"
             onClick={() => requestClose(onOpenAI)}
-            className="w-full inline-flex items-center justify-center space-x-1.5 px-3 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+            className="w-full inline-flex items-center justify-center space-x-1.5 px-3 py-2 bg-structure hover:bg-structure-strong text-structure-foreground rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Generate with AI (opens AI Study Assistant)</span>
@@ -652,7 +652,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                 <button
                   type="button"
                   onClick={addDraftQuestion}
-                  className="px-3.5 py-1.5 bg-cta-gradient text-white hover:brightness-110 rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1 shadow-xs"
+                  className="px-3.5 py-1.5 bg-structure text-structure-foreground hover:bg-structure-strong rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1 shadow-xs"
                 >
                   {editingDraftId ? <Pencil className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
                   <span>{editingDraftId ? "Update Question" : "Add Question"}</span>

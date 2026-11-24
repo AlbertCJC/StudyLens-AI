@@ -263,7 +263,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                         e.stopPropagation();
                         enterDeck(d);
                       }}
-                      className="mt-auto w-full px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="mt-auto w-full px-4 py-2.5 bg-structure hover:bg-structure-strong text-structure-foreground rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <ArrowRight className="w-3.5 h-3.5" />
                       <span>Start Studying</span>
