@@ -69,7 +69,7 @@ export function AnnouncementDetailModal({ open, onClose, announcement }: Announc
         <div className="flex items-center justify-between pt-2 border-t border-border">
           <button
             onClick={onClose}
-            className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+            className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
           >
             Close Notice
           </button>

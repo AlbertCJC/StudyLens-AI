@@ -377,14 +377,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
             </p>
             <button
               onClick={() => onNavigate("ai-assistant")}
-              className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a43c4] text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center space-x-1"
+              className="w-full py-2.5 bg-cta-gradient hover:brightness-110 text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center space-x-1"
             >
               <MessageSquare className="w-4 h-4" />
               <span>Launch AI Study Assistant</span>
             </button>
             <button
               onClick={() => onNavigate("flashcards")}
-              className="w-full py-2.5 bg-[#5b51d8]/10 hover:bg-[#5b51d8]/20 text-[#5b51d8] dark:text-[#818cf8] font-bold text-xs rounded-xl transition-all flex items-center justify-center space-x-1"
+              className="w-full py-2.5 bg-structure hover:bg-structure-strong text-structure-foreground font-bold text-xs rounded-xl transition-all flex items-center justify-center space-x-1"
             >
               <Layers className="w-4 h-4" />
               <span>Open Flashcards Deck</span>

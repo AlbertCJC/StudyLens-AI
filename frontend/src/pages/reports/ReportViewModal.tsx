@@ -54,7 +54,7 @@ export function ReportViewModal({ report, onClose, onExport }: ReportViewModalPr
           >
             <Download className="w-3.5 h-3.5" /> CSV
           </button>
-          <button onClick={onClose} className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer">
+          <button onClick={onClose} className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all cursor-pointer">
             Close
           </button>
         </div>

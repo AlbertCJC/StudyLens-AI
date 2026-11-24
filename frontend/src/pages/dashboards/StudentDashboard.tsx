@@ -144,13 +144,13 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setDetailCard("subjects")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-[#5b51d8]/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-primary/50 hover:shadow-xs transition-all group"
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Total Subjects</p>
             <p className="text-3xl font-extrabold text-foreground tracking-tight">{subjects.length}</p>
           </div>
-          <div className="p-3 bg-[#5b51d8]/10 text-[#5b51d8] dark:bg-[#5b51d8]/20 dark:text-[#818cf8] rounded-2xl shrink-0 relative">
+          <div className="p-3 bg-structure text-primary dark:text-indigo-300 rounded-2xl shrink-0 relative">
             <BookOpen className="w-6 h-6" />
             <ChevronRight className="w-3 h-3 absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
@@ -159,7 +159,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setDetailCard("completed")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-[#5b51d8]/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-primary/50 hover:shadow-xs transition-all group"
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Completed Quizzes</p>
@@ -167,7 +167,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
               {progress?.totalQuizzesTaken ?? 0}
             </p>
           </div>
-          <div className="p-3 bg-[#5b51d8]/10 text-[#5b51d8] dark:bg-[#5b51d8]/20 dark:text-[#818cf8] rounded-2xl shrink-0 relative">
+          <div className="p-3 bg-structure text-primary dark:text-indigo-300 rounded-2xl shrink-0 relative">
             <Award className="w-6 h-6" />
             <ChevronRight className="w-3 h-3 absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
@@ -216,7 +216,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
             <h2 className="text-lg font-extrabold text-foreground">Recent Activities</h2>
             <button
               onClick={() => onNavigate("analytics")}
-              className="text-xs font-semibold text-foreground hover:text-[#5b51d8] dark:hover:text-[#818cf8] transition-colors cursor-pointer"
+              className="text-xs font-semibold text-foreground hover:text-primary transition-colors cursor-pointer"
             >
               View All
             </button>
@@ -228,7 +228,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
             <div className="space-y-4">
               {attempts.map((att, i) => (
                 <div key={i} className="flex items-start space-x-3.5 pb-4 border-b border-border/60 last:border-0 last:pb-0">
-                  <div className="p-2.5 rounded-full bg-[#5b51d8]/10 text-[#5b51d8] dark:bg-[#5b51d8]/20 dark:text-[#818cf8] mt-0.5 shrink-0">
+                  <div className="p-2.5 rounded-full bg-structure text-primary dark:text-indigo-300 mt-0.5 shrink-0">
                     <Clock className="w-4 h-4" />
                   </div>
                   <div className="flex-1 space-y-1">
@@ -237,7 +237,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
                     </h3>
                     <div className="flex flex-wrap items-center gap-2 pt-0.5">
                       {att.subjectName && (
-                        <span className="px-2.5 py-0.5 bg-[#5b51d8] text-white text-[11px] font-bold rounded-md">
+                        <span className="px-2.5 py-0.5 bg-cta-gradient text-white text-[11px] font-bold rounded-md">
                           {att.subjectName}
                         </span>
                       )}
@@ -269,10 +269,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
                 <button
                   key={sub.id}
                   onClick={() => onNavigate("subjects")}
-                  className="w-full flex items-center justify-between p-3 rounded-xl border border-border bg-muted/30 hover:border-[#5b51d8]/50 transition-all cursor-pointer text-left"
+                  className="w-full flex items-center justify-between p-3 rounded-xl border border-border bg-muted/30 hover:border-primary/50 transition-all cursor-pointer text-left"
                 >
                   <div className="flex items-center space-x-3 min-w-0">
-                    <div className="p-2 rounded-lg bg-[#5b51d8]/10 text-[#5b51d8] dark:bg-[#5b51d8]/20 dark:text-[#818cf8] shrink-0">
+                    <div className="p-2 rounded-lg bg-structure text-primary dark:text-indigo-300 shrink-0">
                       <BookOpen className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
@@ -303,7 +303,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
         <div className="space-y-2">
           <button
             onClick={() => onNavigate("ai-assistant")}
-            className="w-full py-2 bg-[#5b51d8] hover:bg-[#4f46e5] text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer shadow-2xs"
+            className="w-full py-2 bg-cta-gradient hover:brightness-110 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer shadow-2xs"
           >
             <Layers className="w-3.5 h-3.5" />
             <span>Launch AI Study Assistant</span>
@@ -389,7 +389,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
                 <DetailRow
                   label={`${s.code} — ${s.name}`}
                   trailing={
-                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-[#5b51d8]/10 text-[#5b51d8] dark:bg-[#5b51d8]/20 dark:text-[#818cf8]">
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300">
                       {s.materialCount ?? 0} material{(s.materialCount ?? 0) === 1 ? "" : "s"}
                     </span>
                   }

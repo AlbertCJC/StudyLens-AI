@@ -24,6 +24,12 @@
     --input: #e2e8f0;
     --ring: #6366f1;
     --radius: 0.5rem;
+    --structure: #eef2ff;
+    --structure-strong: #e0e7ff;
+    --structure-foreground: #312e81;
+    --gradient-brand: linear-gradient(90deg, #4f46e5, #10b981);
+    --gradient-brand-text: linear-gradient(90deg, #4338ca, #059669);
+    --gradient-cta: linear-gradient(90deg, #4f46e5, #047857);
   }
 
   .dark {
@@ -47,6 +53,12 @@
     --border: #334155;
     --input: #334155;
     --ring: #6366f1;
+    --structure: rgb(99 102 241 / 0.14);
+    --structure-strong: rgb(99 102 241 / 0.3);
+    --structure-foreground: #c7d2fe;
+    --gradient-brand: linear-gradient(90deg, #6366f1, #10b981);
+    --gradient-brand-text: linear-gradient(90deg, #818cf8, #34d399);
+    --gradient-cta: linear-gradient(90deg, #4f46e5, #047857);
   }
 }
 
@@ -70,6 +82,9 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-structure: var(--structure);
+  --color-structure-strong: var(--structure-strong);
+  --color-structure-foreground: var(--structure-foreground);
   --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
 }
 
@@ -78,6 +93,19 @@ body {
   color: var(--foreground);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   min-height: 100vh;
+}
+
+@utility bg-brand-gradient {
+  background-image: var(--gradient-brand);
+}
+@utility bg-cta-gradient {
+  background-image: var(--gradient-cta);
+}
+@utility text-brand-gradient {
+  background-image: var(--gradient-brand-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 /* 3D Flip Card Utilities */

@@ -247,7 +247,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                         e.stopPropagation();
                         enterDeck(d);
                       }}
-                      className="mt-auto w-full px-4 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="mt-auto w-full px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <ArrowRight className="w-3.5 h-3.5" />
                       <span>Start Studying</span>
@@ -326,7 +326,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                 aria-valuenow={cardIndex + 1}
               >
                 <div
-                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  className="h-full bg-brand-gradient rounded-full transition-all duration-300"
                   style={{ width: `${totalCards ? ((cardIndex + 1) / totalCards) * 100 : 0}%` }}
                 />
               </div>
@@ -413,7 +413,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
 
               <button
                 onClick={handleNext}
-                className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs"
+                className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs"
               >
                 <span>Next</span>
                 <ArrowRight className="w-4 h-4" />
@@ -571,7 +571,7 @@ export const FlashcardsPage: React.FC<FlashcardsPageProps> = ({ onNavigate }) =>
                     enterDeck(deck);
                   }}
                   disabled={previewTotal === 0}
-                  className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <span>Start Studying</span>
                   <ArrowRight className="w-3.5 h-3.5" />

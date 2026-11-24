@@ -51,7 +51,7 @@ export const UserInfoModal: React.FC<UserInfoModalProps> = ({
                   ? "text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/30"
                   : user.role === "teacher"
                     ? "text-purple-600 dark:text-purple-400 bg-purple-500/10 border-purple-500/30"
-                    : "text-slate-600 dark:text-slate-400 bg-slate-500/10 border-slate-500/30"
+                    : "text-muted-foreground bg-slate-500/10 border-slate-500/30"
               }`}
             >
               {roleInfo.label}

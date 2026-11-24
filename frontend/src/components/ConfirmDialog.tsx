@@ -28,7 +28,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
   const accentClasses = destructive
     ? "bg-rose-600 hover:bg-rose-700 text-white"
-    : "bg-primary hover:bg-primary/90 text-primary-foreground";
+    : "bg-cta-gradient hover:brightness-110 text-white";
 
   return (
     <div

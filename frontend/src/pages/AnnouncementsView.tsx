@@ -119,7 +119,7 @@ export const AnnouncementsView: React.FC = () => {
                 setEditingAnn(null);
                 setShowPostModal(true);
               }}
-              className="px-4 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
+              className="px-4 py-1.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Post Announcement</span>
@@ -284,7 +284,7 @@ export const AnnouncementsView: React.FC = () => {
             <div className="flex items-center justify-between pt-2 border-t border-border">
               <button
                 onClick={handleCloseDetail}
-                className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 Close Notice
               </button>

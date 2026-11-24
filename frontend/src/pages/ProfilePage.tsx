@@ -416,7 +416,7 @@ export const ProfilePage: React.FC = () => {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Top Banner Header */}
-      <div className="relative overflow-hidden rounded-xl bg-[#5b51d8] p-6 sm:p-8 text-white shadow-md">
+      <div className="relative overflow-hidden rounded-xl bg-cta-gradient p-6 sm:p-8 text-white shadow-md">
         <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start gap-5">
           <div className="relative shrink-0">
             {avatarUrl(currentUser.avatar) ? (
@@ -435,7 +435,7 @@ export const ProfilePage: React.FC = () => {
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploadingAvatar}
                 title={uploadingAvatar ? "Uploading..." : "Change profile photo"}
-                className="absolute bottom-0 right-0 h-7 w-7 rounded-full bg-white text-[#5b51d8] flex items-center justify-center shadow-md border border-white/60 hover:scale-105 transition-transform cursor-pointer disabled:opacity-60"
+                className="absolute bottom-0 right-0 h-7 w-7 rounded-full bg-white text-primary flex items-center justify-center shadow-md border border-white/60 hover:scale-105 transition-transform cursor-pointer disabled:opacity-60"
               >
                 <Camera className="w-3.5 h-3.5" />
               </button>

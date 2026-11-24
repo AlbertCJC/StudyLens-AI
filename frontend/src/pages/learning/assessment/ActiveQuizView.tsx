@@ -210,7 +210,7 @@ export function ActiveQuizView({
           {currentQIndex < activeQuiz.questions.length - 1 ? (
             <button
               onClick={onNext}
-              className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+              className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
             >
               Next Question →
             </button>

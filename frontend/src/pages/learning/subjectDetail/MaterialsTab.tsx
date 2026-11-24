@@ -34,7 +34,7 @@ function fileTypeBadge(fileType: string) {
     return "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20";
   }
   if (lower === "txt") {
-    return "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20";
+    return "bg-slate-500/10 text-muted-foreground border-slate-500/20";
   }
   return "bg-muted/40 text-muted-foreground dark:text-slate-400 border-border";
 }

@@ -652,7 +652,7 @@ export function QuizCreateModal(props: QuizCreateModalProps) {
                 <button
                   type="button"
                   onClick={addDraftQuestion}
-                  className="px-3.5 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1 shadow-xs"
+                  className="px-3.5 py-1.5 bg-cta-gradient text-white hover:brightness-110 rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1 shadow-xs"
                 >
                   {editingDraftId ? <Pencil className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
                   <span>{editingDraftId ? "Update Question" : "Add Question"}</span>

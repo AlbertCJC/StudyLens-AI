@@ -332,7 +332,7 @@ export function EditQuizModal({
           </button>
           <button
             onClick={handleSaveEditQuiz}
-            className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center space-x-1"
+            className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center space-x-1"
           >
             <Check className="w-4 h-4" />
             <span>Save Changes</span>

@@ -128,7 +128,7 @@ export function ReportGenerateModal({
           <button
             type="submit"
             disabled={generating}
-            className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
             <span>{generating ? "Generating..." : "Generate Report"}</span>

@@ -24,9 +24,9 @@ function PaperText({
   note?: string;
 }) {
   return (
-    <div className="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800 shadow-md space-y-6 max-w-2xl mx-auto">
-      <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
-        <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">{title}</h2>
+    <div className="bg-card p-8 rounded-lg border border-border shadow-md space-y-6 max-w-2xl mx-auto">
+      <div className="border-b border-border pb-4">
+        <h2 className="text-xl font-extrabold text-foreground">{title}</h2>
         {note && <p className="mt-2 text-[11px] text-muted-foreground">{note}</p>}
       </div>
       <div className="text-[13px] text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-7 font-sans font-normal tracking-wide">

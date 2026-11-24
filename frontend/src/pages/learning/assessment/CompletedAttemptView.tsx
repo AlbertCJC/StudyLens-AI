@@ -73,7 +73,7 @@ export function CompletedAttemptView({ completedAttempt, activeQuiz, returnTo, o
       <div className="flex justify-end pt-2">
         <button
           onClick={onBack}
-          className="px-5 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground font-bold rounded-xl text-xs shadow-md cursor-pointer"
+          className="px-5 py-2.5 bg-cta-gradient hover:brightness-110 text-white font-bold rounded-xl text-xs shadow-md cursor-pointer"
         >
           {returnTo ? "Back to Subject Quizzes" : "Back to Assessments Catalog"}
         </button>

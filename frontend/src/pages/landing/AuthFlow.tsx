@@ -84,7 +84,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
     <>
       <MobileAppBanner darkMode={darkMode} />
       <div className={`min-h-screen font-sans flex flex-col items-center justify-center p-4 sm:p-6 ${
-        darkMode ? "dark bg-[#0b132b] text-slate-100" : "bg-[#f5f6fc] text-slate-900"
+        darkMode ? "dark bg-background text-foreground" : "bg-background text-foreground"
       }`}>
         <div className="absolute top-4 right-6">
           <button
@@ -97,24 +97,24 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
         </div>
 
         <div className="w-full max-w-[420px] mx-auto py-8">
-          <div className="bg-white dark:bg-[#131b30] border border-slate-100 dark:border-slate-800/80 rounded-2xl p-8 sm:p-10 shadow-sm space-y-6">
+          <div className="bg-card border border-border rounded-2xl p-8 sm:p-10 shadow-sm space-y-6">
             {effectivePending ? (
               <>
-                <div className="h-12 w-12 rounded-2xl bg-[#5b51d8] text-white flex items-center justify-center mx-auto shadow-md">
+                <div className="h-12 w-12 rounded-2xl bg-cta-gradient text-white flex items-center justify-center mx-auto shadow-md">
                   <Mail className="w-6 h-6 text-white" />
                 </div>
                 <div className="text-center space-y-1">
-                  <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
                     Verify Your Email
                   </h2>
-                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+                  <p className="text-xs sm:text-sm text-muted-foreground">
                     We sent a 6-digit code to <span className="font-semibold text-slate-700 dark:text-slate-200">{effectivePending.email}</span>.
                     Enter it below to activate your account.
                   </p>
                 </div>
                 <form onSubmit={handleVerifyEmailSubmit} className="space-y-4 text-xs sm:text-sm">
                   {verifyNotice && (
-                    <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
+                    <div className="text-xs font-medium text-structure-foreground bg-structure border border-structure-strong rounded-xl px-3 py-2.5">
                       {verifyNotice}
                     </div>
                   )}
@@ -135,24 +135,24 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                         value={verifyCode}
                         onChange={(e) => setVerifyCode(e.target.value.replace(/[^0-9]/g, ""))}
                         placeholder="6-digit code"
-                        className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium tracking-[0.25em]"
+                        className="w-full pl-9 pr-3 h-11 bg-card border border-input rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 font-medium tracking-[0.25em]"
                       />
                     </div>
                   </div>
                   <button
                     type="submit"
                     disabled={verifySubmitting}
-                    className="w-full py-3 bg-[#5b51d8] hover:bg-[#4c42c9] text-white font-semibold rounded-xl shadow-sm transition-all text-sm cursor-pointer mt-2 disabled:opacity-60"
+                    className="w-full py-3 bg-cta-gradient hover:brightness-110 text-white font-semibold rounded-xl shadow-sm transition-all text-sm cursor-pointer mt-2 disabled:opacity-60"
                   >
                     {verifySubmitting ? "Verifying..." : "Verify & Sign In"}
                   </button>
-                  <div className="text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400 pt-1">
+                  <div className="text-center text-xs sm:text-sm text-muted-foreground pt-1">
                     Didn't get a code?{" "}
                     <button
                       type="button"
                       onClick={handleResendVerifyCode}
                       disabled={verifyResending}
-                      className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline cursor-pointer disabled:opacity-60"
+                      className="text-primary dark:text-indigo-400 font-bold hover:underline cursor-pointer disabled:opacity-60"
                     >
                       {verifyResending ? "Sending..." : "Resend code"}
                     </button>
@@ -170,20 +170,20 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
               </>
             ) : pending2FA ? (
               <>
-                <div className="h-12 w-12 rounded-2xl bg-[#5b51d8] text-white flex items-center justify-center mx-auto shadow-md">
+                <div className="h-12 w-12 rounded-2xl bg-cta-gradient text-white flex items-center justify-center mx-auto shadow-md">
                   <ShieldCheck className="w-6 h-6 text-white" />
                 </div>
                 <div className="text-center space-y-1">
-                  <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
                     Confirm Your Sign-In
                   </h2>
-                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+                  <p className="text-xs sm:text-sm text-muted-foreground">
                     We sent a 6-digit code to <span className="font-semibold text-slate-700 dark:text-slate-200">{pending2FA.email}</span>. Enter it below to finish signing in.
                   </p>
                 </div>
                 <form onSubmit={handleVerify2FASubmit} className="space-y-4 text-xs sm:text-sm">
                   {f2aNotice && (
-                    <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
+                    <div className="text-xs font-medium text-structure-foreground bg-structure border border-structure-strong rounded-xl px-3 py-2.5">
                       {f2aNotice}
                     </div>
                   )}
@@ -204,24 +204,24 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                         value={f2aCode}
                         onChange={(e) => setF2aCode(e.target.value.replace(/[^0-9]/g, ""))}
                         placeholder="6-digit code"
-                        className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium tracking-[0.25em]"
+                        className="w-full pl-9 pr-3 h-11 bg-card border border-input rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 font-medium tracking-[0.25em]"
                       />
                     </div>
                   </div>
                   <button
                     type="submit"
                     disabled={f2aSubmitting}
-                    className="w-full py-3 bg-[#5b51d8] hover:bg-[#4c42c9] text-white font-semibold rounded-xl shadow-sm transition-all text-sm cursor-pointer mt-2 disabled:opacity-60"
+                    className="w-full py-3 bg-cta-gradient hover:brightness-110 text-white font-semibold rounded-xl shadow-sm transition-all text-sm cursor-pointer mt-2 disabled:opacity-60"
                   >
                     {f2aSubmitting ? "Verifying..." : "Verify & Sign In"}
                   </button>
-                  <div className="text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400 pt-1">
+                  <div className="text-center text-xs sm:text-sm text-muted-foreground pt-1">
                     Didn't get a code?{" "}
                     <button
                       type="button"
                       onClick={handleResend2FASubmit}
                       disabled={f2aResending}
-                      className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline cursor-pointer disabled:opacity-60"
+                      className="text-primary dark:text-indigo-400 font-bold hover:underline cursor-pointer disabled:opacity-60"
                     >
                       {f2aResending ? "Sending..." : "Resend code"}
                     </button>
@@ -246,10 +246,10 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                 />
 
                 <div className="text-center space-y-1">
-                  <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-foreground tracking-tight">
                     {authModal === "login" ? "Welcome Back" : "Create Account"}
                   </h2>
-                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+                  <p className="text-xs sm:text-sm text-muted-foreground">
                     {authModal === "login"
                       ? "Sign in to continue your learning journey"
                       : "Create your account to get started"}
@@ -272,7 +272,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                             value={firstName}
                             onChange={(e) => setFirstName(e.target.value)}
                             placeholder="First name"
-                            className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
+                            className="w-full pl-9 pr-3 h-11 bg-card border border-input rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 font-medium"
                           />
                         </div>
                       </div>
@@ -290,7 +290,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                             value={lastName}
                             onChange={(e) => setLastName(e.target.value)}
                             placeholder="Last name"
-                            className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
+                            className="w-full pl-9 pr-3 h-11 bg-card border border-input rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 font-medium"
                           />
                         </div>
                       </div>
@@ -308,7 +308,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         placeholder="Enter your email"
-                        className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
+                        className="w-full pl-10 pr-4 h-11 bg-card border border-input rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 font-medium"
                       />
                     </div>
                   </div>
@@ -325,7 +325,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder={authModal === "login" ? "Enter your password" : "Create a password"}
-                        className="w-full pl-10 pr-10 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
+                        className="w-full pl-10 pr-10 h-11 bg-card border border-input rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 font-medium"
                       />
                       <button
                         type="button"
@@ -350,7 +350,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                           value={confirmPassword}
                           onChange={(e) => setConfirmPassword(e.target.value)}
                           placeholder="Confirm your password"
-                          className="w-full pl-10 pr-10 py-2.5 bg-white dark:bg-[#182238] border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#5b51d8] font-medium"
+                          className="w-full pl-10 pr-10 h-11 bg-card border border-input rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 font-medium"
                         />
                         <button
                           type="button"
@@ -370,7 +370,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                           type="checkbox"
                           checked={rememberMe}
                           onChange={(e) => setRememberMe(e.target.checked)}
-                          className="w-4 h-4 rounded border-slate-300 text-[#5b51d8] focus:ring-[#5b51d8]"
+                          className="w-4 h-4 rounded border-slate-300 text-primary focus:ring-ring"
                         />
                         <span>Remember me</span>
                       </label>
@@ -380,7 +380,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                           setForgotEmail(email.trim());
                           setForgotOpen(true);
                         }}
-                        className="text-[#5b51d8] dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
+                        className="text-primary dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
                       >
                         Forgot password?
                       </button>
@@ -396,11 +396,11 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                           onClick={() => setRole("student")}
                           className={`w-full p-3 rounded-xl border text-left flex items-center space-x-3 transition-all cursor-pointer ${
                             role === "student"
-                              ? "border-slate-300 dark:border-slate-600 bg-white dark:bg-[#182238] text-slate-900 dark:text-white font-bold ring-1 ring-slate-300 dark:ring-slate-600"
-                              : "border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131b30] text-slate-600 dark:text-slate-400 font-medium hover:border-slate-300"
+                              ? "border-primary bg-structure text-structure-foreground font-bold ring-1 ring-primary"
+                              : "border-border bg-card text-muted-foreground font-medium hover:border-structure-strong"
                           }`}
                         >
-                          <span className={`w-2.5 h-2.5 rounded-full ${role === "student" ? "bg-[#5b51d8]" : "border border-slate-300 dark:border-slate-600"}`} />
+                          <span className={`w-2.5 h-2.5 rounded-full ${role === "student" ? "bg-primary" : "border border-slate-300 dark:border-slate-600"}`} />
                           <span>Student</span>
                         </button>
 
@@ -409,11 +409,11 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                           onClick={() => setRole("teacher")}
                           className={`w-full p-3 rounded-xl border text-left flex items-center space-x-3 transition-all cursor-pointer ${
                             role === "teacher"
-                              ? "border-slate-300 dark:border-slate-600 bg-white dark:bg-[#182238] text-slate-900 dark:text-white font-bold ring-1 ring-slate-300 dark:ring-slate-600"
-                              : "border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131b30] text-slate-600 dark:text-slate-400 font-medium hover:border-slate-300"
+                              ? "border-primary bg-structure text-structure-foreground font-bold ring-1 ring-primary"
+                              : "border-border bg-card text-muted-foreground font-medium hover:border-structure-strong"
                           }`}
                         >
-                          <span className={`w-2.5 h-2.5 rounded-full ${role === "teacher" ? "bg-[#5b51d8]" : "border border-slate-300 dark:border-slate-600"}`} />
+                          <span className={`w-2.5 h-2.5 rounded-full ${role === "teacher" ? "bg-primary" : "border border-slate-300 dark:border-slate-600"}`} />
                           <span>Teacher</span>
                         </button>
                       </div>
@@ -422,19 +422,19 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
 
                   <button
                     type="submit"
-                    className="w-full py-3 bg-[#5b51d8] hover:bg-[#4c42c9] text-white font-semibold rounded-xl shadow-sm transition-all text-sm cursor-pointer mt-2"
+                    className="w-full py-3 bg-cta-gradient hover:brightness-110 text-white font-semibold rounded-xl shadow-sm transition-all text-sm cursor-pointer mt-2"
                   >
                     {authModal === "login" ? "Sign In" : "Create Account"}
                   </button>
 
-                  <div className="text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400 pt-2">
+                  <div className="text-center text-xs sm:text-sm text-muted-foreground pt-2">
                     {authModal === "login" ? (
                       <p>
                         Don't have an account?{" "}
                         <button
                           type="button"
                           onClick={openRegisterModal}
-                          className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline cursor-pointer"
+                          className="text-primary dark:text-indigo-400 font-bold hover:underline cursor-pointer"
                         >
                           Register here
                         </button>
@@ -445,7 +445,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                         <button
                           type="button"
                           onClick={() => setAuthModal("login")}
-                          className="text-[#5b51d8] dark:text-indigo-400 font-bold hover:underline cursor-pointer"
+                          className="text-primary dark:text-indigo-400 font-bold hover:underline cursor-pointer"
                         >
                           Sign in here
                         </button>
@@ -466,7 +466,7 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
           <div className="text-center mt-6">
             <button
               onClick={handleBackToHome}
-              className="inline-flex items-center space-x-1.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white font-medium cursor-pointer transition-colors"
+              className="inline-flex items-center space-x-1.5 text-xs sm:text-sm text-muted-foreground hover:text-slate-800 dark:hover:text-white font-medium cursor-pointer transition-colors"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back to home</span>
@@ -478,13 +478,13 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
       {forgotOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={closeForgotModal}>
           <div
-            className="w-full max-w-md rounded-2xl bg-white dark:bg-[#0e1628] border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4"
+            className="w-full max-w-md rounded-2xl bg-card border border-border shadow-2xl p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Reset Password</h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                <h2 className="text-lg font-bold text-foreground">Reset Password</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
                   {forgotStep === "request"
                     ? "Enter your account email to receive a 6-digit verification code."
                     : forgotStep === "verify"
@@ -503,8 +503,8 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
             {forgotStep === "request" ? (
               <form onSubmit={handleForgotSendCode} className="space-y-3">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Email Address</label>
-                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+                  <label className="block text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-1">Email Address</label>
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-border bg-slate-50 dark:bg-slate-900">
                     <Mail className="w-4 h-4 text-slate-400" />
                     <input
                       type="email"
@@ -512,14 +512,14 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                       onChange={(e) => setForgotEmail(e.target.value)}
                       placeholder="you@studylens.edu"
                       required
-                      className="w-full bg-transparent text-sm font-medium text-slate-900 dark:text-white outline-none"
+                      className="w-full bg-transparent text-sm font-medium text-foreground outline-none"
                     />
                   </div>
                 </div>
                 <button
                   type="submit"
                   disabled={forgotSubmitting}
-                  className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a41c4] text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
+                  className="w-full py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
                 >
                   {forgotSubmitting ? "Sending Code..." : "Send Verification Code"}
                 </button>
@@ -527,13 +527,13 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
             ) : forgotStep === "verify" ? (
               <form onSubmit={handleForgotVerifyOtp} className="space-y-3">
                 {forgotNotice && (
-                  <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
+                  <div className="text-xs font-medium text-structure-foreground bg-structure border border-structure-strong rounded-xl px-3 py-2.5">
                     {forgotNotice}
                   </div>
                 )}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Verification Code</label>
-                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+                  <label className="block text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-1">Verification Code</label>
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-border bg-slate-50 dark:bg-slate-900">
                     <Mail className="w-4 h-4 text-slate-400" />
                     <input
                       type="text"
@@ -543,21 +543,21 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                       onChange={(e) => setForgotOtp(e.target.value.replace(/[^0-9]/g, ""))}
                       placeholder="6-digit code"
                       required
-                      className="w-full bg-transparent text-sm font-medium text-slate-900 dark:text-white outline-none tracking-[0.25em]"
+                      className="w-full bg-transparent text-sm font-medium text-foreground outline-none tracking-[0.25em]"
                     />
                   </div>
                 </div>
                 <button
                   type="submit"
                   disabled={forgotSubmitting}
-                  className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a41c4] text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
+                  className="w-full py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
                 >
                   {forgotSubmitting ? "Verifying..." : "Verify Code"}
                 </button>
                 <button
                   type="button"
                   onClick={closeForgotModal}
-                  className="w-full py-2.5 rounded-xl text-sm font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer"
+                  className="w-full py-2.5 rounded-xl text-sm font-bold text-muted-foreground hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -565,13 +565,13 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
             ) : (
               <form onSubmit={handleForgotResetSubmit} className="space-y-3">
                 {forgotNotice && (
-                  <div className="text-xs font-medium text-[#4a41c4] bg-[#5b51d8]/5 border border-[#5b51d8]/15 rounded-xl px-3 py-2.5">
+                  <div className="text-xs font-medium text-structure-foreground bg-structure border border-structure-strong rounded-xl px-3 py-2.5">
                     {forgotNotice}
                   </div>
                 )}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">New Password</label>
-                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+                  <label className="block text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-1">New Password</label>
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-border bg-slate-50 dark:bg-slate-900">
                     <Lock className="w-4 h-4 text-slate-400" />
                     <input
                       type="password"
@@ -579,14 +579,14 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                       onChange={(e) => setForgotPassword(e.target.value)}
                       placeholder="At least 8 characters"
                       required
-                      className="w-full bg-transparent text-sm font-medium text-slate-900 dark:text-white outline-none"
+                      className="w-full bg-transparent text-sm font-medium text-foreground outline-none"
                     />
                   </div>
                   <PasswordRequirements password={forgotPassword} />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Confirm New Password</label>
-                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+                  <label className="block text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-1">Confirm New Password</label>
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-border bg-slate-50 dark:bg-slate-900">
                     <Lock className="w-4 h-4 text-slate-400" />
                     <input
                       type="password"
@@ -594,14 +594,14 @@ export function AuthFlow({ auth }: { auth: LandingAuthController }) {
                       onChange={(e) => setForgotConfirm(e.target.value)}
                       placeholder="Re-enter new password"
                       required
-                      className="w-full bg-transparent text-sm font-medium text-slate-900 dark:text-white outline-none"
+                      className="w-full bg-transparent text-sm font-medium text-foreground outline-none"
                     />
                   </div>
                 </div>
                 <button
                   type="submit"
                   disabled={forgotSubmitting}
-                  className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a41c4] text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
+                  className="w-full py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-60"
                 >
                   {forgotSubmitting ? "Resetting..." : "Reset Password"}
                 </button>
