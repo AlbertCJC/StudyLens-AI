@@ -284,7 +284,7 @@ export const AnnouncementsView: React.FC = () => {
             <div className="flex items-center justify-between pt-2 border-t border-border">
               <button
                 onClick={handleCloseDetail}
-                className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-5 py-2 bg-structure hover:bg-structure-strong text-structure-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 Close Notice
               </button>

@@ -243,7 +243,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigate, 
                     </h3>
                     <div className="flex flex-wrap items-center gap-2 pt-0.5">
                       {att.subjectName && (
-                        <span className="px-2.5 py-0.5 bg-cta-gradient text-white text-[11px] font-bold rounded-md">
+                        <span className="px-2.5 py-0.5 bg-structure text-structure-foreground text-[11px] font-bold rounded-md">
                           {att.subjectName}
                         </span>
                       )}

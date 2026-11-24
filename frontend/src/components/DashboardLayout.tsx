@@ -252,7 +252,7 @@ export function DashboardLayout({
                     <div className={`relative flex items-center gap-1.5 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
                       {item.badge && (
                         <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded-md ${
-                          isActive ? "bg-cta-gradient text-white" : "bg-primary/15 text-primary"
+                          "bg-primary/15 text-primary"
                         }`}>
                           {item.badge}
                         </span>
@@ -278,7 +278,7 @@ export function DashboardLayout({
                   className="h-9 w-9 rounded-full object-cover ring-2 ring-primary/20 shrink-0 group-hover:scale-105 transition-transform"
                 />
               ) : (
-                <div className="h-9 w-9 rounded-full bg-cta-gradient text-white flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 shrink-0 group-hover:scale-105 transition-transform">
+                <div className="h-9 w-9 rounded-full bg-structure-strong text-structure-foreground flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 shrink-0 group-hover:scale-105 transition-transform">
                   {userName ? userName.charAt(0).toUpperCase() : "J"}
                 </div>
               )}
@@ -425,7 +425,7 @@ export function DashboardLayout({
             {/* User Profile Menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="h-8 w-8 rounded-full bg-cta-gradient text-white flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform cursor-pointer overflow-hidden">
+                <button className="h-8 w-8 rounded-full bg-structure-strong text-structure-foreground flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform cursor-pointer overflow-hidden">
                   {avatarUrl(currentUser?.avatar) ? (
                     <img src={avatarUrl(currentUser?.avatar)!} alt={userName} className="h-full w-full object-cover" />
                   ) : (

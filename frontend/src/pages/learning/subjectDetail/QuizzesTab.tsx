@@ -136,7 +136,7 @@ export function QuizzesTab({
                       )}
                       <button
                         onClick={() => onStartQuiz(quiz.id)}
-                        className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-cta-gradient hover:brightness-110 text-white text-xs font-bold transition-all cursor-pointer"
+                        className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-structure hover:bg-structure-strong text-structure-foreground text-xs font-bold transition-all cursor-pointer"
                         title="Start this quiz"
                       >
                         <GraduationCap className="w-3.5 h-3.5" />

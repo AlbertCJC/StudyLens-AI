@@ -686,7 +686,7 @@ export const SubjectsPage: React.FC = () => {
 
                       setShowAssignModal(true);
                     }}
-                    className="inline-flex items-center space-x-1.5 px-3 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+                    className="inline-flex items-center space-x-1.5 px-3 py-2 bg-structure hover:bg-structure-strong text-structure-foreground rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
                   >
                     <UserCheck className="w-3.5 h-3.5" />
                     <span>Assign Students</span>
