@@ -14,7 +14,7 @@ export const RecentActivityTable: React.FC<RecentActivityTableProps> = ({ logs, 
       <h3 className="text-base font-bold text-foreground">Recent Activity</h3>
       <button
         onClick={() => onLogClick(logs[0]!)}
-        className="text-xs font-bold text-rose-600 hover:text-rose-700 flex items-center space-x-1 cursor-pointer"
+        className="text-xs font-bold text-primary hover:text-primary/80 flex items-center space-x-1 cursor-pointer"
       >
         <span>View Full Audit Console →</span>
         <ChevronRight className="w-3 h-3" />

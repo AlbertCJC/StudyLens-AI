@@ -88,7 +88,7 @@ const PageButton: React.FC<{ active: boolean; pageNum: number; onClick: () => vo
     type="button"
     onClick={onClick}
     className={`min-w-[28px] h-8 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-      active ? "bg-blue-600 text-white shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+      active ? "bg-structure-strong text-structure-foreground font-bold" : "text-muted-foreground hover:bg-muted hover:text-foreground"
     }`}
   >
     {pageNum}

@@ -26,7 +26,7 @@ export function AssignStudentsModal({
 
   return (
     <div
-      className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -59,7 +59,7 @@ export function AssignStudentsModal({
                   : new Set(allStudents.map((s) => s.id))
               )
             }
-            className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+            className="text-[11px] font-bold text-primary dark:text-indigo-300 hover:underline cursor-pointer"
           >
             {selectedStudentIds.size === allStudents.length ? "Clear all" : "Select all"}
           </button>
@@ -88,7 +88,7 @@ export function AssignStudentsModal({
                         return next;
                       });
                     }}
-                    className="accent-blue-600 w-4 h-4 cursor-pointer shrink-0"
+                    className="accent-indigo-600 w-4 h-4 cursor-pointer shrink-0"
                   />
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-foreground truncate">{s.name}</p>
@@ -114,7 +114,7 @@ export function AssignStudentsModal({
           <button
             onClick={onConfirm}
             disabled={assigningStudents}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
+            className="px-4 py-2 bg-cta-gradient hover:brightness-110 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
           >
             {assigningStudents ? "Saving..." : "Save Enrollment"}
           </button>

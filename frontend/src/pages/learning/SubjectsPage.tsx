@@ -5,6 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { authFetch } from "../../utils/authFetch";
 import { Pagination, slicePage } from "../../components/Pagination";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import type { Subject, User } from "../../types";
 
 interface EnrolledStudent {
@@ -271,13 +272,17 @@ export const SubjectsPage: React.FC = () => {
       }
     } catch (err) {
       console.error("Save subject error:", err);
+      showToast("Couldn't reach the server. Try again.", "error");
     } finally {
       setSaving(false);
     }
   };
 
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   const handleDeleteSubject = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this course subject?")) return;
+    setDeleting(true);
     try {
       const res = await authFetch(`/api/subjects/${id}`, { method: "DELETE" });
       if (res.ok) {
@@ -289,6 +294,10 @@ export const SubjectsPage: React.FC = () => {
       }
     } catch (err) {
       console.error("Delete subject error:", err);
+      showToast("Couldn't reach the server. Try again.", "error");
+    } finally {
+      setDeleting(false);
+      setPendingDeleteId(null);
     }
   };
 
@@ -360,7 +369,7 @@ export const SubjectsPage: React.FC = () => {
         {isAdmin && (
           <button
             onClick={openCreateModal}
-            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 shrink-0 cursor-pointer"
+            className="px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-2 shrink-0 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Add New Subject</span>
@@ -378,7 +387,7 @@ export const SubjectsPage: React.FC = () => {
               value={subjectQuery}
               onChange={(e) => setSubjectQuery(e.target.value)}
               placeholder="Search name, code, or keyword..."
-              className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+              className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-medium"
             />
           </div>
           <select
@@ -428,16 +437,16 @@ export const SubjectsPage: React.FC = () => {
           <div
             key={sub.id}
             onClick={() => navigate(`/subjects/${sub.id}`)}
-            className="bg-card p-6 rounded-2xl border border-border shadow-xs hover:border-blue-500 hover:shadow-md transition-all flex flex-col justify-between space-y-4 cursor-pointer group"
+            className="bg-card p-6 rounded-2xl border border-border shadow-xs hover:border-primary hover:shadow-md hover:-translate-y-0.5 transition-all flex flex-col justify-between space-y-4 cursor-pointer group"
           >
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="px-3 py-1 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-xs font-bold rounded-lg">
+                <span className="px-3 py-1 bg-structure text-primary dark:text-indigo-300 font-mono text-xs font-bold rounded-lg">
                   {sub.code}
                 </span>
               </div>
 
-              <h3 className="text-base font-bold text-foreground group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+              <h3 className="text-base font-bold text-foreground group-hover:text-primary dark:group-hover:text-indigo-300 transition-colors">
                 {sub.name}
               </h3>
               <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">{sub.description}</p>
@@ -454,7 +463,7 @@ export const SubjectsPage: React.FC = () => {
                   <BookOpen className="w-3.5 h-3.5 text-muted-foreground" />
                   <span>{sub.materialCount} Materials</span>
                 </span>
-                <span className="inline-flex items-center space-x-1 text-blue-600 dark:text-blue-400 font-semibold">
+                <span className="inline-flex items-center space-x-1 text-primary dark:text-indigo-300 font-semibold">
                   <span>Open Workspace</span>
                   <span className="group-hover:translate-x-0.5 transition-transform">→</span>
                 </span>
@@ -484,7 +493,7 @@ export const SubjectsPage: React.FC = () => {
                           e.stopPropagation();
                           openEditModal(sub);
                         }}
-                        className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
+                        className="p-2 text-primary dark:text-indigo-300 hover:bg-structure-strong rounded-lg transition-all cursor-pointer"
                         title="Edit Subject"
                       >
                         <Pencil className="w-4 h-4" />
@@ -492,10 +501,11 @@ export const SubjectsPage: React.FC = () => {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDeleteSubject(sub.id);
+                          setPendingDeleteId(sub.id);
                         }}
                         className="p-2 text-rose-600 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
-                        title="Delete Subject"
+                        title="Delete subject"
+                        aria-label="Delete subject"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -519,7 +529,7 @@ export const SubjectsPage: React.FC = () => {
       {/* Create / Edit Subject Modal (Admin only) */}
       {modalOpen && isAdmin && (
         <div
-          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          role="dialog" aria-modal="true" className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeModal();
           }}
@@ -544,7 +554,7 @@ export const SubjectsPage: React.FC = () => {
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
                   placeholder="e.g., CS 301 or DB 204"
-                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase font-mono font-bold"
+                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring uppercase font-mono font-bold"
                   required
                 />
               </div>
@@ -556,7 +566,7 @@ export const SubjectsPage: React.FC = () => {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g., Data Structures & Algorithms"
-                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
+                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring font-semibold"
                   required
                 />
               </div>
@@ -566,7 +576,7 @@ export const SubjectsPage: React.FC = () => {
                 <select
                   value={teacherId}
                   onChange={(e) => setTeacherId(e.target.value)}
-                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring"
                   required
                 >
                   <option value="" disabled>Select a teacher to manage this subject</option>
@@ -586,7 +596,7 @@ export const SubjectsPage: React.FC = () => {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Brief description of learning objectives..."
-                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring"
                 ></textarea>
               </div>
 
@@ -596,7 +606,7 @@ export const SubjectsPage: React.FC = () => {
                   <select
                     value={semester}
                     onChange={(e) => setSemester(e.target.value)}
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     {DEFAULT_SEMESTERS.map((s) => (
                       <option key={s} value={s}>{s}</option>
@@ -610,7 +620,7 @@ export const SubjectsPage: React.FC = () => {
                     value={schoolYear}
                     onChange={(e) => setSchoolYear(e.target.value)}
                     placeholder="e.g., 2026-2027"
-                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                 </div>
               </div>
@@ -623,7 +633,7 @@ export const SubjectsPage: React.FC = () => {
                   onChange={(e) => setCourse(e.target.value)}
                   placeholder="e.g., BSIT, BSCS, General Education"
                   list="subject-course-options"
-                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-border bg-muted/40 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-ring"
                 />
                 <datalist id="subject-course-options">
                   {DEFAULT_COURSES.map((c) => (
@@ -643,7 +653,7 @@ export const SubjectsPage: React.FC = () => {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
+                  className="px-4 py-2 bg-cta-gradient hover:brightness-110 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
                 >
                   {saving ? "Saving..." : modalMode === "edit" ? "Save Changes" : "Create Subject"}
                 </button>
@@ -656,7 +666,7 @@ export const SubjectsPage: React.FC = () => {
       {/* People Roster Modal */}
       {rosterSubject && (
         <div
-          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          role="dialog" aria-modal="true" className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget) setRosterSubject(null);
           }}
@@ -676,7 +686,7 @@ export const SubjectsPage: React.FC = () => {
 
                       setShowAssignModal(true);
                     }}
-                    className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+                    className="inline-flex items-center space-x-1.5 px-3 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
                   >
                     <UserCheck className="w-3.5 h-3.5" />
                     <span>Assign Students</span>
@@ -692,9 +702,9 @@ export const SubjectsPage: React.FC = () => {
             </div>
 
             {/* Assigned Teacher */}
-            <div className="p-3 rounded-xl border border-blue-500/20 bg-blue-500/5 flex items-center justify-between">
+            <div className="p-3 rounded-xl border border-structure-strong bg-structure flex items-center justify-between">
               <div className="flex items-center space-x-3 min-w-0">
-                <div className="w-8 h-8 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 rounded-full bg-structure-strong text-primary dark:text-indigo-300 flex items-center justify-center shrink-0">
                   <ShieldCheck className="w-4 h-4" />
                 </div>
                 <div className="min-w-0">
@@ -715,7 +725,7 @@ export const SubjectsPage: React.FC = () => {
                 value={rosterQuery}
                 onChange={(e) => setRosterQuery(e.target.value)}
                 placeholder="Search enrolled students..."
-                className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-medium"
               />
             </div>
 
@@ -768,7 +778,7 @@ export const SubjectsPage: React.FC = () => {
       {/* Assign Students Modal (admin only) */}
       {showAssignModal && rosterSubject && (
         <div
-          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          role="dialog" aria-modal="true" className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget) setShowAssignModal(false);
           }}
@@ -801,7 +811,7 @@ export const SubjectsPage: React.FC = () => {
                       : new Set(allStudents.map((s) => s.id))
                   )
                 }
-                className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                className="text-[11px] font-bold text-primary dark:text-indigo-300 hover:underline cursor-pointer"
               >
                 {selectedStudentIds.size === allStudents.length ? "Clear all" : "Select all"}
               </button>
@@ -815,7 +825,7 @@ export const SubjectsPage: React.FC = () => {
                   value={assignQuery}
                   onChange={(e) => setAssignQuery(e.target.value)}
                   placeholder="Search students by name, email, or ID..."
-                  className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                  className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border rounded-xl text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-medium"
                 />
               </div>
 
@@ -827,7 +837,7 @@ export const SubjectsPage: React.FC = () => {
                     onClick={() => setAssignStatusFilter(status)}
                     className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors cursor-pointer ${
                       assignStatusFilter === status
-                        ? "bg-blue-600 text-white"
+                        ? "bg-structure-strong text-structure-foreground"
                         : "bg-muted/50 text-muted-foreground hover:bg-muted"
                     }`}
                   >
@@ -853,7 +863,7 @@ export const SubjectsPage: React.FC = () => {
                         type="checkbox"
                         checked={selectedStudentIds.has(s.id)}
                         onChange={() => toggleAssignStudent(s.id)}
-                        className="accent-blue-600 w-4 h-4 cursor-pointer shrink-0"
+                        className="accent-indigo-600 w-4 h-4 cursor-pointer shrink-0"
                       />
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-foreground truncate">{s.name}</p>
@@ -892,7 +902,7 @@ export const SubjectsPage: React.FC = () => {
               <button
                 onClick={handleSaveAssignment}
                 disabled={assigningStudents}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
+                className="px-4 py-2 bg-cta-gradient hover:brightness-110 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs cursor-pointer"
               >
                 {assigningStudents ? "Saving..." : "Save Enrollment"}
               </button>
@@ -900,6 +910,16 @@ export const SubjectsPage: React.FC = () => {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        title="Delete subject?"
+        message="This removes the subject and its enrollments. This can't be undone."
+        confirmLabel="Delete subject"
+        destructive
+        busy={deleting}
+        onConfirm={() => pendingDeleteId && handleDeleteSubject(pendingDeleteId)}
+        onCancel={() => setPendingDeleteId(null)}
+      />
     </div>
   );
 };

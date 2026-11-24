@@ -217,7 +217,7 @@ export const MainAppContent: React.FC = () => {
       </Routes>
 
       {timeoutWarn && (
-        <div className="fixed inset-0 z-[100] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 cursor-pointer">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[100] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 cursor-pointer">
           <div
             className="bg-card border border-border p-6 rounded-2xl max-w-sm w-full shadow-2xl space-y-4 text-center"
             onClick={(e) => e.stopPropagation()}
@@ -233,7 +233,7 @@ export const MainAppContent: React.FC = () => {
             <div className="flex items-center gap-2 pt-1">
               <button
                 onClick={() => resetIdle()}
-                className="flex-1 px-4 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="flex-1 px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 Stay Signed In
               </button>

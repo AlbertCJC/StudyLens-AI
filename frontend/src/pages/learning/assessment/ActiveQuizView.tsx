@@ -54,7 +54,7 @@ export function ActiveQuizView({
       <div className="bg-card border-b border-border p-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center space-x-2">
-            <span className="px-2.5 py-0.5 bg-blue-600 text-white rounded-md text-[10px] font-bold uppercase tracking-wider">
+            <span className="px-2.5 py-0.5 bg-structure text-structure-foreground rounded-md text-[10px] font-bold uppercase tracking-wider">
               {activeQuiz.subjectName}
             </span>
           </div>
@@ -95,7 +95,7 @@ export function ActiveQuizView({
 
             {/* Question Options */}
             {Array.isArray(activeQuiz.questions[currentQIndex].correctAnswer) && (
-              <p className="text-[11px] font-bold text-purple-600 dark:text-purple-400 flex items-center space-x-1.5">
+              <p className="text-[11px] font-bold text-primary dark:text-indigo-300 flex items-center space-x-1.5">
                 <CheckSquare className="w-3.5 h-3.5" />
                 <span>Select all correct answers that apply.</span>
               </p>
@@ -210,7 +210,7 @@ export function ActiveQuizView({
           {currentQIndex < activeQuiz.questions.length - 1 ? (
             <button
               onClick={onNext}
-              className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+              className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
             >
               Next Question →
             </button>

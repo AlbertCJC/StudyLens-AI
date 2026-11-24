@@ -38,7 +38,7 @@ export const SystemSettings: React.FC<SystemSettingsProps> = ({
     <div className="flex items-center justify-between border-b border-border pb-3">
       <div>
         <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
-          <SettingsIcon className="w-5 h-5 text-rose-600" /> System Settings & Governance
+          <SettingsIcon className="w-5 h-5 text-primary" /> System Settings & Governance
         </h3>
       </div>
 
@@ -66,7 +66,7 @@ export const SystemSettings: React.FC<SystemSettingsProps> = ({
 
       <div className="p-4 bg-muted/20 border border-border rounded-2xl space-y-4">
         <h4 className="font-bold text-foreground text-sm flex items-center space-x-2">
-          <Lock className="w-4 h-4 text-rose-600" />
+          <Lock className="w-4 h-4 text-primary" />
           <span>Security & Authentication</span>
         </h4>
 
@@ -80,7 +80,7 @@ export const SystemSettings: React.FC<SystemSettingsProps> = ({
               type="checkbox"
               checked={systemSettings.require2FA}
               onChange={(e) => setSystemSettings({ ...systemSettings, require2FA: e.target.checked })}
-              className="w-5 h-5 accent-rose-600 cursor-pointer"
+              className="w-5 h-5 accent-indigo-600 cursor-pointer"
             />
           </div>
 
@@ -101,7 +101,7 @@ export const SystemSettings: React.FC<SystemSettingsProps> = ({
 
       <div className="p-4 bg-muted/20 border border-border rounded-2xl space-y-4">
         <h4 className="font-bold text-foreground text-sm flex items-center space-x-2">
-          <Wrench className="w-4 h-4 text-rose-600" />
+          <Wrench className="w-4 h-4 text-primary" />
           <span>Maintenance & Data Retention</span>
         </h4>
 
@@ -115,7 +115,7 @@ export const SystemSettings: React.FC<SystemSettingsProps> = ({
               type="checkbox"
               checked={systemSettings.maintenanceMode}
               onChange={(e) => setSystemSettings({ ...systemSettings, maintenanceMode: e.target.checked })}
-              className="w-5 h-5 accent-rose-600 cursor-pointer"
+              className="w-5 h-5 accent-indigo-600 cursor-pointer"
             />
           </div>
 
@@ -128,7 +128,7 @@ export const SystemSettings: React.FC<SystemSettingsProps> = ({
               type="checkbox"
               checked={systemSettings.autoAuditArchiving}
               onChange={(e) => setSystemSettings({ ...systemSettings, autoAuditArchiving: e.target.checked })}
-              className="w-5 h-5 accent-rose-600 cursor-pointer"
+              className="w-5 h-5 accent-indigo-600 cursor-pointer"
             />
           </div>
         </div>
@@ -145,7 +145,7 @@ export const SystemSettings: React.FC<SystemSettingsProps> = ({
         <button
           type="submit"
           disabled={savingSettings}
-          className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-md cursor-pointer transition-all flex items-center space-x-2 disabled:opacity-50"
+          className="px-5 py-2.5 bg-cta-gradient hover:brightness-110 text-white text-xs font-bold rounded-xl shadow-md cursor-pointer transition-all flex items-center space-x-2 disabled:opacity-50"
         >
           <Check className="w-4 h-4" />
           <span>{savingSettings ? "Saving..." : "Save Settings"}</span>

@@ -49,7 +49,7 @@ const passwordInput = ({
         value={value}
         onChange={onChange}
         placeholder={placeholder}
-        className="w-full pr-10 p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
+        className="w-full pr-10 p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-medium"
       />
       <button
         type="button"
@@ -89,7 +89,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -114,7 +114,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
               value={newUserName}
               onChange={(e) => setNewUserName(e.target.value)}
               placeholder="e.g. Dr. Jane Doe"
-              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
+              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-medium"
             />
           </div>
 
@@ -126,7 +126,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
               value={newUserEmail}
               onChange={(e) => setNewUserEmail(e.target.value)}
               placeholder="j.doe@studylens.edu"
-              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
+              className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-medium"
             />
           </div>
 
@@ -151,7 +151,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
                 value={newUserDept}
                 onChange={(e) => setNewUserDept(e.target.value)}
                 placeholder="College of Computer Studies"
-                className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
+                className="w-full p-2.5 bg-muted/30 border border-border rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-medium"
               />
             </div>
           </div>
@@ -184,7 +184,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-md cursor-pointer"
+              className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white font-bold rounded-xl shadow-md cursor-pointer"
             >
               Create Account
             </button>

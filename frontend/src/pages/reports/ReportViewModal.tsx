@@ -13,7 +13,7 @@ export function ReportViewModal({ report, onClose, onExport }: ReportViewModalPr
   const rows = summaryRows(report);
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="bg-card border border-border p-6 rounded-2xl max-w-2xl w-full shadow-xl space-y-4 animate-in fade-in zoom-in-95">
@@ -54,7 +54,7 @@ export function ReportViewModal({ report, onClose, onExport }: ReportViewModalPr
           >
             <Download className="w-3.5 h-3.5" /> CSV
           </button>
-          <button onClick={onClose} className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer">
+          <button onClick={onClose} className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all cursor-pointer">
             Close
           </button>
         </div>

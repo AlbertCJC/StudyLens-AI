@@ -28,11 +28,11 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
   const accentClasses = destructive
     ? "bg-rose-600 hover:bg-rose-700 text-white"
-    : "bg-primary hover:bg-primary/90 text-primary-foreground";
+    : "bg-cta-gradient hover:brightness-110 text-white";
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget && !busy) onCancel();
       }}

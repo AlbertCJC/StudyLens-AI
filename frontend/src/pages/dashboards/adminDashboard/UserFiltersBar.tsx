@@ -26,7 +26,7 @@ export const UserFiltersBar: React.FC<UserFiltersBarProps> = ({
         value={searchUser}
         onChange={(e) => setSearchUser(e.target.value)}
         placeholder="Search name, email, or department..."
-        className="w-full pl-9 pr-3 py-1.5 bg-card border border-border rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
+        className="w-full pl-9 pr-3 py-1.5 bg-card border border-border rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-ring font-medium"
       />
     </div>
 

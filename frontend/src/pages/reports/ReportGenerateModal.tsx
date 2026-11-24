@@ -39,7 +39,7 @@ export function ReportGenerateModal({
 }: ReportGenerateModalProps) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <form onSubmit={onSubmit} className="bg-card border border-border p-6 rounded-2xl max-w-lg w-full shadow-xl space-y-4 animate-in fade-in zoom-in-95">
@@ -128,7 +128,7 @@ export function ReportGenerateModal({
           <button
             type="submit"
             disabled={generating}
-            className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
             <span>{generating ? "Generating..." : "Generate Report"}</span>

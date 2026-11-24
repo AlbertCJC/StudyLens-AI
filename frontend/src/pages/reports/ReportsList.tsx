@@ -57,7 +57,7 @@ export function ReportsList({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-wrap">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer">
+              <button className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer">
                 <FileText className="w-3.5 h-3.5" />
                 <span>Generate Report</span>
                 <ChevronDown className="w-3.5 h-3.5" />

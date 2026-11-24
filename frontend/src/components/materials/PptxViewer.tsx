@@ -153,7 +153,7 @@ export function PptxViewer({ material, onError }: PptxViewerProps) {
       </div>
       {loading && (
         <div className="absolute inset-0 flex flex-col items-center justify-center space-y-2 rounded-xl bg-slate-200/90 dark:bg-slate-900/90 text-muted-foreground text-xs">
-          <div className="w-6 h-6 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <div className="w-6 h-6 border-3 border-primary border-t-transparent rounded-full animate-spin" />
           <span>Rendering presentation…</span>
         </div>
       )}

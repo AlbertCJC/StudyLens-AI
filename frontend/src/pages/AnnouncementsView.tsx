@@ -119,7 +119,7 @@ export const AnnouncementsView: React.FC = () => {
                 setEditingAnn(null);
                 setShowPostModal(true);
               }}
-              className="px-4 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
+              className="px-4 py-1.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Post Announcement</span>
@@ -148,7 +148,7 @@ export const AnnouncementsView: React.FC = () => {
                 }}
                 className={`p-5 rounded-2xl border transition-all space-y-3 cursor-pointer group ${
                   isTargeted
-                    ? "bg-blue-500/10 border-blue-500 ring-2 ring-blue-500/30 shadow-md"
+                    ? "bg-structure border-primary ring-2 ring-ring/30 shadow-md"
                     : "bg-card border-border hover:border-primary/50 opacity-90 hover:opacity-100"
                 }`}
               >
@@ -160,13 +160,13 @@ export const AnnouncementsView: React.FC = () => {
                           ? "bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
                           : item.priority === "medium"
                           ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
-                          : "bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+                          : "bg-structure text-primary dark:text-indigo-300 border border-structure-strong"
                       }`}
                     >
                       {item.tag || item.priority.toUpperCase()}
                     </span>
                     {item.subjectName && (
-                      <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                      <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300 border border-structure-strong">
                         {item.subjectName}
                       </span>
                     )}
@@ -226,7 +226,7 @@ export const AnnouncementsView: React.FC = () => {
       {/* ANNOUNCEMENT DETAIL VIEW MODAL */}
       {detailItem && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
           onClick={handleCloseDetail}
         >
           <div
@@ -241,7 +241,7 @@ export const AnnouncementsView: React.FC = () => {
                     {detailItem.tag || detailItem.priority.toUpperCase()}
                   </span>
                   {detailItem.subjectName && (
-                    <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                    <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300 border border-structure-strong">
                       {detailItem.subjectName}
                     </span>
                   )}
@@ -284,7 +284,7 @@ export const AnnouncementsView: React.FC = () => {
             <div className="flex items-center justify-between pt-2 border-t border-border">
               <button
                 onClick={handleCloseDetail}
-                className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 Close Notice
               </button>

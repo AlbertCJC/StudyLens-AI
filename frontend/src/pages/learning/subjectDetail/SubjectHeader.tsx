@@ -22,7 +22,7 @@ export function SubjectHeader({ subject, isStaff, navigate }: SubjectHeaderProps
         <div className="min-w-0 space-y-1">
           <div className="flex items-center space-x-2 flex-wrap">
             <h1 className="text-base font-bold text-foreground leading-tight truncate">{subject.name}</h1>
-            <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold rounded-md">
+            <span className="px-2 py-0.5 bg-structure text-primary dark:text-indigo-300 font-mono text-[10px] font-bold rounded-md">
               {subject.code}
             </span>
             {subject.semester && (

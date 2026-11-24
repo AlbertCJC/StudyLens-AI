@@ -139,7 +139,7 @@ export function QuizCatalogCard({
                   e.stopPropagation();
                   onOpenEdit(quiz);
                 }}
-                className="p-1.5 text-blue-600 hover:bg-blue-500/10 rounded-lg cursor-pointer"
+                className="p-1.5 text-primary hover:bg-structure-strong rounded-lg cursor-pointer"
                 title="Edit Quiz details & questions"
               >
                 <Pencil className="w-3.5 h-3.5" />
@@ -196,7 +196,7 @@ export function QuizCatalogCard({
                 e.stopPropagation();
                 onStartQuiz(quiz, false);
               }}
-              className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 ml-auto cursor-pointer"
+              className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 ml-auto cursor-pointer"
             >
               <span>{(quiz.attemptsUsed ?? 0) > 0 ? "Retake Quiz" : "Take Quiz"}</span>
               <ArrowRight className="w-3.5 h-3.5" />

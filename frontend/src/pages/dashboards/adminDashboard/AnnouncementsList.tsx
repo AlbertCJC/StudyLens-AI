@@ -30,17 +30,17 @@ export const AnnouncementsList: React.FC<AnnouncementsListProps> = ({
         announcements.map((ann) => (
           <div
             key={ann.id}
-            className="p-5 rounded-2xl border border-border bg-card hover:bg-muted/10 space-y-3 transition-all hover:border-rose-500/30 shadow-2xs"
+            className="p-5 rounded-2xl border border-border bg-card hover:bg-muted/10 space-y-3 transition-all hover:border-primary/50 shadow-2xs"
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-border/50">
               <div className="flex items-center flex-wrap gap-2">
                 <span
                   className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                     ann.priority === "high"
-                      ? "bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
+                      ? "bg-structure text-primary dark:text-indigo-300 border border-structure-strong"
                       : ann.priority === "medium"
                       ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
-                      : "bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+                      : "bg-structure text-primary dark:text-indigo-300 border border-structure-strong"
                   }`}
                 >
                   {ann.priority || "medium"} Priority
@@ -49,12 +49,12 @@ export const AnnouncementsList: React.FC<AnnouncementsListProps> = ({
                   Audience: {ann.targetAudience}
                 </span>
                 {ann.tag && (
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-structure text-primary dark:text-indigo-300 border border-structure-strong">
                     {ann.tag}
                   </span>
                 )}
                 {ann.subjectName && (
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-structure text-primary dark:text-indigo-300 border border-structure-strong">
                     {ann.subjectName}
                   </span>
                 )}
@@ -72,7 +72,7 @@ export const AnnouncementsList: React.FC<AnnouncementsListProps> = ({
                   </button>
                   <button
                     onClick={() => onDeleteAnnouncement(ann.id)}
-                    className="p-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                    className="p-1.5 text-primary hover:text-primary/80 hover:bg-structure-strong rounded-lg transition-colors cursor-pointer"
                     title="Delete Bulletin"
                   >
                     <Trash2 className="w-3.5 h-3.5" />

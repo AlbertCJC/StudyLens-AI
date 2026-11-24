@@ -9,7 +9,7 @@ interface MaterialDeleteConfirmProps {
 export function MaterialDeleteConfirm({ material, onCancel, onConfirm }: MaterialDeleteConfirmProps) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onCancel();
       }}

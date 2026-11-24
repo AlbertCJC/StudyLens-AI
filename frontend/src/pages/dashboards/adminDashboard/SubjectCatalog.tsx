@@ -26,7 +26,7 @@ export const SubjectCatalog: React.FC<SubjectCatalogProps> = ({
 
       <button
         onClick={onAddSubject}
-        className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer self-start sm:self-auto"
+        className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center space-x-1.5 cursor-pointer self-start sm:self-auto"
       >
         <Plus className="w-4 h-4" />
         <span>Add Subject</span>
@@ -57,7 +57,7 @@ export const SubjectCatalog: React.FC<SubjectCatalogProps> = ({
             subjects.map((sub, index) => (
               <tr key={`${sub.id}-${index}`} className="hover:bg-muted/20">
                 <td className="p-3">
-                  <span className="px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400 font-mono text-[11px] font-bold">
+                  <span className="px-2 py-0.5 rounded-md bg-structure text-primary dark:text-indigo-300 font-mono text-[11px] font-bold">
                     {sub.code}
                   </span>
                 </td>
@@ -76,7 +76,7 @@ export const SubjectCatalog: React.FC<SubjectCatalogProps> = ({
                         className="w-6 h-6 rounded-full object-cover border border-border shrink-0"
                       />
                     ) : (
-                      <span className="w-6 h-6 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center justify-center text-[10px] font-bold shrink-0">
+                      <span className="w-6 h-6 rounded-full bg-structure text-primary dark:text-indigo-300 flex items-center justify-center text-[10px] font-bold shrink-0">
                         {sub.teacherName.charAt(0).toUpperCase()}
                       </span>
                     )}
@@ -99,14 +99,14 @@ export const SubjectCatalog: React.FC<SubjectCatalogProps> = ({
                   </button>
                   <button
                     onClick={() => onOpenRoster(sub)}
-                    className="p-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 rounded-lg transition-colors cursor-pointer"
+                    className="p-1.5 bg-structure hover:bg-structure-strong text-primary rounded-lg transition-colors cursor-pointer"
                     title="Manage Class Roster"
                   >
                     <Users className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => onDeleteSubject(sub)}
-                    className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 rounded-lg transition-colors cursor-pointer"
+                    className="p-1.5 bg-structure hover:bg-structure-strong text-primary rounded-lg transition-colors cursor-pointer"
                     title="Delete Subject"
                   >
                     <Trash2 className="w-3.5 h-3.5" />

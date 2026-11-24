@@ -32,7 +32,7 @@ export const AdminSubjectDetailCard: React.FC<AdminSubjectDetailCardProps> = ({
               sublabel={s.teacherName || [s.semester, s.course].filter(Boolean).join(" • ")}
               trailing={
                 <span className="flex items-center gap-2 shrink-0">
-                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300">
                     {s.studentCount ?? 0} student{(s.studentCount ?? 0) === 1 ? "" : "s"}
                   </span>
                   <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-muted text-muted-foreground">

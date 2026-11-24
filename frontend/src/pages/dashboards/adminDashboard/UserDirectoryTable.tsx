@@ -102,10 +102,10 @@ export const UserDirectoryTable: React.FC<UserDirectoryTableProps> = ({
                   <span
                     className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold capitalize ${
                       u.role === "admin"
-                        ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                        ? "bg-structure text-primary dark:text-indigo-300"
                         : u.role === "teacher"
                         ? "bg-purple-500/10 text-purple-600 dark:text-purple-400"
-                        : "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                        : "bg-structure text-primary dark:text-indigo-300"
                     }`}
                   >
                     {u.role}
@@ -117,7 +117,7 @@ export const UserDirectoryTable: React.FC<UserDirectoryTableProps> = ({
                     onClick={() => handleToggleUserStatus(u)}
                     className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold cursor-pointer transition-colors ${
                       u.status === "suspended"
-                        ? "bg-rose-500/10 text-rose-600 border border-rose-500/30"
+                        ? "bg-structure text-primary border border-structure-strong"
                         : "bg-emerald-500/10 text-emerald-600 border border-emerald-500/30"
                     }`}
                     title="Click to toggle account active/suspended state"
@@ -145,7 +145,7 @@ export const UserDirectoryTable: React.FC<UserDirectoryTableProps> = ({
                   </button>
                   <button
                     onClick={() => handleDeleteUser(u.id)}
-                    className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 rounded-lg transition-colors cursor-pointer"
+                    className="p-1.5 bg-structure hover:bg-structure-strong text-primary rounded-lg transition-colors cursor-pointer"
                     title="Delete User Account"
                   >
                     <Trash2 className="w-3.5 h-3.5" />

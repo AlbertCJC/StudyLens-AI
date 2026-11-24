@@ -15,7 +15,7 @@ export const LogInspectionModal: React.FC<LogInspectionModalProps> = ({ open, on
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -23,7 +23,7 @@ export const LogInspectionModal: React.FC<LogInspectionModalProps> = ({ open, on
       <div className="bg-card border border-border rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-border">
           <div className="flex items-center space-x-2">
-            <Activity className="w-5 h-5 text-rose-600" />
+            <Activity className="w-5 h-5 text-primary" />
             <h3 className="text-base font-bold text-foreground">Audit Event Inspector</h3>
           </div>
           <button
@@ -52,7 +52,7 @@ export const LogInspectionModal: React.FC<LogInspectionModalProps> = ({ open, on
               <span className="text-muted-foreground block text-[10px] uppercase font-bold">Triggered By</span>
               <p className="font-bold text-foreground text-xs mt-0.5">{log.userName}</p>
               <p className="text-[10px] text-muted-foreground font-mono">ID: {log.userId}</p>
-              <span className="inline-block px-2 py-0.5 mt-1 rounded bg-rose-500/10 text-rose-600 text-[10px] font-bold uppercase">
+              <span className="inline-block px-2 py-0.5 mt-1 rounded bg-structure text-primary text-[10px] font-bold uppercase">
                 Role: {log.userRole}
               </span>
             </div>
@@ -93,7 +93,7 @@ export const LogInspectionModal: React.FC<LogInspectionModalProps> = ({ open, on
           <button
             onClick={() => {
               navigator.clipboard.writeText(JSON.stringify(log, null, 2));
-              showToast("Audit log JSON payload copied to clipboard!");
+              showToast("Log JSON copied");
             }}
             className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground text-xs font-bold rounded-xl cursor-pointer"
           >
@@ -101,7 +101,7 @@ export const LogInspectionModal: React.FC<LogInspectionModalProps> = ({ open, on
           </button>
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
+            className="px-4 py-2 bg-structure hover:bg-structure-strong text-structure-foreground text-xs font-bold rounded-xl cursor-pointer"
           >
             Close
           </button>

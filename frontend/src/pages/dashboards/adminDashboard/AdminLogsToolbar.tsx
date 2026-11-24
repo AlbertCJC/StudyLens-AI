@@ -23,7 +23,7 @@ export const AdminLogsToolbar: React.FC<AdminLogsToolbarProps> = ({
       <div>
         <div className="flex items-center space-x-2">
           <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
-            <Activity className="w-5 h-5 text-rose-600" /> Activity Logs
+            <Activity className="w-5 h-5 text-primary" /> Activity Logs
           </h3>
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
@@ -37,7 +37,7 @@ export const AdminLogsToolbar: React.FC<AdminLogsToolbarProps> = ({
           disabled={loadingLogs}
           className="px-3 py-1.5 bg-muted hover:bg-muted/80 text-foreground rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center space-x-1.5"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${loadingLogs ? "animate-spin text-rose-600" : ""}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${loadingLogs ? "animate-spin text-primary" : ""}`} />
           <span>Refresh</span>
         </button>
 
@@ -52,7 +52,7 @@ export const AdminLogsToolbar: React.FC<AdminLogsToolbarProps> = ({
 
         <button
           onClick={onClear}
-          className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1.5"
+          className="px-3 py-1.5 bg-structure hover:bg-structure-strong text-primary rounded-xl text-xs font-bold cursor-pointer flex items-center space-x-1.5"
           title="Archive and clear the audit trail"
         >
           <Trash2 className="w-3.5 h-3.5" />

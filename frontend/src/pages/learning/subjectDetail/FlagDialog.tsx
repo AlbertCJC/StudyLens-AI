@@ -27,7 +27,7 @@ export function FlagDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 animate-in fade-in" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <form
         onSubmit={onSubmit}
         onClick={(e) => e.stopPropagation()}

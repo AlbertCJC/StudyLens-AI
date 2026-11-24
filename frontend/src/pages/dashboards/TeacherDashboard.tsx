@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { CountUp } from "../../components/ui/count-up";
 import { useNavigate } from "react-router-dom";
 import {
   Users, FolderKanban, BookCheck, Award, Plus, Download,
@@ -14,6 +15,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { AnnouncementComposer } from "../../components/AnnouncementComposer";
 import { CardDetailModal, DetailRow } from "../../components/CardDetailModal";
 import type { Subject, Quiz } from "../../types";
+import { chartTooltipProps, BRAND_BAR_FILL, ChartGradientDefs } from "../../utils/chartTheme";
 
 interface TeacherDashboardProps {
   onNavigate: (tab: string) => void;
@@ -147,16 +149,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
         <button
           type="button"
           onClick={() => setDetailCard("students")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-purple-500/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Active Students</p>
-            <p className="text-3xl font-extrabold text-foreground tracking-tight">{totalStudents}</p>
+            <p className="text-3xl font-extrabold text-foreground tracking-tight"><CountUp value={totalStudents} /></p>
             <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1">
               Enrolled across {subjects.length} subject{subjects.length === 1 ? "" : "s"}
             </p>
           </div>
-          <div className="p-3 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-2xl shrink-0 relative">
+          <div className="p-3 bg-structure text-primary dark:text-indigo-300 rounded-2xl shrink-0 relative">
             <Users className="w-6 h-6" />
             <ChevronRight className="w-3 h-3 absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
@@ -165,11 +167,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
         <button
           type="button"
           onClick={() => setDetailCard("courses")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-indigo-500/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-indigo-500/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Assigned Courses</p>
-            <p className="text-3xl font-extrabold text-foreground tracking-tight">{subjects.length}</p>
+            <p className="text-3xl font-extrabold text-foreground tracking-tight"><CountUp value={subjects.length} /></p>
           </div>
           <div className="p-3 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-2xl shrink-0 relative">
             <FolderKanban className="w-6 h-6" />
@@ -180,11 +182,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
         <button
           type="button"
           onClick={() => setDetailCard("assessments")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-emerald-500/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-emerald-500/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Assessments Created</p>
-            <p className="text-3xl font-extrabold text-foreground tracking-tight">{totalQuizzes}</p>
+            <p className="text-3xl font-extrabold text-foreground tracking-tight"><CountUp value={totalQuizzes} /></p>
             <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1">
               {publishedQuizzes} published to students
             </p>
@@ -198,11 +200,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
         <button
           type="button"
           onClick={() => setDetailCard("materials")}
-          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-amber-500/50 hover:shadow-xs transition-all group"
+          className="text-left bg-card p-5 rounded-2xl border border-border shadow-2xs flex items-start justify-between cursor-pointer hover:border-amber-500/50 hover:shadow-md hover:-translate-y-0.5 transition-all group"
         >
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Materials Uploaded</p>
-            <p className="text-3xl font-extrabold text-foreground tracking-tight">{totalMaterials}</p>
+            <p className="text-3xl font-extrabold text-foreground tracking-tight"><CountUp value={totalMaterials} /></p>
           </div>
           <div className="p-3 bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-2xl shrink-0 relative">
             <Award className="w-6 h-6" />
@@ -219,7 +221,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                  <BarChart2 className="w-5 h-5 text-purple-600 dark:text-purple-400" /> Class Size by Subject
+                  <BarChart2 className="w-5 h-5 text-primary dark:text-indigo-300" /> Class Size by Subject
                 </h3>
                 <p className="text-xs text-muted-foreground">Enrolled student count per subject</p>
               </div>
@@ -231,12 +233,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
               <div className="h-64 w-full pt-2">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={enrollmentData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
-                    <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} />
+                    <ChartGradientDefs />
+                    <XAxis dataKey="name" stroke="var(--muted-foreground)" fontSize={11} tickLine={false} />
+                    <YAxis stroke="var(--muted-foreground)" fontSize={12} tickLine={false} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", border: "1px solid #334155", color: "#f8fafc", fontSize: "12px" }}
+                      {...chartTooltipProps}
                     />
-                    <Bar dataKey="students" fill="#8b5cf6" name="Enrolled Students" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="students" fill={BRAND_BAR_FILL} name="Enrolled Students" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -252,7 +255,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
               </div>
               <button
                 onClick={() => onNavigate("subjects")}
-                className="px-3 py-1.5 bg-purple-500/10 text-purple-600 dark:text-purple-400 hover:bg-purple-500/20 rounded-lg text-xs font-semibold transition-all flex items-center space-x-1 cursor-pointer"
+                className="px-3 py-1.5 bg-structure text-primary dark:text-indigo-300 hover:bg-structure-strong rounded-lg text-xs font-semibold transition-all flex items-center space-x-1 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add / Manage Subject</span>
@@ -263,11 +266,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
               {subjects.map((sub) => (
                 <div
                   key={sub.id}
-                  className="p-4 rounded-xl border border-border bg-muted/30 space-y-3 cursor-pointer hover:border-purple-500/40 transition-colors"
+                  className="p-4 rounded-xl border border-border bg-muted/30 space-y-3 cursor-pointer hover:border-primary/50 transition-colors"
                   onClick={() => navigate(`/subjects/${sub.id}?tab=people`)}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="px-2.5 py-1 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-md font-mono text-xs font-bold">
+                    <span className="px-2.5 py-1 bg-structure text-primary dark:text-indigo-300 rounded-md font-mono text-xs font-bold">
                       {sub.code}
                     </span>
                     <span className="text-[11px] text-muted-foreground font-medium">
@@ -285,7 +288,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
                         e.stopPropagation();
                         onNavigate("materials");
                       }}
-                      className="text-purple-600 dark:text-purple-400 hover:underline font-semibold text-[11px] cursor-pointer"
+                      className="text-primary dark:text-indigo-300 hover:underline font-semibold text-[11px] cursor-pointer"
                     >
                       View Documents →
                     </button>
@@ -302,7 +305,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
 
               <button
                 onClick={() => onNavigate("announcements")}
-                className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:underline cursor-pointer"
+                className="text-xs font-bold text-primary dark:text-indigo-300 hover:underline cursor-pointer"
               >
                 View All →
               </button>
@@ -317,7 +320,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
                 announcements.slice(0, 3).map((ann) => (
                   <div
                     key={ann.id}
-                    className="p-4 rounded-xl border border-border bg-muted/20 space-y-2 hover:border-purple-500/30 transition-all"
+                    className="p-4 rounded-xl border border-border bg-muted/20 space-y-2 hover:border-primary/50 transition-all"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center space-x-2">
@@ -327,7 +330,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
                               ? "bg-rose-500/10 text-rose-600 border border-rose-500/20"
                               : ann.priority === "medium"
                               ? "bg-amber-500/10 text-amber-600 border border-amber-500/20"
-                              : "bg-blue-500/10 text-blue-600 border border-blue-500/20"
+                              : "bg-structure text-primary border border-structure-strong"
                           }`}
                         >
                           {ann.priority || "medium"}
@@ -358,7 +361,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
                     <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1">
                       <span>Author: {ann.authorName}</span>
                       {ann.subjectName && (
-                        <span className="text-purple-600 dark:text-purple-400 font-semibold">{ann.subjectName}</span>
+                        <span className="text-primary dark:text-indigo-300 font-semibold">{ann.subjectName}</span>
                       )}
                     </div>
                   </div>
@@ -377,14 +380,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
             </p>
             <button
               onClick={() => onNavigate("ai-assistant")}
-              className="w-full py-2.5 bg-[#5b51d8] hover:bg-[#4a43c4] text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center space-x-1"
+              className="w-full py-2.5 bg-cta-gradient hover:brightness-110 text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center space-x-1"
             >
               <MessageSquare className="w-4 h-4" />
               <span>Launch AI Study Assistant</span>
             </button>
             <button
               onClick={() => onNavigate("flashcards")}
-              className="w-full py-2.5 bg-[#5b51d8]/10 hover:bg-[#5b51d8]/20 text-[#5b51d8] dark:text-[#818cf8] font-bold text-xs rounded-xl transition-all flex items-center justify-center space-x-1"
+              className="w-full py-2.5 bg-structure hover:bg-structure-strong text-structure-foreground font-bold text-xs rounded-xl transition-all flex items-center justify-center space-x-1"
             >
               <Layers className="w-4 h-4" />
               <span>Open Flashcards Deck</span>
@@ -430,7 +433,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigate }
                 <DetailRow
                   label={`${s.code} — ${s.name}`}
                   trailing={
-                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300">
                       {s.studentCount || 0} enrolled
                     </span>
                   }

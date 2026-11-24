@@ -173,7 +173,7 @@ export function DashboardLayout({
 
       {/* Sidebar Navigation */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 h-full bg-card border-r border-border transform transition-[transform,width] duration-200 ease-in-out lg:translate-x-0 lg:static flex flex-col justify-between p-4 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 h-full bg-structure border-r border-structure-strong transform transition-[transform,width] duration-200 ease-in-out lg:translate-x-0 lg:static flex flex-col justify-between p-4 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         } ${sidebarCollapsed ? "lg:w-[76px]" : "lg:w-64"}`}
       >
@@ -195,6 +195,7 @@ export function DashboardLayout({
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label="Close sidebar"
                 className="lg:hidden"
                 onClick={() => setSidebarOpen(false)}
               >
@@ -228,25 +229,35 @@ export function DashboardLayout({
                       setSidebarOpen(false);
                     }}
                     title={sidebarCollapsed ? item.label : undefined}
-                    className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                    aria-current={isActive ? "page" : undefined}
+                    className={`group relative flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
                       isActive
-                        ? "bg-[#5b51d8] text-white font-bold shadow-xs"
-                        : "text-slate-600 dark:text-slate-300 hover:bg-muted hover:text-foreground"
+                        ? "text-structure-foreground font-bold"
+                        : "text-structure-foreground/80 hover:bg-structure-strong/50 hover:text-structure-foreground"
                     } ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}
                   >
-                    <div className="flex items-center gap-3">
-                      <Icon className={`h-4 w-4 shrink-0 ${isActive ? "text-white" : "text-slate-500 dark:text-slate-400"}`} />
+                    {isActive && (
+                      <motion.span
+                        layoutId="nav-active-pill"
+                        className="absolute inset-0 rounded-xl bg-structure-strong"
+                        transition={{ type: "spring", stiffness: 500, damping: 38 }}
+                      >
+                        <span className="absolute left-0 top-2 bottom-2 w-1 rounded-full bg-brand-gradient" />
+                      </motion.span>
+                    )}
+                    <div className="relative flex items-center gap-3">
+                      <Icon className={`h-4 w-4 shrink-0 ${isActive ? "text-primary dark:text-indigo-300" : "text-structure-foreground/70"}`} />
                       <span className={sidebarCollapsed ? "lg:hidden" : ""}>{item.label}</span>
                     </div>
-                    <div className={`flex items-center gap-1.5 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
+                    <div className={`relative flex items-center gap-1.5 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
                       {item.badge && (
                         <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded-md ${
-                          isActive ? "bg-white/20 text-white" : "bg-[#5b51d8]/15 text-[#5b51d8]"
+                          isActive ? "bg-cta-gradient text-white" : "bg-primary/15 text-primary"
                         }`}>
                           {item.badge}
                         </span>
                       )}
-                      <ChevronRight className={`h-3.5 w-3.5 ${isActive ? "text-white" : "opacity-40"}`} />
+                      <ChevronRight className={`h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 ${isActive ? "text-primary" : "opacity-40"}`} />
                     </div>
                   </Link>
                 );
@@ -257,22 +268,22 @@ export function DashboardLayout({
           <div className="pt-4 border-t border-border space-y-3">
             <div
               onClick={() => navigate("/profile")}
-              className={`flex items-center gap-3 px-2 cursor-pointer hover:bg-muted/50 p-1.5 rounded-xl transition-colors group ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}
+              className={`flex items-center gap-3 px-2 cursor-pointer hover:bg-structure-strong/60 p-1.5 rounded-xl transition-colors group ${sidebarCollapsed ? "lg:justify-center lg:px-0" : ""}`}
               title="Click to view full user profile"
             >
               {avatarUrl(currentUser?.avatar) ? (
                 <img
                   src={avatarUrl(currentUser?.avatar)!}
                   alt={userName}
-                  className="h-9 w-9 rounded-full object-cover ring-2 ring-[#5b51d8]/20 shrink-0 group-hover:scale-105 transition-transform"
+                  className="h-9 w-9 rounded-full object-cover ring-2 ring-primary/20 shrink-0 group-hover:scale-105 transition-transform"
                 />
               ) : (
-                <div className="h-9 w-9 rounded-full bg-[#5b51d8] text-white flex items-center justify-center font-bold text-xs ring-2 ring-[#5b51d8]/20 shrink-0 group-hover:scale-105 transition-transform">
+                <div className="h-9 w-9 rounded-full bg-cta-gradient text-white flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 shrink-0 group-hover:scale-105 transition-transform">
                   {userName ? userName.charAt(0).toUpperCase() : "J"}
                 </div>
               )}
               <div className={`flex-1 truncate ${sidebarCollapsed ? "lg:hidden" : ""}`}>
-                <p className="text-xs font-bold truncate text-foreground group-hover:text-[#5b51d8] transition-colors">{userName}</p>
+                <p className="text-xs font-bold truncate text-foreground group-hover:text-primary transition-colors">{userName}</p>
                 <p className="text-[11px] text-muted-foreground truncate">{userRole}</p>
               </div>
             </div>
@@ -296,6 +307,7 @@ export function DashboardLayout({
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Toggle sidebar"
               className="text-foreground"
               onClick={() => {
                 if (window.matchMedia("(min-width: 1024px)").matches) {
@@ -318,6 +330,8 @@ export function DashboardLayout({
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label="Notifications"
+                aria-expanded={notifOpen}
                 onClick={() => {
                   const opening = !notifOpen;
                   setNotifOpen(opening);
@@ -371,7 +385,7 @@ export function DashboardLayout({
                             </div>
 
                             {a.subjectName && (
-                              <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                              <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300">
                                 {a.subjectName}
                               </span>
                             )}
@@ -411,7 +425,7 @@ export function DashboardLayout({
             {/* User Profile Menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform cursor-pointer overflow-hidden">
+                <button className="h-8 w-8 rounded-full bg-cta-gradient text-white flex items-center justify-center font-bold text-xs ring-2 ring-primary/20 hover:scale-105 transition-transform cursor-pointer overflow-hidden">
                   {avatarUrl(currentUser?.avatar) ? (
                     <img src={avatarUrl(currentUser?.avatar)!} alt={userName} className="h-full w-full object-cover" />
                   ) : (
@@ -439,7 +453,7 @@ export function DashboardLayout({
             key={currentPath}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2 }}
+            transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
           >
             {children}
           </motion.div>
@@ -449,7 +463,7 @@ export function DashboardLayout({
       {/* View All Notifications modal */}
       {viewAllOpen && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          role="dialog" aria-modal="true" className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
           onClick={() => setViewAllOpen(false)}
         >
           <div
@@ -499,7 +513,7 @@ export function DashboardLayout({
                       </span>
                     </div>
                     {a.subjectName && (
-                      <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                      <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300">
                         {a.subjectName}
                       </span>
                     )}

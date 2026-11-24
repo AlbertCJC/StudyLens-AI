@@ -25,7 +25,7 @@ interface MaterialsTabProps {
 function fileTypeBadge(fileType: string) {
   const lower = (fileType || "").toLowerCase();
   if (lower === "pdf") {
-    return "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20";
+    return "bg-structure text-primary dark:text-indigo-300 border-structure-strong";
   }
   if (lower === "doc" || lower === "docx") {
     return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20";
@@ -34,7 +34,7 @@ function fileTypeBadge(fileType: string) {
     return "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20";
   }
   if (lower === "txt") {
-    return "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20";
+    return "bg-slate-500/10 text-muted-foreground border-slate-500/20";
   }
   return "bg-muted/40 text-muted-foreground dark:text-slate-400 border-border";
 }
@@ -61,13 +61,13 @@ export function MaterialsTab({
     <div className="bg-card rounded-2xl border border-border p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-bold text-foreground flex items-center space-x-2">
-          <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <FileText className="w-4 h-4 text-primary dark:text-indigo-300" />
           <span>Uploaded Materials</span>
         </h2>
         {canManage && (
           <button
             onClick={onUpload}
-            className="inline-flex items-center space-x-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+            className="inline-flex items-center space-x-1.5 px-3 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
           >
             <Upload className="w-3.5 h-3.5" />
             <span>Upload Material</span>
@@ -110,7 +110,7 @@ export function MaterialsTab({
                     title="View material"
                   >
                     <div className="flex items-center space-x-3 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                      <div className="w-9 h-9 rounded-lg bg-structure text-primary dark:text-indigo-300 flex items-center justify-center shrink-0">
                         <FileText className="w-4 h-4" />
                       </div>
                       <div className="min-w-0">
@@ -160,7 +160,7 @@ export function MaterialsTab({
                               e.stopPropagation();
                               onDownload(mat);
                             }}
-                            className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer"
+                            className="p-2 text-primary dark:text-indigo-300 hover:bg-structure-strong rounded-lg transition-all cursor-pointer"
                             title="Download Material"
                           >
                             <Download className="w-4 h-4" />
@@ -214,7 +214,7 @@ export function MaterialsTab({
                             e.stopPropagation();
                             onViewHistory(mat);
                           }}
-                          className="px-2.5 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                          className="px-2.5 py-1.5 bg-structure hover:bg-structure-strong text-primary dark:text-indigo-300 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
                           title="View flag history"
                         >
                           <History className="w-3 h-3" />

@@ -32,7 +32,7 @@ export const AdminUserDetailCard: React.FC<AdminUserDetailCardProps> = ({
             <DetailRow
               label={label}
               trailing={
-                <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300">
                   {count}
                 </span>
               }

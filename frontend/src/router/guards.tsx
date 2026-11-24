@@ -14,7 +14,7 @@ export const AccessDenied: React.FC = () => (
     <p className="text-muted-foreground mb-6">
       You do not have permission to view this page.
     </p>
-    <button className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90" onClick={() => window.dispatchEvent(new CustomEvent("auth:logout"))}>
+    <button className="px-4 py-2 bg-cta-gradient text-white rounded hover:brightness-110" onClick={() => window.dispatchEvent(new CustomEvent("auth:logout"))}>
       Sign Out
     </button>
   </div>

@@ -22,7 +22,7 @@ export function AssignSubjectModal({
 }: AssignSubjectModalProps) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -45,7 +45,7 @@ export function AssignSubjectModal({
           <select
             value={selectedSubjectId}
             onChange={(e) => onSubjectIdChange(e.target.value)}
-            className="w-full px-3 py-2 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-card text-foreground"
+            className="w-full px-3 py-2 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-ring bg-card text-foreground"
           >
             <option value="">No Subject Assigned</option>
             <option value="all">All Subjects</option>

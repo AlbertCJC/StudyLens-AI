@@ -36,7 +36,7 @@ export function QuizPreviewModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -44,7 +44,7 @@ export function QuizPreviewModal({
       <div className="bg-card border border-border rounded-2xl max-w-2xl w-full shadow-xl space-y-5 my-8 animate-in fade-in zoom-in-95 max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between pb-3 border-b border-border p-5 pb-3">
           <div className="flex items-center space-x-2">
-            <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl">
+            <div className="p-2 bg-structure text-primary dark:text-indigo-300 rounded-xl">
               <GraduationCap className="w-5 h-5" />
             </div>
             <div>
@@ -108,7 +108,7 @@ export function QuizPreviewModal({
                 <div key={q.id || idx} className="p-3.5 bg-muted/30 border border-border rounded-xl space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-bold text-foreground text-xs">Question {idx + 1}</span>
-                    <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold rounded uppercase tracking-wider">
+                    <span className="px-2 py-0.5 bg-structure text-primary dark:text-indigo-300 font-mono text-[10px] font-bold rounded uppercase tracking-wider">
                       {q.type === "multiple_choice"
                         ? Array.isArray(q.correctAnswer)
                           ? "Multiple Select"
@@ -186,7 +186,7 @@ export function QuizPreviewModal({
                     onEditQuiz(pq);
                     onClose();
                   }}
-                  className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                  className="px-3 py-1.5 bg-structure hover:bg-structure-strong text-primary dark:text-indigo-300 rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
                   title="Edit Quiz details & questions"
                 >
                   <Pencil className="w-3 h-3" />
@@ -219,7 +219,7 @@ export function QuizPreviewModal({
                   onTakeQuiz(pq.id);
                 }}
                 disabled={pqOverdue && (pq.attemptsUsed ?? 0) === 0}
-                className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <span>{(pq.attemptsUsed ?? 0) > 0 ? "Retake Quiz" : "Take Quiz"}</span>
               </button>

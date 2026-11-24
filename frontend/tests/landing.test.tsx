@@ -18,9 +18,9 @@ describe("LandingSections", () => {
 
     render(<LandingSections auth={auth} />);
 
-    expect(screen.getByText(/Transform Your Learning/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+    expect(screen.getByText(/Study smarter with/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
     expect(setAuthModal).toHaveBeenCalledWith("login");
-    expect(screen.getByRole("button", { name: "Register" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign up" })).toBeInTheDocument();
   });
 });

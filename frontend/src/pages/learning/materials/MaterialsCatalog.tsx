@@ -71,7 +71,7 @@ export function MaterialsCatalog({
                 className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-2 border border-slate-700 cursor-pointer shrink-0 w-full sm:w-auto"
                 title="Upload a course material for your students"
               >
-                <Upload className="w-4 h-4 text-blue-400" />
+                <Upload className="w-4 h-4 text-indigo-300" />
                 <span>Upload Material</span>
               </button>
             )}
@@ -79,7 +79,7 @@ export function MaterialsCatalog({
             {(currentUser?.role === "student" || currentUser?.role === "teacher") && (
               <button
                 onClick={onAiNotes}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer shrink-0 w-full sm:w-auto"
+                className="px-4 py-2.5 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer shrink-0 w-full sm:w-auto"
                 title="Generate study notes from your materials with AI"
               >
                 <Sparkles className="w-4 h-4 text-amber-300" />
@@ -112,13 +112,13 @@ export function MaterialsCatalog({
                 <div
                   key={mat.id}
                   onClick={() => onPreview(mat)}
-                  className="p-4 rounded-xl border border-border transition-all space-y-3 flex flex-col justify-between bg-card hover:border-blue-500/40 cursor-pointer"
+                  className="p-4 rounded-xl border border-border transition-all space-y-3 flex flex-col justify-between bg-card hover:border-primary/40 cursor-pointer"
                   title="Click to view this material"
                 >
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       {mat.subjectName && (
-                        <span className="px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-bold uppercase tracking-wider border border-blue-500/20">
+                        <span className="px-2 py-0.5 rounded-md bg-structure text-primary dark:text-indigo-300 font-mono text-[10px] font-bold uppercase tracking-wider border border-structure-strong">
                           {mat.subjectName}
                         </span>
                       )}

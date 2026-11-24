@@ -36,7 +36,7 @@ export const SubjectDetailPage: React.FC = () => {
           <FileCode className="w-10 h-10 text-muted-foreground mx-auto" />
           <h2 className="text-lg font-bold text-foreground mt-4">Subject not found</h2>
           <p className="text-xs text-muted-foreground mt-1">This subject may have been deleted, or you do not have permission to view it.</p>
-          <button onClick={() => navigate("/subjects")} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold cursor-pointer">Back to Subjects</button>
+          <button onClick={() => navigate("/subjects")} className="mt-4 px-4 py-2 bg-cta-gradient text-white rounded-xl text-xs font-bold cursor-pointer">Back to Subjects</button>
         </div>
       </div>
     );

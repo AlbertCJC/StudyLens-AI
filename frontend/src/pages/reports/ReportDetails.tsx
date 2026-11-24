@@ -1,5 +1,6 @@
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { GeneratedReport } from "../../types";
+import { chartTooltipProps, BRAND_BAR_FILL, ChartGradientDefs } from "../../utils/chartTheme";
 
 export function ReportDetails({ report }: { report: GeneratedReport }) {
   const s = (report.summary || {}) as Record<string, unknown>;
@@ -14,11 +15,12 @@ export function ReportDetails({ report }: { report: GeneratedReport }) {
             <div className="h-44 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={qrows.map((q) => ({ name: (q.quizTitle || "Quiz").slice(0, 24), avg: q.averageScore ?? 0 }))} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                  <ChartGradientDefs />
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                   <XAxis dataKey="name" tick={{ fontSize: 9, fill: "currentColor" }} interval={0} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "currentColor" }} />
-                  <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", color: "#fff", fontSize: "11px" }} />
-                  <Bar dataKey="avg" fill="#2563eb" radius={[4, 4, 0, 0]} />
+                  <Tooltip {...chartTooltipProps} />
+                  <Bar dataKey="avg" fill={BRAND_BAR_FILL} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

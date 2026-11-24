@@ -12,7 +12,7 @@ export function AnnouncementDetailModal({ open, onClose, announcement }: Announc
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+      role="dialog" aria-modal="true" className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
       onClick={onClose}
     >
       <div
@@ -28,13 +28,13 @@ export function AnnouncementDetailModal({ open, onClose, announcement }: Announc
                     ? "bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
                     : announcement.priority === "medium"
                       ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
-                      : "bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+                      : "bg-structure text-primary dark:text-indigo-300 border border-structure-strong"
                 }`}
               >
                 {announcement.priority.toUpperCase()}
               </span>
               {announcement.subjectName && (
-                <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-structure text-primary dark:text-indigo-300 border border-structure-strong">
                   {announcement.subjectName}
                 </span>
               )}
@@ -69,7 +69,7 @@ export function AnnouncementDetailModal({ open, onClose, announcement }: Announc
         <div className="flex items-center justify-between pt-2 border-t border-border">
           <button
             onClick={onClose}
-            className="px-5 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-bold transition-all cursor-pointer"
+            className="px-5 py-2 bg-cta-gradient hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
           >
             Close Notice
           </button>
